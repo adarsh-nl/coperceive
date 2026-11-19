@@ -57,7 +57,11 @@ function EvalFiguresGrid({ summary }: { summary: EvalSummary }) {
     <>
       <h3 className="eval-head">
         Evaluation · {summary.agentId} {summary.source}
-        {b ? <span className="tag">A {a.runId} / B {b.runId}</span> : null}
+        {b ? (
+          <span className="tag">A {a.runId} / B {b.runId}</span>
+        ) : (
+          <span className="tag">{a.runId === "demo" ? "synthetic predictions" : a.runId}</span>
+        )}
       </h3>
       <dl className="stat-grid eval-grid">
         {a.map.map((row, index) => (

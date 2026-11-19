@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
-from PIL import Image
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
@@ -37,6 +36,7 @@ from coperceive.errors import CoperceiveError
 from coperceive.evaluation.geometry import WorldBox, footprint
 from coperceive.hdmap.opendrive import LAYER_LANE_CENTRE, LAYER_ROAD_EDGE, MapPolyline
 from coperceive.hdmap.store import HdMap
+from coperceive.images import open_image
 from coperceive.model import Agent, Annotation, Modality, Scene, Sensor
 from coperceive.project import (
     ProjectionStatus,
@@ -48,7 +48,7 @@ from coperceive.se3 import SE3
 from coperceive.transform import lookup_pose, sensor_frame, transform, world_frame
 from coperceive.viewdata import image_path, pose_times, world_points
 
-_FORMATS = frozenset({"png", "svg"})
+_FORMATS = frozenset({"png", "svg", "pdf"})
 _THEMES = frozenset({"dark", "light"})
 _COLOR_BY = frozenset({"agent", "class"})
 _BOX_STYLES = frozenset({"wire", "solid"})
@@ -406,7 +406,7 @@ def render_overlay(
     if relative is None:
         raise PlotNotFound("image not found")
     image_file = _confine_file(scene_dir, relative)
-    opened = cast(Image.Image, Image.open(image_file))
+    opened = open_image(image_file)
     try:
         rgb = opened.convert("RGB")
         # Copy before the file closes. asarray can be a view of the Pillow buffer.
@@ -525,9 +525,9 @@ def _file_format(dest: Path, fmt: str | None) -> str:
         suffix = dest.suffix.lower().lstrip(".")
         chosen = suffix if suffix in _FORMATS else ""
     if chosen not in _FORMATS:
-        raise PlotError("format must be png or svg")
+        raise PlotError("format must be png, svg, or pdf")
     if dest.suffix.lower() != f".{chosen}":
-        raise PlotError("the output path must end in .png or .svg and match the format")
+        raise PlotError("the output path must end in .png, .svg, or .pdf and match the format")
     return chosen
 
 

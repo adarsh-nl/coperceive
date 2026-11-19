@@ -17,6 +17,7 @@ from coperceive.hdmap.commands import add_parser
 from coperceive.model import SCHEMA_VERSION
 from coperceive.models.commands import add_parser as add_models_parser
 from coperceive.remote.commands import add_parser as add_remote_parser
+from coperceive.repro.commands import add_parser as add_repro_parser
 
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
@@ -36,6 +37,13 @@ def build_parser() -> argparse.ArgumentParser:
         "capabilities", help="Print what this build supports, as JSON (for the desktop app)."
     )
     capabilities.set_defaults(func=_capabilities)
+
+    demo = sub.add_parser("demo", help="Create the synthetic demo scene.")
+    demo_sub = demo.add_subparsers(dest="demo_command")
+    demo_create = demo_sub.add_parser("create", help="Write the demo scene into a new directory.")
+    demo_create.add_argument("directory", help="New directory for the demo.")
+    demo_create.add_argument("--seed", type=int, default=0)
+    demo_create.set_defaults(func=_demo_create)
 
     serve = sub.add_parser("serve", help="Serve the local web app.")
     serve.add_argument("--host", default="127.0.0.1")
@@ -146,6 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_evaluation_parser(sub)
     add_models_parser(sub)
     add_remote_parser(sub)
+    add_repro_parser(sub)
 
     download = sub.add_parser("download", help="Download a dataset.")
     download_sub = download.add_subparsers(dest="dataset", required=True)
@@ -309,6 +318,62 @@ def build_parser() -> argparse.ArgumentParser:
     overlay_export.add_argument("--theme", choices=("dark", "light"), default="dark")
     overlay_export.add_argument("--color", choices=("agent", "class"), default="agent")
     overlay_export.set_defaults(func=_export_overlay)
+    paper_export = export_sub.add_parser(
+        "paper",
+        help="Write a zip of LaTeX tables and figures for a paper.",
+    )
+    paper_export.add_argument("--out", required=True, help="Zip path. The name must end in .zip.")
+    paper_export.add_argument(
+        "--run", default=None, help="Scored run id under the predictions root."
+    )
+    paper_export.add_argument("--predictions", default=None, help="Predictions root.")
+    paper_export.add_argument(
+        "--scenes", default=None, help="Scene library, for qualitative frames."
+    )
+    paper_export.add_argument("--compare", default=None, help="coperceive-compare JSON. Optional.")
+    paper_export.add_argument(
+        "--degradation", default=None, help="coperceive-degradation JSON. Optional."
+    )
+    paper_export.add_argument(
+        "--failures", default=None, help="coperceive-failures JSON. Optional."
+    )
+    paper_export.add_argument(
+        "--repro-card",
+        action="append",
+        default=[],
+        help="A repro card JSON file or a directory of them. Repeatable.",
+    )
+    paper_export.add_argument("--bookmarks", default=None, help="Bookmark list JSON. Optional.")
+    paper_export.add_argument(
+        "--frames",
+        default=None,
+        help="JSON list of frames: scene_id, time_us, and optional agent_id and sensor_id.",
+    )
+    paper_export.add_argument("--decimals", type=int, default=3, help="Decimal places. 0 to 6.")
+    paper_export.add_argument("--bold-best", action=argparse.BooleanOptionalAction, default=True)
+    paper_export.add_argument(
+        "--include-counts", action=argparse.BooleanOptionalAction, default=True
+    )
+    paper_export.add_argument(
+        "--metric",
+        action="append",
+        default=None,
+        choices=("precision", "recall", "ap", "recovered", "lost_by_fusion"),
+        help="Metric column. Repeatable. Default: precision, recall, ap.",
+    )
+    paper_export.add_argument(
+        "--qualitative",
+        action="store_true",
+        help="Draw bookmarked frames whose dataset is on the allow list.",
+    )
+    paper_export.add_argument(
+        "--allow-dataset",
+        action="append",
+        default=[],
+        help="Opt in a dataset for qualitative frames. Fixtures are already allowed. "
+        "Griffin and CARLA can be named. OPV2V, V2XSet and V2V4Real are never drawn.",
+    )
+    paper_export.set_defaults(func=_export_paper)
 
     dataset = sub.add_parser("dataset", help="Dataset catalog and operations.")
     dataset_sub = dataset.add_subparsers(dest="dataset_command", required=True)
@@ -325,7 +390,9 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser = dataset_sub.add_parser(
         "prepare", help="Prepare selected scenes into the cluster cache (CPU-only)."
     )
-    prepare_parser.add_argument("--adapter", required=True, choices=("griffin", "opv2v", "v2xset"))
+    prepare_parser.add_argument(
+        "--adapter", required=True, choices=("griffin", "opv2v", "v2xset", "v2v4real", "dair-v2x-c")
+    )
     prepare_parser.add_argument("--raw-root", required=True)
     prepare_parser.add_argument(
         "--split", default=None, help="The split to prepare (OPV2V/V2XSet)."
@@ -393,7 +460,9 @@ def build_parser() -> argparse.ArgumentParser:
     index_parser = dataset_sub.add_parser(
         "index", help="List every scene of a raw cluster dataset (metadata only)."
     )
-    index_parser.add_argument("--adapter", required=True, choices=("griffin", "opv2v", "v2xset"))
+    index_parser.add_argument(
+        "--adapter", required=True, choices=("griffin", "opv2v", "v2xset", "v2v4real", "dair-v2x-c")
+    )
     index_parser.add_argument("--raw-root", required=True)
     index_parser.add_argument(
         "--split",
@@ -428,6 +497,21 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         return
     func(args)
+
+
+def _demo_create(args: argparse.Namespace) -> None:
+    from coperceive.demo import create
+
+    try:
+        result = create(args.directory, seed=args.seed)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(f"wrote {result.root}")
+    print(f"scenes {result.scenes / 'demo-junction'}")
+    print(f"predictions {result.predictions}")
+    print(f"mAP@0.5 {result.map_50:.3f} (simulated, not a model result)")
+    print(f"bytes {result.bytes} seconds {result.seconds:.2f}")
 
 
 def _scene_pack(args: argparse.Namespace) -> None:
@@ -632,6 +716,40 @@ def _export_overlay(args: argparse.Namespace) -> None:
         f"time_us {result.time_us} width {result.width} height {result.height} "
         f"points {result.points} boxes {result.boxes}"
     )
+
+
+def _export_paper(args: argparse.Namespace) -> None:
+    from coperceive.paper_export import PaperExportError, export_paper, paper_inputs_from_cli
+
+    metrics = ("precision", "recall", "ap") if args.metric is None else tuple(args.metric)
+    try:
+        options, paper_inputs = paper_inputs_from_cli(
+            run_id=args.run,
+            predictions=None if args.predictions is None else Path(args.predictions),
+            scenes=None if args.scenes is None else Path(args.scenes),
+            compare=None if args.compare is None else Path(args.compare),
+            degradation=None if args.degradation is None else Path(args.degradation),
+            failures=None if args.failures is None else Path(args.failures),
+            repro_cards=tuple(Path(item) for item in args.repro_card),
+            bookmarks=None if args.bookmarks is None else Path(args.bookmarks),
+            frames_json=args.frames,
+            decimals=args.decimals,
+            bold_best=bool(args.bold_best),
+            include_counts=bool(args.include_counts),
+            metrics=metrics,
+            qualitative=bool(args.qualitative),
+            allow_datasets=tuple(args.allow_dataset),
+        )
+        manifest = export_paper(Path(args.out), options, paper_inputs)
+    except PaperExportError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(f"wrote {args.out}")
+    notes = manifest.get("notes")
+    if isinstance(notes, list):
+        for note in cast(list[object], notes):
+            if isinstance(note, str):
+                print(note)
 
 
 def _export_rerun(args: argparse.Namespace) -> None:
@@ -880,14 +998,42 @@ def _resolve_token(args: argparse.Namespace) -> str | None:
         if not token_path.is_file():
             print(f"--token-file {args.token_file} is not a file", file=sys.stderr)
             raise SystemExit(2)
-        mode = token_path.stat().st_mode & 0o777
-        if (mode & 0o077) != 0:
-            print(
-                f"--token-file {args.token_file} has loose permissions {oct(mode)} "
-                "(must be mode 0600 or 0400)",
-                file=sys.stderr,
-            )
-            raise SystemExit(2)
+        if os.name != "nt":
+            mode = token_path.stat().st_mode & 0o777
+            if (mode & 0o077) != 0:
+                print(
+                    f"--token-file {args.token_file} has loose permissions {oct(mode)} "
+                    "(must be mode 0600 or 0400)",
+                    file=sys.stderr,
+                )
+                raise SystemExit(2)
+        else:
+            try:
+                import subprocess
+
+                proc = subprocess.run(
+                    ["icacls", str(token_path)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if proc.returncode == 0:
+                    out_lower = proc.stdout.lower()
+                    forbidden = [
+                        "everyone",
+                        "builtin\\users",
+                        "nt authority\\authenticated users",
+                    ]
+                    for f in forbidden:
+                        if f in out_lower:
+                            tf = args.token_file
+                            print(
+                                f"--token-file {tf} has loose permissions allowing {f}",
+                                file=sys.stderr,
+                            )
+                            raise SystemExit(2)
+            except Exception:
+                pass
         token = token_path.read_text(encoding="utf-8").strip() or None
     elif "COPERCEIVE_TOKEN" in os.environ and os.environ["COPERCEIVE_TOKEN"].strip():
         token = os.environ["COPERCEIVE_TOKEN"].strip()

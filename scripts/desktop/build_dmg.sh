@@ -35,6 +35,7 @@ LOG="${COPERCEIVE_TAURI_BUILD_LOG:-/tmp/tauri_build.log}"
 SIGNATURE="hdiutil: create failed - Resource busy"
 MAX_ATTEMPTS=3
 DEFAULT_ATTEMPTS=2
+TARGET="${1:-${COPERCEIVE_BUILD_TARGET:-aarch64-apple-darwin}}"
 
 cd "$REPO_ROOT"
 : > "$LOG"
@@ -101,7 +102,7 @@ preflight() {
 }
 
 build_once() {
-  ( cd web && npm run tauri build -- --target aarch64-apple-darwin --verbose ) 2>&1 | tee -a "$LOG"
+  ( cd web && npm run tauri build -- --target "${TARGET}" --verbose ) 2>&1 | tee -a "$LOG"
 }
 
 status=1

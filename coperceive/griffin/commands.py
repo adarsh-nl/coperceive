@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from coperceive.errors import CoperceiveError
 from coperceive.griffin.convert import ConvertError, convert_griffin, format_report
 from coperceive.griffin.download import (
     ChecksumError,
@@ -57,7 +58,8 @@ def convert_command(args: object) -> None:
     except ConvertError as exc:
         print(format_report(exc.report), file=sys.stderr)
         raise SystemExit(1) from None
-    except (ValueError, RuntimeError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
+    except (CoperceiveError, ValueError, RuntimeError, OSError) as exc:
+        message = str(exc).strip().splitlines()
+        print(message[0] if message else "Griffin convert failed.", file=sys.stderr)
         raise SystemExit(1) from None
     print(format_report(report))

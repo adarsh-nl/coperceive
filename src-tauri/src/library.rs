@@ -271,7 +271,7 @@ pub fn scan_library_scenes_with_cache(
     scenes
 }
 
-fn parse_scene_info_with_cache(
+pub fn parse_scene_info_with_cache(
     scene_dir: &Path,
     cache: &HashMap<String, ValidationRecord>,
     library_root: &Path,

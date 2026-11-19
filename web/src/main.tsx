@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import { ErrorBoundary } from "./desktop/ErrorBoundary";
 import "./index.css";
+import "./viewer/viewerStyles.css";
 import "./fonts.css";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";

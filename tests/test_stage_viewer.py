@@ -199,10 +199,17 @@ def test_main_needs_a_scratch_outside_slurm(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.delenv("COPERCEIVE_SLURM_SCRATCH_TEMPLATE", raising=False)
+    monkeypatch.delenv("USER", raising=False)
     assert stage_viewer.default_scratch() is None
+    # A job id alone must not invent a site scratch path.
     monkeypatch.setenv("SLURM_JOB_ID", "123456")
-    assert stage_viewer.default_scratch() == Path("/local/123456/coperceive-viewer")
+    assert stage_viewer.default_scratch() is None
+    monkeypatch.setenv("USER", "sam")
+    monkeypatch.setenv("COPERCEIVE_SLURM_SCRATCH_TEMPLATE", "/scratch/$USER/$SLURM_JOB_ID")
+    assert stage_viewer.default_scratch() == Path("/scratch/sam/123456")
     monkeypatch.delenv("SLURM_JOB_ID")
+    monkeypatch.delenv("COPERCEIVE_SLURM_SCRATCH_TEMPLATE")
     with pytest.raises(SystemExit) as excinfo:
         stage_viewer.main(
             ["--raw", str(tmp_path), "--split", str(tmp_path), "--xodr-dir", str(tmp_path)]

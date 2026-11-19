@@ -13,7 +13,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use crate::slurm_adapter::{RemoteRunner, SshRunner};
@@ -32,6 +31,124 @@ fn scp_bin() -> String {
     std::env::var("COPERCEIVE_SCP_BIN").unwrap_or_else(|_| "scp".to_string())
 }
 
+static RESOURCE_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Sets Tauri's application resource directory (called from app initialization).
+pub fn set_resource_dir(path: PathBuf) {
+    let _ = RESOURCE_DIR.set(path);
+}
+
+/// Supported operating system resource layouts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsLayout {
+    MacOS,
+    Windows,
+    Linux,
+}
+
+impl OsLayout {
+    pub fn current() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            OsLayout::MacOS
+        }
+        #[cfg(target_os = "windows")]
+        {
+            OsLayout::Windows
+        }
+        #[cfg(target_os = "linux")]
+        {
+            OsLayout::Linux
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        {
+            OsLayout::Linux
+        }
+    }
+}
+
+/// Infers the default Tauri resource directory for the given executable path per OS layout.
+pub fn default_resource_dir_for_exe(exe: &Path, layout: OsLayout) -> Option<PathBuf> {
+    match layout {
+        OsLayout::MacOS => {
+            // <App>.app/Contents/MacOS/coperceive-desktop -> <App>.app/Contents/Resources
+            exe.parent()?.parent().map(|c| c.join("Resources"))
+        }
+        OsLayout::Windows => {
+            // <install_dir>\coperceive-desktop.exe -> <install_dir>
+            exe.parent().map(Path::to_path_buf)
+        }
+        OsLayout::Linux => {
+            // /usr/bin/coperceive-desktop -> /usr/lib/coperceive-desktop
+            let parent = exe.parent()?;
+            if let Some(grandparent) = parent.parent() {
+                Some(grandparent.join("lib").join("coperceive-desktop"))
+            } else {
+                Some(parent.to_path_buf())
+            }
+        }
+    }
+}
+
+/// Finds the packaged viewer bundle inside a Tauri resource directory for a specific OS layout.
+pub fn find_packaged_static_for_layout(resource_dir: &Path, layout: OsLayout) -> Option<PathBuf> {
+    let py_base = if resource_dir.join("resources").join("python").is_dir() {
+        resource_dir.join("resources").join("python")
+    } else if resource_dir.join("python").is_dir() {
+        resource_dir.join("python")
+    } else {
+        return None;
+    };
+
+    match layout {
+        OsLayout::Windows => {
+            let candidate = py_base
+                .join("Lib")
+                .join("site-packages")
+                .join("coperceive")
+                .join("app")
+                .join("static");
+            if candidate.join("index.html").is_file() {
+                Some(candidate)
+            } else {
+                let candidate_lower = py_base
+                    .join("lib")
+                    .join("site-packages")
+                    .join("coperceive")
+                    .join("app")
+                    .join("static");
+                if candidate_lower.join("index.html").is_file() {
+                    Some(candidate_lower)
+                } else {
+                    None
+                }
+            }
+        }
+        OsLayout::MacOS | OsLayout::Linux => {
+            let lib_dir = py_base.join("lib");
+            if let Ok(entries) = fs::read_dir(&lib_dir) {
+                for entry in entries.flatten() {
+                    let candidate = entry
+                        .path()
+                        .join("site-packages")
+                        .join("coperceive")
+                        .join("app")
+                        .join("static");
+                    if candidate.join("index.html").is_file() {
+                        return Some(candidate);
+                    }
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Finds the packaged viewer bundle inside the application resources for the current OS.
+pub fn find_packaged_static(resource_dir: &Path) -> Option<PathBuf> {
+    find_packaged_static_for_layout(resource_dir, OsLayout::current())
+}
+
 /// The built viewer directory shipped with the app (or built in a dev checkout).
 pub fn static_bundle_dir() -> Result<PathBuf, String> {
     if let Ok(configured) = std::env::var("COPERCEIVE_STATIC_DIR") {
@@ -44,11 +161,26 @@ pub fn static_bundle_dir() -> Result<PathBuf, String> {
             path.display()
         ));
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(path) = find_packaged_static(&exe) {
+
+    if let Some(res) = RESOURCE_DIR.get() {
+        if let Some(path) = find_packaged_static(res) {
             return Ok(path);
         }
     }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(res) = default_resource_dir_for_exe(&exe, OsLayout::current()) {
+            if let Some(path) = find_packaged_static(&res) {
+                return Ok(path);
+            }
+        }
+        if let Some(parent) = exe.parent() {
+            if let Some(path) = find_packaged_static(parent) {
+                return Ok(path);
+            }
+        }
+    }
+
     let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../coperceive/app/static");
     if dev.join("index.html").is_file() {
         return Ok(dev);
@@ -58,22 +190,6 @@ pub fn static_bundle_dir() -> Result<PathBuf, String> {
          scripts/build_web_static.sh in a source checkout."
             .to_string(),
     )
-}
-
-/// `<App>.app/Contents/Resources/resources/python/lib/python*/site-packages/coperceive/app/static`
-fn find_packaged_static(exe: &Path) -> Option<PathBuf> {
-    let contents = exe.parent()?.parent()?;
-    let lib = contents.join("Resources/resources/python/lib");
-    for entry in fs::read_dir(lib).ok()? {
-        let entry = entry.ok()?;
-        let candidate = entry
-            .path()
-            .join("site-packages/coperceive/app/static/index.html");
-        if candidate.is_file() {
-            return candidate.parent().map(Path::to_path_buf);
-        }
-    }
-    None
 }
 
 fn validate_version(version: &str) -> Result<String, String> {
@@ -206,7 +322,7 @@ fn fetch_remote_manifest(
     scp: &str,
 ) -> Result<Option<String>, String> {
     let _ = fs::remove_file(destination);
-    let output = Command::new(scp)
+    let output = crate::platform::create_command(scp)
         .args(["-q", "-p"])
         .arg(format!("{alias}:{remote_rel}/{MANIFEST_NAME}"))
         .arg(destination)
@@ -223,7 +339,7 @@ fn fetch_remote_manifest(
 fn upload_static(alias: &str, local: &Path, remote_rel: &str, scp: &str) -> Result<(), String> {
     let source = format!("{}/.", local.display());
     let destination = format!("{alias}:{remote_rel}");
-    let output = Command::new(scp)
+    let output = crate::platform::create_command(scp)
         .args(["-r", "-q", "-p"])
         .arg(&source)
         .arg(&destination)
@@ -306,17 +422,9 @@ fn prepare_remote_static_with(
     Ok(remote_display)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
-
-    fn write_script(path: &Path, body: &str) {
-        fs::write(path, body).expect("write script");
-        let mut perms = fs::metadata(path).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).expect("permissions");
-    }
 
     fn write_static(root: &Path) {
         let assets = root.join("assets");
@@ -327,60 +435,6 @@ mod tests {
         )
         .expect("index");
         fs::write(assets.join("app.js"), "console.log('viewer')\n").expect("js");
-    }
-
-    fn fake_ssh_script(remote_root: &Path, log: &Path) -> String {
-        format!(
-            r#"#!/usr/bin/env bash
-set -u
-remote="${{!#}}"
-printf 'call\n' >> "{log}"
-version="${{remote##* }}"; version="${{version#\'}}"; version="${{version%\'}}"
-case "$remote" in
-  *"coperceive-static-verify"*)
-      HOME="{root}/home" bash -c "$remote"
-      exit $?
-      ;;
-  *"mkdir -p -- \"\$HOME/.cache/coperceive/static/\$1\""*)
-      mkdir -p "{root}/home/.cache/coperceive/static/$version"
-      exit 0
-      ;;
-  *"cat > \"\$HOME/.cache/coperceive/static/\$1/.coperceive-static-manifest\""*)
-      mkdir -p "{root}/home/.cache/coperceive/static/$version"
-      cat > "{root}/home/.cache/coperceive/static/$version/.coperceive-static-manifest"
-      exit 0
-      ;;
-esac
-echo "fake ssh: unsupported: $remote" >&2
-exit 1
-"#,
-            log = log.display(),
-            root = remote_root.display(),
-        )
-    }
-
-    fn fake_scp_script(remote_root: &Path, log: &Path) -> String {
-        format!(
-            r#"#!/usr/bin/env bash
-set -u
-printf '%s\n' "$*" >> "{log}"
-src="${{@: -2:1}}"
-dst="${{@: -1:1}}"
-case "$src" in
-  *:*)
-      rel="${{src#*:}}"
-      cp "{root}/home/$rel" "$dst"
-      ;;
-  *)
-      rel="${{dst#*:}}"
-      mkdir -p "{root}/home/$rel"
-      cp -R "$src" "{root}/home/$rel/"
-      ;;
-esac
-"#,
-            log = log.display(),
-            root = remote_root.display(),
-        )
     }
 
     fn temp_root(label: &str) -> PathBuf {
@@ -401,6 +455,7 @@ esac
 
     #[test]
     fn uploads_once_then_skips_a_complete_cache() {
+        let _turn = crate::test_seams::FAKE_SSH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let (root, local, remote, ssh, scp, ssh_log, scp_log) = setup_with_logs("complete");
         let first = prepare_remote_static_with("cluster-a", "0.1.0", &local, ssh.to_str().unwrap(), scp.to_str().unwrap())
             .expect("first upload");
@@ -434,6 +489,7 @@ esac
 
     #[test]
     fn concurrent_starts_each_keep_their_own_fetched_manifest() {
+        let _turn = crate::test_seams::FAKE_SSH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Each start fetches the remote manifest into a temporary file. Starts in
         // one process at the same moment must not share it: with a pid+clock name
         // (whole microseconds on macOS) one start deleted another's fetched
@@ -479,6 +535,7 @@ esac
 
     #[test]
     fn a_partial_cache_is_uploaded_again() {
+        let _turn = crate::test_seams::FAKE_SSH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let (root, local, remote, ssh, scp, _ssh_log, scp_log) = setup_with_logs("partial");
         prepare_remote_static_with("cluster-a", "0.1.0", &local, ssh.to_str().unwrap(), scp.to_str().unwrap())
             .expect("upload");
@@ -525,8 +582,91 @@ esac
         let scp = root.join("fake_scp.sh");
         let ssh_log = root.join("ssh.log");
         let scp_log = root.join("scp.log");
-        write_script(&ssh, &fake_ssh_script(&remote, &ssh_log));
-        write_script(&scp, &fake_scp_script(&remote, &scp_log));
+        let fixture_ssh = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hpc/fake_static_ssh.sh");
+        let fixture_scp = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hpc/fake_static_scp.sh");
+        std::os::unix::fs::symlink(fixture_ssh, &ssh).expect("symlink ssh");
+        std::os::unix::fs::symlink(fixture_scp, &scp).expect("symlink scp");
         (root, local, remote, ssh, scp, ssh_log, scp_log)
+    }
+
+    #[test]
+    fn test_find_packaged_static_macos_layout() {
+        let root = temp_root("macos-layout");
+        // macOS: <App>.app/Contents/Resources/resources/python/lib/python3.13/site-packages/coperceive/app/static/index.html
+        let static_dir = root
+            .join("Contents")
+            .join("Resources")
+            .join("resources")
+            .join("python")
+            .join("lib")
+            .join("python3.13")
+            .join("site-packages")
+            .join("coperceive")
+            .join("app")
+            .join("static");
+        fs::create_dir_all(&static_dir).expect("create macos static dir");
+        fs::write(static_dir.join("index.html"), "<html>macos</html>").expect("write index");
+
+        let res_dir = root.join("Contents").join("Resources");
+        let found = find_packaged_static_for_layout(&res_dir, OsLayout::MacOS);
+        assert_eq!(found, Some(static_dir));
+
+        let exe = root.join("Contents").join("MacOS").join("coperceive-desktop");
+        let inferred_res = default_resource_dir_for_exe(&exe, OsLayout::MacOS);
+        assert_eq!(inferred_res, Some(res_dir));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_find_packaged_static_windows_layout() {
+        let root = temp_root("windows-layout");
+        // Windows: <install_dir>/resources/python/Lib/site-packages/coperceive/app/static/index.html
+        let static_dir = root
+            .join("resources")
+            .join("python")
+            .join("Lib")
+            .join("site-packages")
+            .join("coperceive")
+            .join("app")
+            .join("static");
+        fs::create_dir_all(&static_dir).expect("create windows static dir");
+        fs::write(static_dir.join("index.html"), "<html>windows</html>").expect("write index");
+
+        let found = find_packaged_static_for_layout(&root, OsLayout::Windows);
+        assert_eq!(found, Some(static_dir));
+
+        let exe = root.join("coperceive-desktop.exe");
+        let inferred_res = default_resource_dir_for_exe(&exe, OsLayout::Windows);
+        assert_eq!(inferred_res, Some(root.clone()));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_find_packaged_static_linux_layout() {
+        let root = temp_root("linux-layout");
+        // Linux: /usr/lib/coperceive-desktop/resources/python/lib/python3.13/site-packages/coperceive/app/static/index.html
+        let res_dir = root.join("usr").join("lib").join("coperceive-desktop");
+        let static_dir = res_dir
+            .join("resources")
+            .join("python")
+            .join("lib")
+            .join("python3.13")
+            .join("site-packages")
+            .join("coperceive")
+            .join("app")
+            .join("static");
+        fs::create_dir_all(&static_dir).expect("create linux static dir");
+        fs::write(static_dir.join("index.html"), "<html>linux</html>").expect("write index");
+
+        let found = find_packaged_static_for_layout(&res_dir, OsLayout::Linux);
+        assert_eq!(found, Some(static_dir));
+
+        let exe = root.join("usr").join("bin").join("coperceive-desktop");
+        let inferred_res = default_resource_dir_for_exe(&exe, OsLayout::Linux);
+        assert_eq!(inferred_res, Some(res_dir));
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

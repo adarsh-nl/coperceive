@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
+import json
 import os
+import re
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
 from pathlib import Path
 from typing import cast
 
@@ -20,7 +23,13 @@ from coperceive.models.batch import BatchError, BatchReport, RunOptions, run_bat
 from coperceive.models.cache import CacheError, prune
 from coperceive.models.check import check_plugin, render_check
 from coperceive.models.inputs import InputError
-from coperceive.models.registry import RegistryError, list_plugins, resolve_manifest
+from coperceive.models.registry import (
+    PluginInfo,
+    RegistryError,
+    list_plugins,
+    manifest_path,
+    resolve_manifest,
+)
 from coperceive.models.runner import resolve_interpreter
 from coperceive.models.slurm import (
     SlurmError,
@@ -29,15 +38,27 @@ from coperceive.models.slurm import (
     validate_partition,
     write_plan,
 )
-from coperceive.models.spec import Manifest, ModelSpecError, select_model
+from coperceive.models.spec import Manifest, ModelSpecError, load_manifest, select_model
+from coperceive.robustness.apply import export_perturbed_inputs
+from coperceive.robustness.spec import PerturbationError, load_perturbation
 from coperceive.store import read_scene
 from coperceive.viewdata import scene_directories
+
+_RUN_ID = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _check_run_id(value: str) -> str:
+    if value in {"", ".", ".."} or _RUN_ID.fullmatch(value) is None:
+        raise BatchError("The run id may contain only letters, digits, '.', '_' and '-'.")
+    return value
+
 
 _USER_ERRORS = (
     ModelSpecError,
     RegistryError,
     BatchError,
     PredictionError,
+    PerturbationError,
     InputError,
     CacheError,
     SlurmError,
@@ -51,6 +72,14 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     commands = model.add_subparsers(dest="model_command", required=True)
 
     listing = commands.add_parser("list", help="Installed model plugins.")
+    listing.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Machine-readable listing: each plugin's manifest as a resolved path, its "
+            "modules, and per model whether it needs a GPU and which --option keys it takes."
+        ),
+    )
     listing.set_defaults(func=list_command)
 
     inspect = commands.add_parser("inspect", help="Print the validated manifest and interpreter.")
@@ -87,6 +116,11 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     run.add_argument("--work", default=None)
     run.add_argument("--force", action="store_true")
     run.add_argument(
+        "--perturb",
+        default=None,
+        help="Perturbation spec, for example latency_frames=2,pose_noise_xy=0.2,seed=7.",
+    )
+    run.add_argument(
         "--staging-seconds",
         type=float,
         default=None,
@@ -120,6 +154,19 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         ),
     )
     run.set_defaults(func=run_command)
+
+    perturb = commands.add_parser(
+        "perturb-inputs",
+        help="Write perturbed poses and the unchanged ground truth for an external script.",
+    )
+    perturb.add_argument("--scenes", required=True, help="Directory of schema 1 scenes.")
+    perturb.add_argument("--scene", required=True, help="Scene id.")
+    perturb.add_argument("--perturb", required=True, help="Perturbation spec.")
+    perturb.add_argument(
+        "--out", required=True, help="Directory for perturbation.json and frames.json."
+    )
+    perturb.add_argument("--ego", default=None, help="Ego agent id. Default: the first agent.")
+    perturb.set_defaults(func=perturb_command)
 
     cache = commands.add_parser("cache", help="The per-scene result cache of runs.")
     cache_commands = cache.add_subparsers(dest="cache_command", required=True)
@@ -168,13 +215,102 @@ def _csv(value: str | None) -> tuple[str, ...] | None:
 # -- commands ----------------------------------------------------------------------------------
 
 
-def list_command(_args: argparse.Namespace) -> None:
+LIST_FORMAT = "coperceive-model-list"
+LIST_FORMAT_VERSION = 1
+
+
+def list_command(args: argparse.Namespace) -> None:
     rows = list_plugins()
+    if getattr(args, "json", False):
+        # Importing a plugin runs its code: whatever it prints (through Python or straight
+        # to file descriptor 1) goes to stderr, so stdout holds only the JSON document.
+        with _stdout_to_stderr():
+            plugins = [_plugin_json(row) for row in rows]
+        payload = {
+            "format": LIST_FORMAT,
+            "format_version": LIST_FORMAT_VERSION,
+            "plugins": plugins,
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
     width = max((len(row.name) for row in rows), default=4)
     for row in rows:
         print(f"{row.name.ljust(width)}  {row.source.ljust(11)}  {row.location}")
     if not rows:
         print("no model plugins installed (entry point group coperceive.models)")
+
+
+def _plugin_json(row: PluginInfo) -> dict[str, object]:
+    """One plugin of ``model list --json``. A plugin whose manifest cannot be resolved or
+    read is listed with ``manifest: null`` and the reason, never dropped or guessed."""
+    entry: dict[str, object] = {
+        "name": row.name,
+        "source": row.source,
+        "location": row.location,
+        "manifest": None,
+        "error": None,
+        "modules": [],
+        "models": {},
+    }
+    try:
+        path = manifest_path(row.name)
+        manifest = load_manifest(path)
+        if manifest.name != row.name:
+            # resolve_manifest (what `model run <name>` uses) refuses this too.
+            raise RegistryError(
+                f"entry point {row.name!r} names a manifest called {manifest.name!r}"
+            )
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - one plugin's error is its own row
+        # A third-party plugin may raise anything while it is imported (a RuntimeError, a
+        # SyntaxError, or sys.exit()); that is reported as its error, never the end of the
+        # whole listing. KeyboardInterrupt is not caught: Ctrl-C still stops the listing.
+        if isinstance(exc, SystemExit):
+            code = exc.code
+            reason = code if isinstance(code, str) and code else f"SystemExit: {code!r}"
+            entry["error"] = f"{reason} (the plugin exited while it was imported)"
+        else:
+            entry["error"] = str(exc) or type(exc).__name__
+        return entry
+    entry["manifest"] = str(path.resolve())
+    entry["modules"] = list(manifest.environment.modules)
+    entry["models"] = {
+        key: {
+            "gpu": spec.resources.gpu,
+            "options": sorted(spec.options),
+            "cpus": spec.resources.cpus,
+            "memory_gb": spec.resources.memory_gb,
+            "transient_artifacts": list(spec.outputs.transient_artifacts),
+            "depends_on": sorted({dependency.model for dependency in spec.depends_on}),
+            # plan_sbatch writes it as #SBATCH --constraint (the Griffin GPU pin).
+            "slurm_constraint": spec.resources.slurm_constraint,
+            # plan_sbatch's --time estimate (time_limit) from the manifest's resources.
+            "seconds_per_sample": spec.resources.seconds_per_sample,
+            "staging_seconds": spec.resources.staging_seconds,
+            "conversion_seconds": spec.resources.conversion_seconds,
+        }
+        for key, spec in manifest.models.items()
+    }
+    return entry
+
+
+@contextlib.contextmanager
+def _stdout_to_stderr() -> Generator[None, None, None]:
+    """Send stdout to stderr for the block, at the Python level and at file descriptor 1."""
+    sys.stdout.flush()
+    try:
+        saved = os.dup(1)
+    except OSError:
+        saved = None
+    try:
+        if saved is not None:
+            os.dup2(2, 1)
+        with contextlib.redirect_stdout(sys.stderr):
+            yield
+    finally:
+        sys.stderr.flush()
+        if saved is not None:
+            os.dup2(saved, 1)
+            os.close(saved)
 
 
 def inspect_command(args: argparse.Namespace) -> None:
@@ -244,6 +380,7 @@ def run_command(args: argparse.Namespace) -> None:
 
 
 def _run(args: argparse.Namespace) -> None:
+    args.run_id = _check_run_id(str(args.run_id))
     manifest = _manifest(args)
     options = _run_options(args)
     out = Path(args.out)
@@ -261,6 +398,8 @@ def _run(args: argparse.Namespace) -> None:
         created_utc=utc_now(),
     )
     _print_report(report, out, str(args.run_id))
+    if options.perturbation is not None:
+        print(f"perturbation {options.perturbation.canonical()}")
     if report.completed == () and report.skipped and not options.force:
         print(
             f"run {args.run_id!r} already has every selected scene; use --force to redo it",
@@ -345,6 +484,7 @@ def _run_options(args: argparse.Namespace) -> RunOptions:
         work_dir=Path(args.work) if args.work else None,
         force=bool(args.force),
         staging_seconds=args.staging_seconds,
+        perturbation=load_perturbation(args.perturb) if isinstance(args.perturb, str) else None,
     )
 
 
@@ -365,6 +505,23 @@ def _print_report(report: BatchReport, out: Path, run_id: str) -> None:
         f"scenes {len(report.completed)} frames {report.frames_run} "
         f"cached {report.cache_hits} boxes {report.boxes}"
     )
+
+
+def perturb_command(args: argparse.Namespace) -> None:
+    _guarded(_perturb, args)
+
+
+def _perturb(args: argparse.Namespace) -> None:
+    spec = load_perturbation(str(args.perturb))
+    root = Path(args.scenes)
+    scene_id = str(args.scene)
+    scene_dir = root / scene_id
+    if not (scene_dir / "manifest.json").is_file():
+        raise BatchError(f"scene {scene_id!r} is not under {root}")
+    scene = read_scene(scene_dir)
+    ego = str(args.ego) if isinstance(args.ego, str) else None
+    export_perturbed_inputs(scene, spec, Path(args.out), ego_agent_id=ego)
+    print(f"wrote {args.out}")
 
 
 def prune_command(args: argparse.Namespace) -> None:

@@ -18,6 +18,9 @@ from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from PIL import Image
+
+from coperceive.images import open_image
 
 THUMBNAIL_NAME = "thumbnail.jpg"
 PREVIEW_EDGE = 640
@@ -91,8 +94,6 @@ def write_scene_thumbnail(scene: Path, *, force: bool = False) -> Path | None:
     Idempotent: an existing thumbnail is kept unless ``force``. The image is
     downscaled to at most 640 px on its long edge as JPEG, never upscaled.
     """
-    from PIL import Image
-
     target = thumbnail_path(scene)
     if target.exists() and not force:
         return target
@@ -100,7 +101,7 @@ def write_scene_thumbnail(scene: Path, *, force: bool = False) -> Path | None:
     if source is None:
         return None
     try:
-        opened = cast(Image.Image, Image.open(source))
+        opened = open_image(source)
     except (OSError, ValueError) as exc:
         raise ThumbnailError(f"could not read an image for the thumbnail: {exc}") from exc
     try:

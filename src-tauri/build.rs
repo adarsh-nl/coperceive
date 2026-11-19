@@ -23,9 +23,27 @@ fn main() {
 
     println!("cargo:rustc-env=BUILD_DATE={}", build_date);
 
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if target_os == "macos" {
-        #[cfg(target_os = "macos")]
-        tauri_build::build();
-    }
+    tauri_build::try_build(
+        tauri_build::Attributes::new().plugin(
+            "viewer-bridge",
+            tauri_build::InlinedPlugin::new()
+                .commands(&[
+                    "viewer_get_dataset_scenes",
+                    "viewer_get_job",
+                    "viewer_set_title",
+                    "viewer_prepare_scene",
+                    "viewer_show_library",
+                    "viewer_open_folder_dialog",
+                    "viewer_pick_save_path",
+                    "viewer_save_exported_file",
+                    "viewer_reveal_last_export",
+                    "viewer_get_preferences",
+                    "viewer_update_preferences",
+                    "viewer_check_update",
+                    "viewer_install_update",
+                ])
+                .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
+        ),
+    )
+    .expect("failed to configure tauri build");
 }

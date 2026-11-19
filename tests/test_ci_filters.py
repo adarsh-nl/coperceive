@@ -34,7 +34,8 @@ def test_ci_workflow_triggers_and_concurrency() -> None:
     push_branches = cast(list[str], push_block.get("branches", []))
     assert "main" in push_branches, "Push trigger must include main"
     assert "feat/m2-import" in push_branches, "Push trigger must include feat/m2-import"
-    assert len(push_branches) == 2, (
+    assert "release/**" in push_branches, "Push trigger must include release/**"
+    assert len(push_branches) == 3, (
         f"Push trigger should only target integration branches, got {push_branches}"
     )
 

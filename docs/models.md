@@ -224,7 +224,7 @@ coperceive model run griffin --model early-fusion \
 ### Reference paths
 
 On the HPC, canonical read-only acceptance runs are preserved under:
-`/home/nanjaiyalathaa/results/reference-stepb-20261020/predictions/`
+`/home/alice/results/reference-stepb-20261020/predictions/`
 
 - `griffin25m-vehicle-plugin/` (Slurm job 629288, 7,930 boxes)
 - `griffin25m-instance-plugin-drone-side/` (Slurm job 630818, 12,093 boxes)
@@ -241,6 +241,10 @@ All metrics are pooled across the 10 val scenes, within 50 m range, operating po
 | `drone · single` | `0.010 / 0.001` (model: `0.020 / 0.002`) | `0.040 / 0.003` | `0.097 / 0.069 / 0.028 / 0.006` (model: `0.193 / 0.138 / 0.055 / 0.011`) | `0.252 / 0.176 / 0.068 / 0.012` |
 | `vehicle · fused` (instance) | `0.071 / 0.057` (model: `0.141 / 0.114`) | `0.132 / 0.088` | `0.114 / 0.102 / 0.081 / 0.062` (model: `0.229 / 0.203 / 0.162 / 0.123`) | `0.309 / 0.247 / 0.159 / 0.099` |
 | `vehicle · fused` (early) | `0.081 / 0.062` (model: `0.163 / 0.124`) | `0.180 / 0.108` | `0.118 / 0.113 / 0.101 / 0.077` (model: `0.236 / 0.226 / 0.203 / 0.153`) | `0.378 / 0.365 / 0.302 / 0.146` |
+
+## Perturbations
+
+`coperceive model run ... --perturb latency_frames=2,pose_noise_xy=0.2,seed=7` delays, drops, or jitters every agent except the ego before the frame is sent. Ground truth is unchanged. The spec is stored in `provenance.perturbation` and in `perturbation.json`. The definitions and the order are in [Perturbations](spec/perturbations.md). `coperceive model perturb-inputs` writes the same inputs for a script that is not a plugin.
 
 ## Live mode (designed, deferred)
 

@@ -19,6 +19,8 @@ from coperceive.errors import CoperceiveError, TimeQueryError
 from coperceive.model import Modality, PointCloud, Scene, Sensor
 from coperceive.models.protocol import Frame, ImageInput, PointsInput
 from coperceive.models.spec import ModelSpec
+from coperceive.robustness.apply import AgentDecision, decide
+from coperceive.robustness.spec import PerturbationSpec
 from coperceive.se3 import SE3
 from coperceive.transform import lookup_pose
 from coperceive.viewdata import image_path
@@ -176,14 +178,24 @@ def build_frame(
     work_dir: Path,
     media_roots: Sequence[Path],
     raw_root: Path | None,
+    perturbation: PerturbationSpec | None = None,
+    ego_agent_id: str | None = None,
 ) -> tuple[Frame, tuple[InputFile, ...]]:
     """One ``frame`` message and the files it referenced.
 
     ``poses`` holds every agent of the scene with a pose at ``time_us`` (the child may need
     the others' positions); images and sweeps are the requested agents' selected sensors.
+    ``perturbation`` replaces non-ego poses and sensor times. Ground truth is not read.
     """
+    decisions = _decisions(scene, time_us, agent_ids, perturbation, ego_agent_id)
     poses: dict[str, dict[str, float]] = {}
     for agent in scene.agents:
+        decision = decisions.get(agent.agent_id) if decisions is not None else None
+        if decision is not None:
+            if decision.pose is None:
+                continue
+            poses[agent.agent_id] = pose_json(decision.pose)
+            continue
         try:
             pose = lookup_pose(agent, time_us, max_gap_us=0)
         except TimeQueryError:
@@ -194,8 +206,11 @@ def build_frame(
     images: list[ImageInput] = []
     points: list[PointsInput] = []
     for sensor in sensors:
+        sensor_time = _sensor_time(sensor.agent_id, time_us, decisions)
+        if sensor_time is None:
+            continue
         if sensor.modality is Modality.CAMERA:
-            relative = image_path(scene, time_us, sensor.agent_id, sensor.sensor_id)
+            relative = image_path(scene, sensor_time, sensor.agent_id, sensor.sensor_id)
             if relative is None:
                 continue
             found = resolve_image(scene_dir, media_roots, relative)
@@ -210,7 +225,7 @@ def build_frame(
                     for c in scene.point_clouds
                     if c.agent_id == sensor.agent_id
                     and c.sensor_id == sensor.sensor_id
-                    and c.time_us == time_us
+                    and c.time_us == sensor_time
                 ),
                 None,
             )
@@ -227,6 +242,9 @@ def build_frame(
     if raw_root is not None and spec.inputs.raw:
         by_id = {agent.agent_id: agent for agent in scene.agents}
         for agent_id in agent_ids:
+            raw_time = _sensor_time(agent_id, time_us, decisions)
+            if raw_time is None:
+                continue
             agent = by_id[agent_id]
             sensor_ids = [s.sensor_id for s in sensors if s.agent_id == agent_id]
             files.extend(
@@ -236,7 +254,7 @@ def build_frame(
                     agent_id=agent_id,
                     agent_type=agent.agent_type.value,
                     sensor_ids=sensor_ids,
-                    time_us=time_us,
+                    time_us=raw_time,
                     raw_root=raw_root,
                 )
             )
@@ -250,6 +268,34 @@ def build_frame(
     )
     unique = {f.relative: f for f in files}
     return frame, tuple(unique[k] for k in sorted(unique))
+
+
+def _decisions(
+    scene: Scene,
+    time_us: int,
+    agent_ids: Sequence[str],
+    perturbation: PerturbationSpec | None,
+    ego_agent_id: str | None,
+) -> dict[str, AgentDecision] | None:
+    if perturbation is None:
+        return None
+    ego = ego_agent_id or (agent_ids[0] if agent_ids else scene.agents[0].agent_id)
+    try:
+        lookup_pose(scene.agent(ego), time_us, max_gap_us=0)
+    except (KeyError, TimeQueryError):
+        return None
+    return {item.agent_id: item for item in decide(scene, time_us, perturbation, ego)}
+
+
+def _sensor_time(
+    agent_id: str, time_us: int, decisions: dict[str, AgentDecision] | None
+) -> int | None:
+    if decisions is None:
+        return time_us
+    decision = decisions.get(agent_id)
+    if decision is None or not decision.message or decision.source_time_us is None:
+        return None
+    return decision.source_time_us
 
 
 def remove_inputs(work_dir: Path, frame_id: int) -> None:

@@ -892,6 +892,57 @@
         }
       }
     },
+    "/api/scenes/{scene_id}/export/paper": {
+      "post": {
+        "summary": "Scene Paper",
+        "operationId": "scene_paper_api_scenes__scene_id__export_paper_post",
+        "parameters": [
+          {
+            "name": "scene_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scene Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaperExportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Scene Paper Api Scenes  Scene Id  Export Paper Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/files": {
       "get": {
         "summary": "Files",
@@ -1047,6 +1098,104 @@
           "sensor_id"
         ],
         "title": "OverlayRequest"
+      },
+      "PaperExportRequest": {
+        "properties": {
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "decimals": {
+            "type": "integer",
+            "title": "Decimals",
+            "default": 3
+          },
+          "bold_best": {
+            "type": "boolean",
+            "title": "Bold Best",
+            "default": true
+          },
+          "include_counts": {
+            "type": "boolean",
+            "title": "Include Counts",
+            "default": true
+          },
+          "metrics": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Metrics"
+          },
+          "qualitative": {
+            "type": "boolean",
+            "title": "Qualitative",
+            "default": false
+          },
+          "allow_datasets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allow Datasets"
+          },
+          "frames": {
+            "items": {
+              "$ref": "#/components/schemas/PaperFrameIn"
+            },
+            "type": "array",
+            "title": "Frames"
+          }
+        },
+        "type": "object",
+        "title": "PaperExportRequest"
+      },
+      "PaperFrameIn": {
+        "properties": {
+          "scene_id": {
+            "type": "string",
+            "title": "Scene Id"
+          },
+          "time_us": {
+            "type": "integer",
+            "title": "Time Us"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "sensor_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sensor Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scene_id",
+          "time_us"
+        ],
+        "title": "PaperFrameIn"
       },
       "PlotRequest": {
         "properties": {

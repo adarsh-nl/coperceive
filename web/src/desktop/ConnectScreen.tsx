@@ -3,12 +3,15 @@ import { JobsIndicator } from "./JobsIndicator";
 import { useEffect, useState } from "react";
 import {
   LocalExecutionTarget,
+  cancelDemoScene,
   cancelImport,
+  ensureDemoScene,
   getPersistentState,
   getStorageInfo,
   inspectFolder,
   isTauriEnvironment,
   listServerProfiles,
+  onDemoProgress,
   onImportProgress,
   pickDataRoot,
   onFolderDrop,
@@ -20,15 +23,17 @@ import type { ConnectionSession } from "./types";
 import { BrandWordmark } from "./Brand";
 import IdentifierInput from "./IdentifierInput";
 import HpcWorkspace, { type ActiveDatasetPayload, type WorkspaceTab } from "./HpcWorkspace";
-import LibraryScreen from "./LibraryScreen";
+import LibraryScreen, { DemoProgressBanner } from "./LibraryScreen";
 import GetDataScreen from "./GetDataScreen";
 import { UpdateCard, UpdateDot, useUpdater } from "./UpdateBanner";
 import PanelState from "./PanelState";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import { errorText } from "./errors";
+import { DEMO_APPROX_SIZE_LABEL, runDemoOpenFlow } from "./demoMeta";
 import { Sidebar } from "./components/Sidebar";
 import { IconButton } from "./components/IconButton";
 import { SettingsModal } from "./SettingsView";
+import { isTitlebarOverlay, getModifierKey, getSshConfigLabel, formatShortcut } from "./platform";
 import type { ServerEntry } from "./hpc";
 import {
   GridTable,
@@ -41,7 +46,12 @@ import {
   createPageHeaderStore,
 } from "./components/Page";
 import { FolderCheckPanel, OpenFolderHeader, recentColumns as folderColumns } from "./OpenFolder";
-import { datasetJobs as currentDatasetJobs, subscribeDatasetJobs, type DatasetJobs } from "./jobsStore";
+import {
+  datasetJobs as currentDatasetJobs,
+  setViewerOpen,
+  subscribeDatasetJobs,
+  type DatasetJobs,
+} from "./jobsStore";
 
 interface ConnectScreenProps {
   onConnected: (session: ConnectionSession) => void;
@@ -86,6 +96,9 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   const [status, setStatus] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
+  const [generatingDemo, setGeneratingDemo] = useState(false);
+  const [demoElapsedSec, setDemoElapsedSec] = useState(0);
+  const [demoStage, setDemoStage] = useState("Starting bundled Python generator…");
 
   // HPC sidebar state synced with HpcWorkspace
   const [hpcServers, setHpcServers] = useState<ServerEntry[]>([]);
@@ -140,6 +153,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   const recentColumns = folderColumns(folderChecks);
 
   // Import dialog state
+  const [getDataTarget, setGetDataTarget] = useState<{ datasetId?: string; presetId?: string } | null>(null);
   const [importOpen, setImportOpen] = useState<boolean>(false);
   const [importSource, setImportSource] = useState<string>("");
   const [importDest, setImportDest] = useState<string>("");
@@ -247,6 +261,46 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     };
     window.addEventListener("keydown", handleKeyDown);
 
+    const triggerOpenDemo = async () => {
+      setBusy(true);
+      setError("");
+      setDemoElapsedSec(0);
+      setDemoStage("Starting bundled Python generator…");
+      try {
+        const res = await runDemoOpenFlow({
+          ensureDemo: ensureDemoScene,
+          subscribeProgress: onDemoProgress,
+          onGeneratingStart: () => {
+            setGeneratingDemo(true);
+            setStatus(`Generating demo scene… (${DEMO_APPROX_SIZE_LABEL} demo cache)`);
+          },
+          onGeneratingEnd: () => {
+            setGeneratingDemo(false);
+          },
+          onProgress: (stage, elapsed) => {
+            if (stage) setDemoStage(stage);
+            setDemoElapsedSec(elapsed);
+          },
+        });
+        setBusy(false);
+        setStatus("");
+        await handleConnectLocal(res.path);
+      } catch (err) {
+        setGeneratingDemo(false);
+        setBusy(false);
+        setStatus("");
+        const msg = errorText(err);
+        if (!msg.toLowerCase().includes("cancelled")) {
+          setError(msg);
+        }
+      }
+    };
+
+    const handleOpenDemoCustom = () => {
+      void triggerOpenDemo();
+    };
+    window.addEventListener("coperceive-open-demo", handleOpenDemoCustom);
+
     if (!isTauriEnvironment()) {
       return () => {
         window.removeEventListener("coperceive-test-import", applyTestImport);
@@ -255,6 +309,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
         window.removeEventListener("coperceive-hpc-state", handleHpcState);
         window.removeEventListener("coperceive-hpc-profiles-updated", handleHpcProfilesUpdated);
         window.removeEventListener("coperceive-open-dataset", handleOpenDatasetNav);
+        window.removeEventListener("coperceive-open-demo", handleOpenDemoCustom);
         window.removeEventListener("keydown", handleKeyDown);
       };
     }
@@ -266,6 +321,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     let unlistenHpcWorkspace: (() => void) | undefined;
     let unlistenToggleSidebar: (() => void) | undefined;
     let unlistenSettings: (() => void) | undefined;
+    let unlistenOpenDemo: (() => void) | undefined;
 
     void (async () => {
       const { listen } = await import("@tauri-apps/api/event");
@@ -292,6 +348,9 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       unlistenSettings = await listen("open-settings", () => {
         setSettingsOpen(true);
       });
+      unlistenOpenDemo = await listen("coperceive-open-demo", () => {
+        void triggerOpenDemo();
+      });
     })();
 
     const handleOpenEval = () => {
@@ -307,6 +366,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       window.removeEventListener("coperceive-hpc-profiles-updated", handleHpcProfilesUpdated);
       window.removeEventListener("coperceive-open-dataset", handleOpenDatasetNav);
       window.removeEventListener("coperceive-open-evaluation", handleOpenEval);
+      window.removeEventListener("coperceive-open-demo", handleOpenDemoCustom);
       window.removeEventListener("keydown", handleKeyDown);
       unlistenImport?.();
       unlistenGetData?.();
@@ -315,6 +375,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       unlistenHpcWorkspace?.();
       unlistenToggleSidebar?.();
       unlistenSettings?.();
+      unlistenOpenDemo?.();
     };
   }, []);
 
@@ -399,6 +460,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
 
     const target = new LocalExecutionTarget();
     try {
+      setViewerOpen(false);
       const session = await target.connect({
         type: "local",
         dataRoot: rootToUse,
@@ -508,7 +570,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                     color: "var(--text-subtle)",
                   }}
                 >
-                  Signs in with your ssh-agent and ~/.ssh/config. Never asks for a password or key.
+                  Signs in with your ssh-agent and {getSshConfigLabel()}. Never asks for a password or key.
                 </p>
               </div>
             ) : null}
@@ -518,7 +580,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <button
                 type="button"
-                aria-label="Settings (⌘,)"
+                aria-label={`Settings (${formatShortcut("⌘,")})`}
                 onClick={() => setSettingsOpen(true)}
                 className="c-sidebar-item"
                 style={{
@@ -549,7 +611,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                     fontFamily: "'Geist Mono', monospace",
                   }}
                 >
-                  ⌘,
+                  ({formatShortcut("⌘,")})
                 </span>
               </button>
             </div>
@@ -750,16 +812,18 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
           <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
             {!sidebarOpen && (
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <div
-                  data-tauri-drag-region
-                  className="traffic-lights-spacer"
-                  style={{ width: "78px", flexShrink: 0, height: "100%" }}
-                  aria-hidden="true"
-                />
+                {isTitlebarOverlay() && (
+                  <div
+                    data-tauri-drag-region
+                    className="traffic-lights-spacer"
+                    style={{ width: "78px", flexShrink: 0, height: "100%" }}
+                    aria-hidden="true"
+                  />
+                )}
                 <span className="update-dot-host">
                   <IconButton
                     size="sm"
-                    label="Open sidebar (⌘\)"
+                    label={`Open sidebar (${getModifierKey()}\\)`}
                     onClick={() => setSidebarOpen(true)}
                   >
                     <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
@@ -789,13 +853,29 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
         </header>
 
         <main style={{ flex: 1, minHeight: 0, overflowY: "auto", position: "relative" }}>
+          {generatingDemo && (
+            <DemoProgressBanner
+              stage={demoStage}
+              elapsedSec={demoElapsedSec}
+              onCancel={() => {
+                void cancelDemoScene().finally(() => {
+                  setGeneratingDemo(false);
+                  setBusy(false);
+                  setStatus("");
+                });
+              }}
+            />
+          )}
           {/* Every tab stays mounted (hidden when not shown): an open dataset,
               scroll and filters survive switching tabs. */}
           <div className="tab-panel" hidden={activeTab !== "library"}>
             <LibraryScreen
               key={libraryKey}
               onOpenScene={(scenePath) => void handleConnectLocal(scenePath)}
-              onNavigateGetData={() => setActiveTab("get_data")}
+              onNavigateGetData={(datasetId, presetId) => {
+                setGetDataTarget(datasetId ? { datasetId, presetId } : null);
+                setActiveTab("get_data");
+              }}
               onNavigateOpenFolder={() => setActiveTab("local")}
               onNavigateServers={() => navigateHpcSection("servers")}
             />
@@ -805,6 +885,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             <GetDataScreen
               onOpenScene={(scenePath) => void handleConnectLocal(scenePath)}
               onOpenLibrary={() => setActiveTab("library")}
+              initialDatasetId={getDataTarget?.datasetId}
+              initialPresetId={getDataTarget?.presetId}
               onOpenImportFolder={(folder) => {
                 if (folder) setImportSource(folder);
                 setImportOpen(true);

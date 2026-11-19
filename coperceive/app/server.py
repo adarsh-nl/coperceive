@@ -12,6 +12,7 @@ import json
 import re
 from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
+from typing import cast
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field
+from starlette.datastructures import Headers
 
 from coperceive.app.jobs import CSRF_HEADER, confine, confine_media, list_jobs, open_db, run_job
 from coperceive.camera_images import served_candidates
@@ -26,7 +28,18 @@ from coperceive.errors import CoperceiveError
 from coperceive.evaluation.predictions import predictions_root
 from coperceive.evalview import EvalViewError, frame_rows, runs_for_scene, series
 from coperceive.hdmap.store import HdMap, find_map, load_map, scene_map_name
+from coperceive.images import open_image
 from coperceive.model import PointCloud, Scene
+from coperceive.paper_export import (
+    PaperExportError,
+    PaperFrame,
+    PaperInputs,
+    PaperOptions,
+    discover_sidecars,
+    export_paper,
+    repro_card_directory,
+    resolve_dataset_id,
+)
 from coperceive.plot import (
     PlotError,
     PlotNotFound,
@@ -38,6 +51,7 @@ from coperceive.plot import (
 from coperceive.remote_view.client import StreamRefused, StreamUnavailable
 from coperceive.remote_view.scenes import RemoteScenes
 from coperceive.rerun_export import RerunUnavailable, export_rerun
+from coperceive.seen_by import adapter_name, seen_by_for_scene
 from coperceive.sequence_export import (
     FORMATS,
     SequenceExport,
@@ -72,7 +86,7 @@ _THUMBNAIL_WIDTH_MAX = 1280
 @functools.lru_cache(maxsize=256)
 def _thumbnail_bytes(path: str, mtime_ns: int, width: int) -> bytes:
     """A small JPEG for the camera strip/split pane; full resolution stays on disk."""
-    with Image.open(path) as opened:
+    with open_image(path) as opened:
         image = opened.convert("RGB")
         image.thumbnail((width, width), Image.Resampling.LANCZOS)
         buffer = io.BytesIO()
@@ -139,6 +153,24 @@ class OverlayRequest(BaseModel):
     agents: list[str] | None = None
 
 
+class PaperFrameIn(BaseModel):
+    scene_id: str
+    time_us: int
+    agent_id: str | None = None
+    sensor_id: str | None = None
+
+
+class PaperExportRequest(BaseModel):
+    run_id: str | None = None
+    decimals: int = 3
+    bold_best: bool = True
+    include_counts: bool = True
+    metrics: list[str] = Field(default_factory=lambda: ["precision", "recall", "ap"])
+    qualitative: bool = False
+    allow_datasets: list[str] = Field(default_factory=list)
+    frames: list[PaperFrameIn] = Field(default_factory=list)
+
+
 class ViewSequenceRequest(BaseModel):
     format: str
     fps: int
@@ -148,6 +180,59 @@ class ViewSequenceRequest(BaseModel):
 
 
 _EXPORT_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+_CSRF_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# The names a browser on this machine uses for a loopback server. A page served
+# from any other name (a DNS-rebinding domain, a LAN name) keeps that name in
+# its Host header even when it resolves to 127.0.0.1.
+_LOOPBACK_HOSTNAMES = ("127.0.0.1", "localhost", "[::1]")
+
+
+def _route_path(scope: dict[str, object]) -> str:
+    """The path Starlette's router matches: ``scope["path"]`` without ``root_path``.
+
+    Uvicorn puts ``--root-path`` in front of the request path and the router
+    strips it again (``starlette._utils.get_route_path``, mirrored here), so the
+    guard has to decide on the same path or a prefixed request skips it.
+    """
+    path = str(scope.get("path", ""))
+    root_path = str(scope.get("root_path", "") or "")
+    if not root_path or not path.startswith(root_path):
+        return path
+    if path == root_path:
+        return ""
+    if path[len(root_path)] == "/":
+        return path[len(root_path) :]
+    return path
+
+
+def _is_api(path: str) -> bool:
+    return path == "/api" or path.startswith("/api/")
+
+
+def _loopback_host(scope: dict[str, object], headers: Headers, port: int) -> bool:
+    """True when the one Host header names a loopback address on ``port``.
+
+    ``port`` 0 means the port the server listens on (``scope["server"]``), for a
+    server started on an ephemeral port.
+    """
+    values = headers.getlist("host")
+    if len(values) != 1:
+        return False
+    expected = port
+    if expected == 0:
+        server = scope.get("server")
+        listening = list(cast(Sequence[object], server)) if isinstance(server, tuple | list) else []
+        if len(listening) != 2 or not isinstance(listening[1], int):
+            return False
+        expected = listening[1]
+    host = values[0].strip().lower()
+    default_port = 443 if scope.get("scheme") == "https" else 80
+    for name in _LOOPBACK_HOSTNAMES:
+        if host == f"{name}:{expected}" or (expected == default_port and host == name):
+            return True
+    return False
 
 
 def create_app(
@@ -161,6 +246,7 @@ def create_app(
     media_roots: Sequence[str | Path] = (),
     allow_origin: str | None = None,
     remote: RemoteScenes | None = None,
+    loopback_port: int | None = None,
 ) -> FastAPI:
     """The app over ``root``.
 
@@ -170,6 +256,9 @@ def create_app(
     packaged page with another build directory. ``media_roots`` are directories a
     scene's image links may resolve into (a staged scene links ``<side>/camera``
     to the dataset copy); without them an image outside the scene is 400.
+    ``loopback_port`` makes every request carry a loopback Host header on that
+    port (0: the listening port); ``coperceive serve`` sets it when it has no
+    token.
     """
     root_path_obj = Path(root).resolve()
     root_path_obj.mkdir(parents=True, exist_ok=True)
@@ -202,11 +291,26 @@ def create_app(
     app.state.remote = remote
     static_dir = _STATIC if static is None else Path(static).resolve()
 
+    # Whether a request is `/api` is decided on the route path (`root_path`
+    # removed), the path the router serves: uvicorn puts --root-path in front of
+    # the request path, so the raw path would let every prefixed route skip the
+    # token and CSRF checks. `loopback_port` (`coperceive serve` without a token)
+    # also refuses, with a 400, every HTTP request whose Host is not 127.0.0.1,
+    # localhost or [::1] on that port, so a DNS-rebinding page cannot use the
+    # token-less API.
     @app.middleware("http")
     async def auth_and_csrf(request: Request, call_next):  # type: ignore[no-untyped-def]
+        if loopback_port is not None and not _loopback_host(
+            request.scope, request.headers, loopback_port
+        ):
+            return _json_error(
+                400,
+                "host not allowed: without a token this server answers only "
+                "127.0.0.1, localhost or [::1] on its own port",
+            )
         if request.method == "OPTIONS":
             return await call_next(request)
-        if request.url.path.startswith("/api/"):
+        if _is_api(_route_path(request.scope)):
             expected = request.app.state.token
             if expected:
                 header = request.headers.get("authorization", "")
@@ -216,7 +320,7 @@ def create_app(
                     and hmac.compare_digest(header[len(prefix) :], expected)
                 ):
                     return _json_error(401, "bearer token required")
-            if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            if request.method in _CSRF_METHODS:
                 if request.headers.get(CSRF_HEADER) != "1":
                     return _json_error(403, f"missing {CSRF_HEADER}: 1")
         return await call_next(request)
@@ -267,8 +371,12 @@ def create_app(
         if app.state.remote is not None:
             body["point_sweeps"] = len(_remote_call(lambda: app.state.remote.sweeps(scene_id)))
             body["images_staged"] = _remote_images_staged(app, scene, scene_id)
+            mirrored = _remote_call(lambda: app.state.remote.ensure(scene_id))
+            body["seen_by"] = seen_by_for_scene(scene, adapter_name(mirrored))
             return body
-        body["images_staged"] = _images_staged(app, scene, _scene_dir(app.state.root, scene_id))
+        directory = _scene_dir(app.state.root, scene_id)
+        body["images_staged"] = _images_staged(app, scene, directory)
+        body["seen_by"] = seen_by_for_scene(scene, adapter_name(directory))
         return body
 
     @app.get("/api/scenes/{scene_id}/frame")
@@ -521,6 +629,67 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _plot_body(app.state.root, result)
 
+    @app.post("/api/scenes/{scene_id}/export/paper")
+    def scene_paper(scene_id: str, body: PaperExportRequest) -> dict[str, object]:
+        _cached_scene(app, scene_id)
+        try:
+            options = PaperOptions(
+                decimals=body.decimals,
+                bold_best=body.bold_best,
+                include_counts=body.include_counts,
+                metrics=tuple(body.metrics),
+                qualitative=body.qualitative,
+                allow_datasets=tuple(body.allow_datasets),
+            )
+            frames = tuple(_paper_frame(app.state.root, item) for item in body.frames)
+            predictions = app.state.predictions if isinstance(app.state.predictions, Path) else None
+            cards: list[Path] = []
+            compare_path: Path | None = None
+            degradation_path: Path | None = None
+            failures_path: Path | None = None
+            bookmarks_path: Path | None = None
+            if predictions is not None and body.run_id:
+                found = discover_sidecars(predictions, body.run_id)
+                compare_path = found.get("compare.json")
+                degradation_path = found.get("degradation.json")
+                failures_path = found.get("failures.json")
+                bookmarks_path = found.get("bookmarks.json")
+                card = found.get("repro-card.json")
+                if card is not None:
+                    cards.append(card)
+                extra = repro_card_directory(predictions, body.run_id)
+                if extra is not None:
+                    cards.append(extra)
+            label = scene_id if _EXPORT_NAME.fullmatch(scene_id) else "scene"
+            relative = f"exports/{label}-paper.zip"
+            dest = confine(app.state.root, relative)
+            manifest = export_paper(
+                dest,
+                options,
+                PaperInputs(
+                    run_id=body.run_id,
+                    predictions_root=predictions,
+                    scenes_root=app.state.root,
+                    compare_path=compare_path,
+                    degradation_path=degradation_path,
+                    failures_path=failures_path,
+                    repro_card_paths=tuple(cards),
+                    bookmarks_path=bookmarks_path,
+                    frames=frames,
+                ),
+            )
+        except PaperExportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        notes = manifest.get("notes")
+        card_ids = manifest.get("repro_card_ids")
+        return {
+            "path": relative,
+            "notes": notes if isinstance(notes, list) else [],
+            "repro_card_ids": card_ids if isinstance(card_ids, list) else [],
+        }
+
     @app.get("/api/files")
     def files(path: str) -> FileResponse:
         try:
@@ -710,7 +879,7 @@ def _remote_image(
     if width is not None:
         clamped = max(16, min(int(width), _THUMBNAIL_WIDTH_MAX))
         try:
-            with Image.open(io.BytesIO(data)) as image:
+            with open_image(io.BytesIO(data)) as image:
                 image.draft("RGB", (clamped, clamped))
                 frame = image.convert("RGB")
                 if frame.width > clamped:
@@ -830,6 +999,21 @@ def _decode_frame(item: str) -> bytes:
         return base64.b64decode(item, validate=True)
     except Exception as exc:
         raise SequenceExportError("a frame is not base64") from exc
+
+
+def _paper_frame(root: Path, item: PaperFrameIn) -> PaperFrame:
+    """One qualitative frame. The dataset id comes from the scene on disk."""
+    directory = _scene_dir(root, item.scene_id)
+    if item.time_us < 0:
+        raise PaperExportError("bad sample time")
+    return PaperFrame(
+        scene_dir=directory,
+        scene_id=item.scene_id,
+        time_us=item.time_us,
+        agent_id=item.agent_id,
+        sensor_id=item.sensor_id,
+        dataset_id=resolve_dataset_id(directory),
+    )
 
 
 def _plot_time(scene: Scene, time_us: int | None) -> int:

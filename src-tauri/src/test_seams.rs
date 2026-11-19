@@ -16,6 +16,15 @@
 
 use std::path::Path;
 
+/// Crate-wide mutex for tests that run `fake_ssh.sh` or configure
+/// process-wide fake SSH environment variables (`FAKE_SSH_LOG`, `FAKE_REMOTE_ROOT`).
+pub static FAKE_SSH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Crate-wide mutex serializing unit tests that allocate or re-bind ephemeral
+/// loopback TCP ports so parallel tests do not claim a port between
+/// `find_free_loopback_port` returning and the caller binding it.
+pub static PORT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// True when the app was launched by the real-app e2e harness.
 pub fn test_env_active() -> bool {
     std::env::var_os("COPERCEIVE_TEST_ENV").is_some()
@@ -237,6 +246,24 @@ pub fn hpc_scan_probe_request() -> Option<HpcScanProbe> {
     })
 }
 
+/// Test-only lab-profile export/import. `COPERCEIVE_TEST_HPC_SHARE_SERVER` is a
+/// ServerEntry fixture and `COPERCEIVE_TEST_HPC_SHARE_RESULT` is where the
+/// round-trip JSON is written. Production launches never set these.
+pub fn hpc_share_probe_request() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    if !test_env_active() {
+        return None;
+    }
+    let server = std::env::var("COPERCEIVE_TEST_HPC_SHARE_SERVER").ok()?;
+    let result = std::env::var("COPERCEIVE_TEST_HPC_SHARE_RESULT").ok()?;
+    if server.trim().is_empty() || result.trim().is_empty() {
+        return None;
+    }
+    Some((
+        std::path::PathBuf::from(server),
+        std::path::PathBuf::from(result),
+    ))
+}
+
 /// Test-only request for the packaged-app cluster-dataset flow: read
 /// `{"server": <ServerEntry fixture path>, "steps": [{"command": "dataset_detect",
 /// "args": {...}}, ...]}`, save the server, call the real Tauri dataset commands
@@ -287,6 +314,22 @@ pub fn fake_dry_run_result(dataset_id: &str, preset_id: &str) -> serde_json::Val
         "licence": "MIT",
         "licence_url": "https://raw.githubusercontent.com/wang-jh18-SVM/Griffin/main/LICENSE.txt",
     })
+}
+
+/// Atomically writes the smoke-test readiness marker file via a temporary
+/// sibling file and rename so readers never see a partially truncated file.
+pub fn write_test_marker_atomic(
+    marker_path: &std::path::Path,
+    origin: &str,
+    token: &str,
+    log_path: &str,
+    ctrl_port: u16,
+    ctrl_secret: &str,
+) -> std::io::Result<()> {
+    let content = format!("{origin}\n{token}\n{log_path}\n{ctrl_port}\n{ctrl_secret}\n");
+    let tmp_path = marker_path.with_extension(format!("tmp.{}", std::process::id()));
+    std::fs::write(&tmp_path, content)?;
+    std::fs::rename(&tmp_path, marker_path)
 }
 
 #[cfg(test)]
@@ -391,5 +434,33 @@ mod tests {
     #[test]
     fn dataset_flow_probe_request_is_inert_outside_test_mode() {
         assert!(dataset_flow_probe_request().is_none());
+    }
+
+    #[test]
+    fn write_test_marker_atomic_creates_complete_marker_without_temp_leftovers() {
+        let dir = temp_dir("marker-atomic");
+        let marker = dir.join("marker.txt");
+        write_test_marker_atomic(
+            &marker,
+            "http://127.0.0.1:49178",
+            "tok123",
+            "/tmp/serve.log",
+            49177,
+            "ctrl-sec",
+        )
+        .expect("write marker");
+
+        let body = std::fs::read_to_string(&marker).expect("read marker");
+        assert_eq!(
+            body,
+            "http://127.0.0.1:49178\ntok123\n/tmp/serve.log\n49177\nctrl-sec\n"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(leftovers.is_empty(), "temp marker file left behind: {leftovers:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

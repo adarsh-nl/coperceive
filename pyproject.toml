@@ -4,18 +4,17 @@ build-backend = "hatchling.build"
 
 [project]
 name = "coperceive"
-version = "0.1.0"
+version = "0.1.1"
 description = "Cooperative multi-agent perception data library."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Adarsh (github.com/adarsh-nl)" }]
 keywords = ["cooperative-perception", "multi-agent", "autonomous-driving"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -23,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     # Upper bounds are intentionally absent. Pip selects the newest build each
-    # interpreter can install: NumPy 2.3+ and PyArrow 22+ drop Python 3.10.
+    # interpreter can install: NumPy 2.3+ and PyArrow 22+ drop Python 3.10, and the Python 3.10 floor is no longer supported.
     "numpy>=1.26.4",
     "pyarrow>=18",
     "pillow>=10.4",
@@ -64,13 +63,14 @@ packages = ["coperceive"]
 artifacts = ["coperceive/app/static/**"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 100
 src = ["coperceive", "tests"]
-extend-exclude = ["spikes"]
+
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "W"]
+ignore = ["UP017", "UP042"]
 
 [tool.ruff.lint.per-file-ignores]
 # The Griffin plugin runs on Python 3.8: typing.Dict/List/Optional stay where they are
@@ -87,7 +87,7 @@ exclude = [
     "tests/test_griffin_phase2.py",
 ]
 typeCheckingMode = "strict"
-pythonVersion = "3.10"
+pythonVersion = "3.11"
 venvPath = "."
 venv = ".venv"
 stubPath = "typings"

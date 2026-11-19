@@ -2,6 +2,7 @@
 import React, { useEffect } from "react";
 import { BrandWordmark } from "../Brand";
 import { IconButton } from "./IconButton";
+import { isTitlebarOverlay, getModifierKey } from "../platform";
 
 export interface SidebarProps {
   collapsed: boolean;
@@ -34,6 +35,9 @@ export function Sidebar({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onToggle]);
 
+  const isOverlay = isTitlebarOverlay();
+  const modKey = getModifierKey();
+
   return (
     <aside
       className={`c-sidebar ${collapsed ? "collapsed" : ""} ${className}`.trim()}
@@ -54,7 +58,7 @@ export function Sidebar({
         ...style,
       }}
     >
-      {/* Top Header with macOS traffic lights spacing and brand wordmark */}
+      {/* Top Header with macOS traffic lights spacing (or flush 16px on Win/Linux) and brand wordmark */}
       <div
         data-tauri-drag-region
         style={{
@@ -62,18 +66,20 @@ export function Sidebar({
           display: "flex",
           alignItems: "center",
           gap: "0",
-          padding: "0 14px 0 0",
+          padding: isOverlay ? "0 14px 0 0" : "0 14px 0 16px",
           flexShrink: 0,
           borderBottom: "1px solid var(--line-subtle, rgba(255,255,255,0.04))",
         }}
       >
         {/* macOS traffic lights safe area (width 78px starting at x=0 to ensure zero overlap) */}
-        <div
-          data-tauri-drag-region
-          className="traffic-lights-spacer"
-          style={{ width: "78px", flexShrink: 0, height: "100%" }}
-          aria-hidden="true"
-        />
+        {isOverlay && (
+          <div
+            data-tauri-drag-region
+            className="traffic-lights-spacer"
+            style={{ width: "78px", flexShrink: 0, height: "100%" }}
+            aria-hidden="true"
+          />
+        )}
 
         {/* Brand wordmark to the right of traffic lights */}
         <div
@@ -94,7 +100,7 @@ export function Sidebar({
           {headerRight}
           <IconButton
             size="sm"
-            label="Toggle sidebar (⌘\)"
+            label={`Toggle sidebar (${modKey}\\)`}
             onClick={onToggle}
             data-tauri-drag-region="false"
           >

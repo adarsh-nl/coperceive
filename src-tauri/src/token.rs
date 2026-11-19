@@ -49,6 +49,10 @@ pub fn write_token_file(path: &Path, token: &str) -> std::io::Result<()> {
     file.write_all(token.as_bytes())?;
     file.write_all(b"\n")?;
     file.flush()?;
+    #[cfg(target_os = "windows")]
+    {
+        let _ = crate::platform::protect_file_current_user(path);
+    }
     Ok(())
 }
 
@@ -65,8 +69,12 @@ pub fn verify_token_file_permissions(path: &Path) -> Result<(), TokenSecurityErr
             return Err(TokenSecurityError::LoosePermissions(mode));
         }
     }
-    // On non-Unix platforms (e.g. Windows), POSIX file permission modes do not apply.
-    // Windows relies on the per-user profile directory's ACLs; there is no mode check there.
+    #[cfg(target_os = "windows")]
+    {
+        if let Err(_msg) = crate::platform::verify_file_current_user(path) {
+            return Err(TokenSecurityError::LoosePermissions(0o777));
+        }
+    }
     Ok(())
 }
 

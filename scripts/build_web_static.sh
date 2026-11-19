@@ -36,4 +36,8 @@ if [ ! -f "${STATIC_DIR}/index.html" ]; then
     echo "build_web_static.sh: the build did not write ${STATIC_DIR}/index.html" >&2
     exit 1
 fi
-python3 "${REPO_ROOT}/scripts/check_bundle_assets.py" --static "${STATIC_DIR}"
+PYTHON_CMD="python3"
+if ! command -v python3 >/dev/null 2>&1 && command -v python >/dev/null 2>&1; then
+    PYTHON_CMD="python"
+fi
+"${PYTHON_CMD}" "${REPO_ROOT}/scripts/check_bundle_assets.py" --static "${STATIC_DIR}"

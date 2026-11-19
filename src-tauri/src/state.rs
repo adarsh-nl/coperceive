@@ -455,6 +455,19 @@ pub struct AppPersistentState {
     /// filmstrip) or "agent" (one agent's cameras with Switch agent). "all" by default.
     #[serde(default = "default_camera_strip")]
     pub camera_strip: String,
+
+    /// Settings → Viewer → Style. "classic" is today's layout and the default.
+    #[serde(default = "default_viewer_style")]
+    pub viewer_style: String,
+
+    /// Cinema's slow camera drift while playing. On by default; the page turns
+    /// it off while the OS asks for reduced motion.
+    #[serde(default = "default_true")]
+    pub cinema_drift: bool,
+
+    /// Whether the first-run welcome card was dismissed. Off (false) by default.
+    #[serde(default)]
+    pub welcome_card_dismissed: bool,
 }
 
 /// The values "Group scenes" may hold; anything else is ignored.
@@ -462,6 +475,9 @@ pub const DATASET_GROUPINGS: [&str; 3] = ["none", "state", "day"];
 
 /// The values "Camera strip" may hold; anything else is ignored.
 pub const CAMERA_STRIP_MODES: [&str; 2] = ["all", "agent"];
+
+/// The values "Style" may hold; anything else is ignored.
+pub const VIEWER_STYLES: [&str; 4] = ["classic", "studio", "instrument", "cinema"];
 
 fn default_camera_strip() -> String {
     "all".to_string()
@@ -473,6 +489,16 @@ pub fn camera_strip_from(value: &serde_json::Value) -> Option<String> {
     CAMERA_STRIP_MODES.contains(&text).then(|| text.to_string())
 }
 
+fn default_viewer_style() -> String {
+    "classic".to_string()
+}
+
+/// A viewer style from a settings update, when it is one of [`VIEWER_STYLES`].
+pub fn viewer_style_from(value: &serde_json::Value) -> Option<String> {
+    let text = value.as_str()?;
+    VIEWER_STYLES.contains(&text).then(|| text.to_string())
+}
+
 fn default_dataset_grouping() -> String {
     "none".to_string()
 }
@@ -481,6 +507,168 @@ fn default_dataset_grouping() -> String {
 pub fn dataset_grouping_from(value: &serde_json::Value) -> Option<String> {
     let text = value.as_str()?;
     DATASET_GROUPINGS.contains(&text).then(|| text.to_string())
+}
+
+/// Scope controlling which [`AppPersistentState`] keys a JSON patch may mutate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatePatchScope {
+    /// Main desktop window and test controller: all supported persistent keys.
+    Full,
+    /// Viewer webview (`http://127.0.0.1:*`): bounded viewer UI preferences only.
+    ViewerOnly,
+}
+
+const VIEWER_ALLOWED_PATCH_KEYS: &[&str] = &[
+    "scene_id",
+    "sample_index",
+    "timestamp_us",
+    "timestamp_ns",
+    "viewpoint",
+    "loop",
+    "theme_override",
+    "theme",
+    "dataset_grouping",
+    "camera_strip",
+    "viewer_style",
+    "cinema_drift",
+    "agent_visibility",
+    "layer_toggles",
+    "selected_camera",
+    "split_view",
+    "panel_collapse",
+    "layout",
+];
+
+/// Bounded subset of [`AppPersistentState`] readable by the viewer webview.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerPreferences {
+    pub dataset_grouping: String,
+    pub camera_strip: String,
+    pub viewer_style: String,
+    pub cinema_drift: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme_override: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_loop: Option<bool>,
+}
+
+/// Projects only viewer UI preferences out of [`AppPersistentState`].
+pub fn viewer_preferences(persistent: &AppPersistentState) -> ViewerPreferences {
+    ViewerPreferences {
+        dataset_grouping: persistent.dataset_grouping.clone(),
+        camera_strip: persistent.camera_strip.clone(),
+        viewer_style: persistent.viewer_style.clone(),
+        cinema_drift: persistent.cinema_drift,
+        theme_override: persistent.theme_override.clone(),
+        last_loop: persistent.last_loop,
+    }
+}
+
+/// Applies a validated JSON patch to `persistent` under `scope`.
+pub fn apply_state_patch(
+    persistent: &mut AppPersistentState,
+    val: &serde_json::Value,
+    scope: StatePatchScope,
+) -> Result<(), String> {
+    let obj = val
+        .as_object()
+        .ok_or_else(|| "State patch must be a JSON object".to_string())?;
+    if scope == StatePatchScope::ViewerOnly {
+        for key in obj.keys() {
+            if !VIEWER_ALLOWED_PATCH_KEYS.contains(&key.as_str()) {
+                return Err(format!("Key '{key}' cannot be modified from the viewer window"));
+            }
+        }
+    }
+
+    if let Some(sc) = val.get("scene_id").and_then(|v| v.as_str()) {
+        persistent.last_scene_id = Some(sc.to_string());
+    }
+    if let Some(idx) = val.get("sample_index").and_then(|v| v.as_i64()) {
+        persistent.last_sample_index = Some(idx);
+    }
+    if let Some(ts) = val.get("timestamp_us").and_then(|v| v.as_i64()) {
+        persistent.last_timestamp_us = Some(ts);
+    } else if let Some(ts) = val.get("timestamp_ns").and_then(|v| v.as_i64()) {
+        persistent.last_timestamp_us = Some(ts / 1000);
+    }
+    if let Some(vp) = val.get("viewpoint").and_then(|v| v.as_str()) {
+        persistent.last_viewpoint = Some(vp.to_string());
+    }
+    if let Some(looping) = val.get("loop").and_then(|v| v.as_bool()) {
+        persistent.last_loop = Some(looping);
+    }
+    if let Some(th) = val.get("theme_override") {
+        if th.is_null() {
+            persistent.theme_override = None;
+        } else if let Some(s) = th.as_str() {
+            if s == "light" || s == "dark" {
+                persistent.theme_override = Some(s.to_string());
+            }
+        }
+    } else if let Some(th) = val.get("theme").and_then(|v| v.as_str()) {
+        if th == "light" || th == "dark" {
+            persistent.theme_override = Some(th.to_string());
+        }
+    }
+    if let Some(grouping) = val.get("dataset_grouping").and_then(dataset_grouping_from) {
+        persistent.dataset_grouping = grouping;
+    }
+    if let Some(strip) = val.get("camera_strip").and_then(camera_strip_from) {
+        persistent.camera_strip = strip;
+    }
+    if let Some(style) = val.get("viewer_style").and_then(viewer_style_from) {
+        persistent.viewer_style = style;
+    }
+    if let Some(drift) = val.get("cinema_drift").and_then(|v| v.as_bool()) {
+        persistent.cinema_drift = drift;
+    }
+    if let Some(vis) = val.get("agent_visibility") {
+        if let Ok(map) = serde_json::from_value::<HashMap<String, bool>>(vis.clone()) {
+            persistent.agent_visibility = Some(map);
+        }
+    }
+    if let Some(layers) = val.get("layer_toggles") {
+        if let Ok(lt) = serde_json::from_value::<LayerToggles>(layers.clone()) {
+            persistent.layer_toggles = Some(lt);
+        }
+    }
+    if let Some(cam) = val.get("selected_camera").and_then(|v| v.as_str()) {
+        persistent.selected_camera = Some(cam.to_string());
+    }
+    if let Some(split) = val.get("split_view").and_then(|v| v.as_bool()) {
+        persistent.split_view = Some(split);
+    }
+    if let Some(panels) = val.get("panel_collapse") {
+        if let Ok(pcs) = serde_json::from_value::<PanelCollapseState>(panels.clone()) {
+            persistent.panel_collapse = Some(pcs);
+        }
+    }
+    if let Some(l) = val.get("layout") {
+        if let Ok(mut layout) = serde_json::from_value::<LayoutSizes>(l.clone()) {
+            layout.clamp();
+            persistent.layout = Some(layout);
+        }
+    }
+
+    if scope == StatePatchScope::Full {
+        if let Some(reopen) = val.get("reopen_last_session").and_then(|v| v.as_bool()) {
+            persistent.reopen_last_session = reopen;
+        }
+        if let Some(auto_next) = val.get("auto_next_scene").and_then(|v| v.as_bool()) {
+            persistent.auto_next_scene = auto_next;
+        }
+        if let Some(open_first) = val.get("open_first_ready_scene").and_then(|v| v.as_bool()) {
+            persistent.open_first_ready_scene = open_first;
+        }
+        if let Some(win) = val.get("window_state") {
+            if let Ok(ws) = serde_json::from_value::<WindowState>(win.clone()) {
+                persistent.window_state = Some(ws);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub const DEFAULT_REMOTE_VIEW_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -551,11 +739,7 @@ impl AppPersistentState {
 
 /// Returns the default library location: ~/coperceive-data.
 pub fn default_library_root() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join("coperceive-data")
-    } else {
-        PathBuf::from("coperceive-data")
-    }
+    crate::platform::default_library_root()
 }
 
 impl Default for AppPersistentState {
@@ -593,6 +777,9 @@ impl Default for AppPersistentState {
             remote_view_cache_bytes: DEFAULT_REMOTE_VIEW_CACHE_BYTES,
             dataset_grouping: default_dataset_grouping(),
             camera_strip: default_camera_strip(),
+            viewer_style: default_viewer_style(),
+            cinema_drift: true,
+            welcome_card_dismissed: false,
         }
     }
 }
@@ -605,33 +792,7 @@ impl Default for AppPersistentState {
 /// `COPERCEIVE_STATE_DIR` overrides the directory, as for `servers.json` (the
 /// e2e harnesses set it so the real store is untouched).
 pub fn get_state_file_path() -> PathBuf {
-    if let Some(dir) = std::env::var_os("COPERCEIVE_STATE_DIR") {
-        return PathBuf::from(dir).join("state.json");
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        #[cfg(target_os = "macos")]
-        {
-            return PathBuf::from(home)
-                .join("Library")
-                .join("Application Support")
-                .join("nl.adarsh.coperceive")
-                .join("state.json");
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
-                return PathBuf::from(xdg)
-                    .join("nl.adarsh.coperceive")
-                    .join("state.json");
-            }
-            return PathBuf::from(home)
-                .join(".local")
-                .join("share")
-                .join("nl.adarsh.coperceive")
-                .join("state.json");
-        }
-    }
-    PathBuf::from(".coperceive-state.json")
+    crate::platform::get_state_file_path()
 }
 
 /// Adds a dataset root path to the front of `recent_roots`, deduplicating and
@@ -646,6 +807,11 @@ pub fn add_recent_root(state: &mut AppPersistentState, root: &str) {
     if state.recent_roots.len() > MAX_RECENT_ROOTS {
         state.recent_roots.truncate(MAX_RECENT_ROOTS);
     }
+}
+
+/// Returns true when the remembered recent-roots menu items need updating.
+pub fn recent_roots_changed(previous: &[String], updated: &[String]) -> bool {
+    previous != updated
 }
 
 fn name_ends_with_partial(path: &Path) -> bool {
@@ -796,6 +962,10 @@ pub fn save_state_to_path(state: &AppPersistentState, path: &Path) -> Result<(),
     {
         fs::write(path, serialized)
             .map_err(|e| format!("Failed to write state file {}: {}", path.display(), e))?;
+        #[cfg(target_os = "windows")]
+        {
+            let _ = crate::platform::protect_file_current_user(path);
+        }
     }
 
     Ok(())
@@ -829,6 +999,21 @@ mod camera_images_tests {
 
 #[cfg(test)]
 pub mod tests {
+    #[test]
+    fn viewer_style_defaults_to_classic_and_accepts_only_known_values() {
+        assert_eq!(AppPersistentState::default().viewer_style, "classic");
+        assert!(AppPersistentState::default().cinema_drift);
+        let old: AppPersistentState = serde_json::from_str("{}").expect("old state");
+        assert_eq!(old.viewer_style, "classic");
+        assert!(old.cinema_drift);
+        for value in VIEWER_STYLES {
+            assert_eq!(viewer_style_from(&serde_json::json!(value)).as_deref(), Some(value));
+        }
+        for value in [serde_json::json!("neon"), serde_json::json!(""), serde_json::json!(1), serde_json::Value::Null] {
+            assert_eq!(viewer_style_from(&value), None, "{value}");
+        }
+    }
+
     #[test]
     fn camera_strip_defaults_to_all_and_accepts_only_known_values() {
         assert_eq!(AppPersistentState::default().camera_strip, "all");
@@ -956,6 +1141,9 @@ pub mod tests {
             remote_view_cache_bytes: 512 * 1024 * 1024,
             dataset_grouping: "day".into(),
             camera_strip: "agent".into(),
+            viewer_style: "cinema".into(),
+            cinema_drift: false,
+            welcome_card_dismissed: true,
         };
 
         let json = serde_json::to_string(&state).expect("serialize");
@@ -1416,5 +1604,79 @@ pub mod tests {
         let serialized = serde_json::to_string(&layout).unwrap();
         let deserialized: LayoutSizes = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized, layout);
+    }
+
+    #[test]
+    fn test_welcome_card_dismissed_persistence() {
+        assert!(!AppPersistentState::default().welcome_card_dismissed);
+        let old: AppPersistentState = serde_json::from_str("{}").expect("old state");
+        assert!(!old.welcome_card_dismissed, "missing field falls back to false");
+
+        let dismissed: AppPersistentState =
+            serde_json::from_str(r#"{"welcome_card_dismissed": true}"#).expect("parse dismissed");
+        assert!(dismissed.welcome_card_dismissed);
+
+        let json = serde_json::to_string(&dismissed).expect("serialize");
+        let round_trip: AppPersistentState = serde_json::from_str(&json).expect("deserialize");
+        assert!(round_trip.welcome_card_dismissed);
+    }
+
+    #[test]
+    fn test_viewer_scope_patch_allows_ui_prefs_and_rejects_privileged_keys() {
+        let mut s = AppPersistentState::default();
+        apply_state_patch(
+            &mut s,
+            &serde_json::json!({
+                "camera_strip": "agent",
+                "viewer_style": "studio",
+                "cinema_drift": false,
+                "dataset_grouping": "day",
+                "scene_id": "scene_001",
+                "sample_index": 12,
+                "loop": false,
+            }),
+            StatePatchScope::ViewerOnly,
+        )
+        .expect("viewer prefs should apply");
+        assert_eq!(s.camera_strip, "agent");
+        assert_eq!(s.viewer_style, "studio");
+        assert!(!s.cinema_drift);
+        assert_eq!(s.dataset_grouping, "day");
+        assert_eq!(s.last_scene_id.as_deref(), Some("scene_001"));
+        assert_eq!(s.last_sample_index, Some(12));
+        assert_eq!(s.last_loop, Some(false));
+
+        for forbidden in [
+            serde_json::json!({ "reopen_last_session": false }),
+            serde_json::json!({ "library_root": "/tmp/evil" }),
+            serde_json::json!({ "last_data_root": "/tmp/evil" }),
+            serde_json::json!({ "auto_next_scene": true }),
+            serde_json::json!({ "open_first_ready_scene": false }),
+        ] {
+            assert!(
+                apply_state_patch(&mut s, &forbidden, StatePatchScope::ViewerOnly).is_err(),
+                "viewer scope must reject {forbidden}"
+            );
+        }
+
+        // Full scope applies main-window settings cleanly.
+        apply_state_patch(
+            &mut s,
+            &serde_json::json!({ "reopen_last_session": false, "auto_next_scene": true }),
+            StatePatchScope::Full,
+        )
+        .expect("full scope should apply");
+        assert!(!s.reopen_last_session);
+        assert!(s.auto_next_scene);
+    }
+
+    #[test]
+    fn recent_roots_changed_skips_identical_order() {
+        let initial = vec!["/data/scene_a".to_string(), "/data/scene_b".to_string()];
+        assert!(!super::recent_roots_changed(&initial, &initial));
+
+        let reordered = vec!["/data/scene_b".to_string(), "/data/scene_a".to_string()];
+        assert!(super::recent_roots_changed(&initial, &reordered));
+        assert!(super::recent_roots_changed(&[], &initial));
     }
 }

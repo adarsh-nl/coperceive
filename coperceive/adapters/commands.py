@@ -24,9 +24,16 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     listing.set_defaults(func=list_command)
 
     check = commands.add_parser(
-        "check", help="Validate a manifest against a raw tree. Writes nothing."
+        "check", help="Validate a manifest or generic dataset against a raw tree. Writes nothing."
     )
-    _common(check)
+    check.add_argument(
+        "adapter", nargs="?", help="A built-in name, installed adapter, or manifest file."
+    )
+    check.add_argument("--raw-root", default=None, help="The extracted dataset directory.")
+    check.add_argument("--param", action="append", default=[], metavar="NAME=VALUE")
+    check.add_argument("--scenes", default=None)
+    check.add_argument("--format", choices=("generic",), default=None)
+    check.add_argument("directory", nargs="?", default=None, help="Generic dataset directory.")
     check.set_defaults(func=check_command)
 
     run = commands.add_parser("ingest", help="Write schema 1 scenes from a raw dataset tree.")
@@ -67,6 +74,29 @@ def list_command(_args: argparse.Namespace) -> None:
 
 
 def check_command(args: argparse.Namespace) -> None:
+    if args.format == "generic" or (args.adapter and (Path(args.adapter) / "scene.yaml").is_file()):
+        from coperceive.adapters.generic import GenericAdapter, GenericError
+
+        target = args.directory or args.raw_root or args.adapter
+        if target is None:
+            print("give a directory containing scene.yaml", file=sys.stderr)
+            raise SystemExit(2)
+        try:
+            report = GenericAdapter().check(Path(target), {})
+        except GenericError as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(1) from None
+        for warning in report.warnings:
+            print(f"warning: {warning}", file=sys.stderr)
+        if report.errors:
+            for error in report.errors:
+                print(error, file=sys.stderr)
+            raise SystemExit(1)
+        print(f"generic {target} ok scenes {report.scenes}")
+        return
+    if args.adapter is None or args.raw_root is None:
+        print("adapter and --raw-root are required unless --format generic", file=sys.stderr)
+        raise SystemExit(2)
     try:
         adapter = resolve_adapter(args.adapter)
         report = adapter.check(

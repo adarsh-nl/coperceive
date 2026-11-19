@@ -170,7 +170,7 @@ coperceive maps align --maps /path/maps --scenes /path/scenes
 
 ## Staging the val scenes for the viewer
 
-`scripts/griffin/stage_viewer.py` makes the 10 Griffin-25m `val` scenes viewable with lidar points, camera images and the CARLA town maps on a compute node, without copying the dataset. It writes only under `--scratch` (`/local/$SLURM_JOB_ID/coperceive-viewer` by default) and refuses a scratch under `/home`.
+`scripts/griffin/stage_viewer.py` makes the 10 Griffin-25m `val` scenes viewable with lidar points, camera images and the CARLA town maps on a compute node, without copying the dataset. It writes only under `--scratch`, or under the server profile's scratch template (`--scratch-template` / `COPERCEIVE_SLURM_SCRATCH_TEMPLATE`, for example `/scratch/$USER/$SLURM_JOB_ID`), and refuses a scratch under `/home`.
 
 | Staged | How | Size for the 10 val scenes |
 | --- | --- | --- |
@@ -187,11 +187,11 @@ On the cluster, in an `srun` session (2 CPUs and 8 GB are enough; nothing runs o
 
 ```bash
 srun --partition=main --cpus-per-task=2 --mem=8G --time=2:00:00 --pty bash
-hostname                                  # the node for the tunnel (HANDOVER.md, "Viewing from a laptop")
+hostname                                  # the node for the tunnel: ssh -L <port>:<node>:<port> <login-host>
 module load python/3.13.14
 export PYTHONPATH=$HOME/coperceive-adr0010
 $HOME/coperceive-adr0010/.venv/bin/python $HOME/coperceive-adr0010/scripts/griffin/stage_viewer.py \
-    --raw /datasets/eemcs/ps/cv/huggingface/griffin/datasets/griffin_50scenes_25m/griffin_50scenes_25m/griffin-release \
+    --raw /data/huggingface/griffin/datasets/griffin_50scenes_25m/griffin_50scenes_25m/griffin-release \
     --split $HOME/src/griffin/data/split_datas/griffin_50scenes_25m.json \
     --xodr-dir $HOME/maps-src/carla-0.9.15 \
     --predictions $HOME/results/627093/predictions \

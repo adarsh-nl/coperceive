@@ -18,6 +18,7 @@ REQUIRED_STEP_MARKERS: list[str] = [
     "Step 1 verified state.json content:",
     "Step 1b verified: Still exported successfully and non-empty PNG asserted.",
     "Step 1c verified: BEV figure exported successfully and non-empty PNG asserted.",
+    "Step 1d verified: Paper export wrote a non-empty zip and said Ready for Overleaf.",
     "Playback requirement (c) verified",
     "Step 2 verified: All restored values from DOM and scene-graph counts match perfectly.",
     "Step 2b verified: loop stayed off across quit and relaunch.",
@@ -39,7 +40,15 @@ REQUIRED_STEP_MARKERS: list[str] = [
         " old root empty, and updated state.json."
     ),
     "Step 5g verified: Library badge ran in the background and its answer is cached.",
+    "Step 5j verified: Export repro card showed missing fields and saved the card.",
     "Real-App macOS E2E Test PASSED",
+]
+
+# Markers for desktop flows that are not part of the viewer e2e_mac.sh log.
+# `verify_e2e_log` stays limited to REQUIRED_STEP_MARKERS so the viewer log
+# does not fail when a later HPC flow adds a marker.
+LAB_PROFILE_MARKERS: list[str] = [
+    "E2E_SHARE_MARK:",
 ]
 
 # Patterns for lines to surface as GitHub Actions notices
@@ -87,6 +96,12 @@ def verify_e2e_log(log_text: str) -> list[str]:
             missing.append(marker)
 
     return missing
+
+
+def verify_lab_profile_log(log_text: str) -> list[str]:
+    """Return lab-profile markers missing from an HPC e2e log."""
+    clean = strip_ansi(log_text)
+    return [marker for marker in LAB_PROFILE_MARKERS if marker not in clean]
 
 
 def main() -> int:

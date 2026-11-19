@@ -38,6 +38,7 @@ import { SettingRow } from "../SettingRow";
 import { datasetJobs, publishDatasetJobs, setViewerOpen, subscribeDatasetJobs } from "../jobsStore";
 import { getPersistentState } from "../local";
 import { isJobActive } from "../runPlan";
+import { getModifierKey } from "../platform";
 import { errorDetails, errorText } from "../errors";
 import {
   STATE_LABEL,
@@ -516,6 +517,20 @@ export default function DatasetView({
         rawRoot: dataset.raw_root || dataset.path,
         split: dataset.split,
       });
+      if (indexDoc && !initialStatuses) {
+        await shareDatasetScenesWithViewer(
+          indexDoc.scenes.map((scene) => ({
+            scene_id: scene.scene_id,
+            state: statuses.get(scene.scene_id)?.state ?? "not_prepared",
+          })),
+          {
+            label: [(indexDoc.adapter || dataset.adapter || "dataset").toUpperCase(), indexDoc.split ?? dataset.split ?? ""]
+              .filter(Boolean)
+              .join(" "),
+            server: profile.profile.name,
+          },
+        ).catch(() => undefined);
+      }
       setViewerOpen(true, datasetKey);
     } catch (err) {
       setOpenError(errorDetails(err) || errorText(err));
@@ -1372,7 +1387,7 @@ export default function DatasetView({
               <kbd>/</kbd> filter
             </span>
             <span>
-              <kbd>⌘\</kbd> sidebar
+              <kbd>{getModifierKey()}\</kbd> sidebar
             </span>
           </span>
           <span className="dv-footer-state" role="status">

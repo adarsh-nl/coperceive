@@ -271,7 +271,7 @@ SEED_FIXTURES_EVAL = """
         ssh_alias: "daic-gpu",
         host: "hpc.example.org",
         user: "alice",
-        data_roots: ["/datasets/eemcs/ps/cv/opencood/v2xset", "/datasets/eemcs/ps/cv/opv2v"],
+        data_roots: ["/data/opencood/v2xset", "/data/opv2v"],
         scratch_template: "/scratch/$USER/coperceive",
         results_root: "/home/alice/results",
         code_roots: ["/home/alice/code/opencood"],
@@ -761,7 +761,7 @@ def test_visual_revamp_screens_and_traffic_lights_no_overlap(
                         page.wait_for_selector("text=Scene · start time", timeout=5000)
                         page.wait_for_timeout(200)
                     elif screen == "settings":
-                        page.locator("button[aria-label='Settings (⌘,)']").click()
+                        page.locator("button[aria-label^='Settings (']").click()
                         page.wait_for_selector(
                             "div[role=dialog][aria-label='Settings']", timeout=5000
                         )

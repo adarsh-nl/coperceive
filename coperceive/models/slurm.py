@@ -34,6 +34,7 @@ from coperceive.model import Scene
 from coperceive.models.batch import RunOptions, select_agents
 from coperceive.models.inputs import raw_files, selected_sensors
 from coperceive.models.spec import Manifest, ModelSpec
+from coperceive.repro.environment import environment_capture_lines
 from coperceive.viewdata import pose_times
 
 IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg"})
@@ -106,6 +107,23 @@ def validate_scratch_template(template: str) -> str:
 
 class SlurmError(CoperceiveError):
     """The job could not be planned or submitted."""
+
+
+def validate_logs_dir(logs_dir: Path) -> Path:
+    """Check the ``--slurm-logs`` folder before it becomes ``#SBATCH --output=``/``--error=``.
+
+    Slurm reads an ``#SBATCH`` value up to the first blank, so a folder with a space, a tab
+    or a line break would send the job's logs to another path (or break the script). It is
+    refused with the reason instead of being quoted, which ``#SBATCH`` lines do not honour.
+    """
+    text = str(logs_dir.resolve())
+    if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 0x7F for ch in text):
+        raise SlurmError(
+            f"The Slurm log folder {text!r} (--slurm-logs) contains a space or a control "
+            "character; #SBATCH --output/--error cannot hold one. Choose a log folder whose "
+            "path has no spaces."
+        )
+    return logs_dir
 
 
 def interpreter_module(python: Path) -> str | None:
@@ -307,6 +325,7 @@ def plan_sbatch(
 ) -> SlurmPlan:
     """The sbatch of ADR 0011 decision 5 for ``coperceive model run`` over ``scenes``."""
     scratch_template = validate_scratch_template(scratch_template)
+    validate_logs_dir(logs_dir)
     samples = sum(len(pose_times(scene)) for scene in scenes.values())
     closure = model_closure(manifest, spec, options)
     scene_set: set[str] = set()
@@ -395,6 +414,7 @@ def plan_sbatch(
             "",
             "set -euo pipefail",
             f'SCRATCH="{scratch_template}"',
+            f"RUN_ID={shlex.quote(run_id)}",
             'mkdir -p "$SCRATCH"',
             "trap 'rm -rf \"$SCRATCH\"' EXIT",
             'export TMPDIR="$SCRATCH/tmp"',
@@ -439,13 +459,19 @@ def plan_sbatch(
             "set -e",
             'echo "model run exit $RC"',
             "",
+            'mkdir -p "$SCRATCH/out/$RUN_ID"',
+            *environment_capture_lines(
+                '"$SCRATCH/out/$RUN_ID/environment.json"',
+                python=shlex.quote(str(python)),
+            ),
+            "",
             f'mkdir -p {shlex.quote(str(results))}/"$SLURM_JOB_ID"',
             f'rsync -a "$SCRATCH/out/" {shlex.quote(str(results))}/"$SLURM_JOB_ID"/',
             "# The work directory's logs and artefacts, not its inputs or any toolkit copy.",
             "rsync -a " + " ".join(work_copy_filter(transient)) + " "
             f'"$SCRATCH/work/" {shlex.quote(str(results))}/"$SLURM_JOB_ID"/work/',
             f"mkdir -p {shlex.quote(str(target))}",
-            f'rsync -a "$SCRATCH/out/{run_id}/" {shlex.quote(str(target))}/',
+            f'rsync -a "$SCRATCH/out/$RUN_ID/" {shlex.quote(str(target))}/',
             *[
                 line
                 for member in closure
@@ -456,7 +482,8 @@ def plan_sbatch(
                     f"{shlex.quote(str(out_root.resolve() / f'{run_id}-{member.key}'))}/",
                 )
             ],
-            f'echo "done: {shlex.quote(str(target))} (exit $RC)"',
+            # The path is its own shell word: a quoted word inside "..." would not be.
+            f'echo "done:" {shlex.quote(str(target))} "(exit $RC)"',
             'exit "$RC"',
             "",
         ]
@@ -538,6 +565,8 @@ def _run_command(
         argv.append("--hash-inputs")
     if options.force:
         argv.append("--force")
+    if options.perturbation is not None:
+        argv.extend(["--perturb", shlex.quote(options.perturbation.canonical())])
     return argv
 
 
@@ -587,5 +616,6 @@ __all__ = [
     "staged_files",
     "submit",
     "time_limit",
+    "validate_logs_dir",
     "write_plan",
 ]

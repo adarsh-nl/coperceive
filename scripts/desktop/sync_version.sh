@@ -23,12 +23,12 @@ else
     elif [ "${COUNT}" -eq 1 ]; then
         VERSION="${TAGS#v}"
     elif [ -f "pyproject.toml" ]; then
-        VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])" 2>/dev/null || echo "0.1.0")
+        VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])" 2>/dev/null || echo "0.1.1")
     fi
 fi
 
 if [ -z "${VERSION}" ] || [ "${VERSION}" = "0.0.0" ]; then
-    VERSION="0.1.0"
+    VERSION="0.1.1"
 fi
 if ! [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
     echo "sync_version: '${VERSION}' is not a release version (MAJOR.MINOR.PATCH)" >&2

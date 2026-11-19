@@ -27,6 +27,23 @@ fi
 export PATH="${HOME}/.cargo/bin:${PATH}"
 
 # Parse stdin from git push: <local_ref> <local_oid> <remote_ref> <remote_oid>
+# The merge-base with whichever integration branch the commit is closest to:
+# the candidate with the fewest commits between its merge-base and the commit.
+closest_merge_base() {
+    local oid="$1" best="" best_count="" ref mb count
+    for ref in $(git for-each-ref --format='%(refname)' \
+            refs/remotes/origin/release/ refs/remotes/origin/main refs/remotes/origin/feat/m2-import 2>/dev/null); do
+        mb="$(git merge-base "${oid}" "${ref}" 2>/dev/null || true)"
+        [ -z "${mb}" ] && continue
+        count="$(git rev-list --count "${mb}..${oid}" 2>/dev/null || echo "")"
+        [ -z "${count}" ] && continue
+        if [ -z "${best_count}" ] || [ "${count}" -lt "${best_count}" ]; then
+            best="${mb}"; best_count="${count}"
+        fi
+    done
+    printf '%s' "${best}"
+}
+
 CHANGED_FILES=""
 STDIN_DATA=""
 if [ ! -t 0 ]; then
@@ -41,18 +58,13 @@ if [ -n "${STDIN_DATA}" ]; then
             continue
         fi
         if [ "${remote_oid}" = "0000000000000000000000000000000000000000" ]; then
-            # New branch push: compare against merge-base with upstream integration branch
-            BASE_REF="origin/feat/m2-import"
-            if ! git rev-parse --verify "${BASE_REF}" >/dev/null 2>&1; then
-                BASE_REF="origin/main"
-            fi
-            if git rev-parse --verify "${BASE_REF}" >/dev/null 2>&1; then
-                MERGE_BASE="$(git merge-base "${local_oid}" "${BASE_REF}" 2>/dev/null || true)"
-                if [ -n "${MERGE_BASE}" ]; then
+            # New branch push: compare against the closest integration branch
+            # (release/*, main or feat/m2-import), i.e. the one the branch has
+            # the fewest commits on top of. Comparing against a fixed branch
+            # treats every file of a newer release branch as "changed".
+            MERGE_BASE="$(closest_merge_base "${local_oid}")"
+            if [ -n "${MERGE_BASE}" ]; then
                     DIFF_FILES="$(git diff --name-only "${MERGE_BASE}" "${local_oid}" 2>/dev/null || true)"
-                else
-                    DIFF_FILES="$(git diff --name-only "${local_oid}~1" "${local_oid}" 2>/dev/null || true)"
-                fi
             else
                 DIFF_FILES="$(git diff --name-only "${local_oid}~1" "${local_oid}" 2>/dev/null || true)"
             fi
@@ -69,7 +81,12 @@ if [ -z "${CHANGED_FILES//[[:space:]]/}" ]; then
     if [ -n "${UPSTREAM}" ]; then
         CHANGED_FILES="$(git diff --name-only "${UPSTREAM}"...HEAD 2>/dev/null || true)"
     else
-        CHANGED_FILES="$(git diff --name-only origin/feat/m2-import...HEAD 2>/dev/null || git diff --name-only origin/main...HEAD 2>/dev/null || git diff --name-only HEAD~1..HEAD 2>/dev/null || true)"
+        MERGE_BASE="$(closest_merge_base HEAD)"
+        if [ -n "${MERGE_BASE}" ]; then
+            CHANGED_FILES="$(git diff --name-only "${MERGE_BASE}" HEAD 2>/dev/null || true)"
+        else
+            CHANGED_FILES="$(git diff --name-only HEAD~1..HEAD 2>/dev/null || true)"
+        fi
     fi
 fi
 

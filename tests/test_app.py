@@ -957,3 +957,34 @@ def test_cors_foreign_origin_rejected(tmp_path: Path) -> None:
         },
     )
     assert resp_get.headers.get("access-control-allow-origin") is None
+
+
+def test_paper_export_route_writes_a_zip_and_keeps_csrf(tmp_path: Path) -> None:
+    import json
+    import zipfile
+
+    scene = cooperative_scene()
+    stamp_scene(scene, tmp_path / scene.scene_id)
+    client = TestClient(create_app(root=tmp_path, token="secret"))
+    headers = {"Authorization": "Bearer secret", "X-Coperceive-Request": "1"}
+    denied = client.post(
+        f"/api/scenes/{scene.scene_id}/export/paper",
+        headers={"Authorization": "Bearer secret"},
+        json={"decimals": 3},
+    )
+    assert denied.status_code == 403
+    created = client.post(
+        f"/api/scenes/{scene.scene_id}/export/paper",
+        headers=headers,
+        json={"decimals": 3, "qualitative": False, "metrics": ["precision", "recall", "ap"]},
+    )
+    assert created.status_code == 200, created.text
+    body = created.json()
+    assert body["path"].endswith("-paper.zip")
+    assert body["repro_card_ids"] == []
+    archive_path = tmp_path / body["path"]
+    with zipfile.ZipFile(archive_path) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    assert manifest["format"] == "coperceive-paper-export"
+    assert manifest["repro_card_ids"] == []
+    assert "No repro card was provided, so the manifest lists no card ids." in manifest["notes"]

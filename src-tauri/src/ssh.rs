@@ -7,7 +7,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -113,15 +113,29 @@ pub fn standard_ssh_args(target: &SshTarget) -> Vec<String> {
     let mut args = vec![
         "-o".to_string(),
         "BatchMode=yes".to_string(),
-        "-o".to_string(),
-        "ControlMaster=auto".to_string(),
-        "-o".to_string(),
-        "ControlPath=~/.coperceive/ssh-%C".to_string(),
-        "-o".to_string(),
-        "ControlPersist=10m".to_string(),
+    ];
+    #[cfg(not(target_os = "windows"))]
+    {
+        args.extend([
+            "-o".to_string(),
+            "ControlMaster=auto".to_string(),
+            "-o".to_string(),
+            "ControlPath=~/.coperceive/ssh-%C".to_string(),
+            "-o".to_string(),
+            "ControlPersist=10m".to_string(),
+        ]);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        args.extend([
+            "-o".to_string(),
+            "ControlMaster=no".to_string(),
+        ]);
+    }
+    args.extend([
         "-o".to_string(),
         "ConnectTimeout=8".to_string(),
-    ];
+    ]);
     if let Some(port) = target.port {
         args.push("-p".to_string());
         args.push(port.to_string());
@@ -241,7 +255,7 @@ pub fn run_local_command(
     stdin: Option<&str>,
 ) -> std::io::Result<CommandResult> {
     ensure_control_dir();
-    let mut child = Command::new(bin)
+    let mut child = crate::platform::create_command(bin)
         .args(args)
         .stdin(if stdin.is_some() {
             Stdio::piped()
@@ -395,25 +409,15 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_run_local_command_returns_timed_out_error() {
-        let dir = std::env::temp_dir().join(format!("ssh-timeout-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let script = dir.join("slow.sh");
-        std::fs::write(&script, "#!/bin/bash\nsleep 30\n").expect("write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
-                .expect("chmod");
-        }
         let err = run_local_command(
-            script.to_str().unwrap(),
-            &[],
+            "sleep",
+            &["30".to_string()],
             Duration::from_millis(150),
             None,
         )
         .expect_err("must time out");
         assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

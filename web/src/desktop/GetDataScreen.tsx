@@ -6,6 +6,9 @@ import { dryRunFailureText } from "./dryRun";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import {
   datasetDryRun,
+  ensureDemoScene,
+  cancelDemoScene,
+  onDemoProgress,
   startDatasetJob,
   cancelDatasetJob,
   pauseDatasetJob,
@@ -17,6 +20,7 @@ import {
   getStorageInfo,
 } from "./local";
 import { errorText } from "./errors";
+import { DEMO_APPROX_SIZE_LABEL, formatDemoSize, runDemoOpenFlow } from "./demoMeta";
 import {
   GridTable,
   InspectorSection,
@@ -39,6 +43,8 @@ interface Props {
   onOpenImportFolder?: (folderPath?: string) => void;
   /** "Free up space" goes to the Library, where scenes can be removed. */
   onOpenLibrary?: () => void;
+  initialDatasetId?: string;
+  initialPresetId?: string;
 }
 
 const datasetKey = (ds: CatalogDataset) => ds.id;
@@ -95,9 +101,19 @@ function DiskFit({ need, free }: { need: number; free: number }) {
   );
 }
 
-export default function GetDataScreen({ onOpenScene, onOpenImportFolder, onOpenLibrary }: Props) {
+export default function GetDataScreen({
+  onOpenScene,
+  onOpenImportFolder,
+  onOpenLibrary,
+  initialDatasetId,
+  initialPresetId,
+}: Props) {
   const [clusterJobs, setClusterJobs] = useState<readonly DatasetJobs[]>(() => datasetJobs());
   useEffect(() => subscribeDatasetJobs(() => setClusterJobs(datasetJobs())), []);
+  const [generatingDemo, setGeneratingDemo] = useState(false);
+  const [demoElapsedSec, setDemoElapsedSec] = useState(0);
+  const [demoStage, setDemoStage] = useState<string>("");
+  const [demoError, setDemoError] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<CatalogDataset[]>([]);
   const [catalogLoading, setCatalogLoading] = useState<boolean>(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -230,6 +246,49 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder, onOpenL
       unlisten?.();
     };
   }, [jobError, onOpenScene]);
+
+  const [measuredDemoBytes, setMeasuredDemoBytes] = useState<number | null>(null);
+
+  const handleOpenDemo = async () => {
+    setDemoElapsedSec(0);
+    setDemoStage("Starting bundled Python generator…");
+    setDemoError(null);
+    try {
+      const outcome = await runDemoOpenFlow({
+        ensureDemo: ensureDemoScene,
+        subscribeProgress: onDemoProgress,
+        onGeneratingStart: () => setGeneratingDemo(true),
+        onGeneratingEnd: () => setGeneratingDemo(false),
+        onProgress: (stage, elapsed) => {
+          if (stage) setDemoStage(stage);
+          setDemoElapsedSec(elapsed);
+        },
+        onDemoBytes: (bytes) => setMeasuredDemoBytes(bytes),
+      });
+      onOpenScene(outcome.path);
+    } catch (err) {
+      setGeneratingDemo(false);
+      const msg = errorText(err);
+      if (!msg.toLowerCase().includes("cancelled")) {
+        setDemoError(msg);
+      }
+    }
+  };
+
+  const handleCancelDemo = async () => {
+    await cancelDemoScene();
+    setGeneratingDemo(false);
+  };
+
+  useEffect(() => {
+    if (initialDatasetId && catalog.length > 0) {
+      const ds = catalog.find((row) => row.id === initialDatasetId);
+      if (ds) {
+        setInspectId(ds.id);
+        void handleSelectPreset(ds, initialPresetId || "dev");
+      }
+    }
+  }, [initialDatasetId, initialPresetId, catalog]);
 
   const handleSelectPreset = async (ds: CatalogDataset, presetId: string) => {
     setSelectedDataset(ds);
@@ -572,6 +631,57 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder, onOpenL
               rowHeight={52}
               rowClassName={(ds) => (ds.status === "planned" ? "is-muted" : undefined)}
             />
+            <div
+              className="c-demo-card"
+              role="region"
+              aria-label="Offline demo"
+              style={{
+                margin: "12px 24px 0",
+                padding: "14px 18px",
+                background: "var(--sunken)",
+                borderRadius: "8px",
+                border: "1px solid var(--line)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "16px",
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 600, fontSize: "13px", color: "var(--text)" }}>
+                  Offline demo scene
+                </div>
+                <div style={{ fontSize: "12px", color: "var(--text-subtle)", marginTop: "2px" }}>
+                  {generatingDemo
+                    ? `${demoStage || "Generating demo scene…"} · ${demoElapsedSec}s elapsed · This can take up to 2 minutes on older Macs.`
+                    : `Deterministic synthetic cooperative scene with 3 agents (LiDAR & cameras) and simulated predictions (${measuredDemoBytes ? formatDemoSize(measuredDemoBytes) : DEMO_APPROX_SIZE_LABEL} demo cache in app data).`}
+                </div>
+                {demoError && (
+                  <div style={{ fontSize: "11.5px", color: "var(--danger)", marginTop: "4px" }}>
+                    Failed to generate demo scene: {demoError}
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center", flexShrink: 0 }}>
+                {generatingDemo && (
+                  <button
+                    type="button"
+                    className="c-secondary"
+                    onClick={() => void handleCancelDemo()}
+                  >
+                    Cancel
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="c-primary"
+                  disabled={generatingDemo}
+                  onClick={() => void handleOpenDemo()}
+                >
+                  {generatingDemo ? `Generating… ${demoElapsedSec}s` : "Open the demo"}
+                </button>
+              </div>
+            </div>
             <p className="c-page-note">
               {libraryRoot ? `Downloads go to ${libraryRoot}. ` : ""}
               Datasets without a recorded licence can only be imported from a copy you already have — the app never

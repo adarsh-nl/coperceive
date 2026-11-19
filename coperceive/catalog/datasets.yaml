@@ -88,6 +88,22 @@ datasets:
   # links the paper https://arxiv.org/abs/2303.07601 and does not state a data licence.
   # https://raw.githubusercontent.com/ucla-mobility/V2V4Real/main/LICENSE
   # is an Academic Software License for the code, not a data grant.
+  # DAIR-V2X-C raw data needs an application on the AIR/Tsinghua site; the
+  # cluster copy has only CoAlign complemented annotations checked 2026-11-05.
+  - id: "dair-v2x-c"
+    name: "DAIR-V2X-C"
+    description: "Vehicle–infrastructure cooperative 3D detection (real world)."
+    modalities:
+      - "LiDAR"
+      - "Camera"
+    agents: "vehicle + infrastructure"
+    licence: "unknown"
+    source_url: "https://github.com/yujmo/DAIR-V2X"
+    paper_url: "https://arxiv.org/abs/2205.08540"
+    status: "local-import"
+    requires_terms: false
+    notice: "Bring an extracted DAIR-V2X-C cooperative copy. No data licence is stated in the repository README checked on 2026-11-05; the cluster copy currently has only complemented annotations."
+
   - id: "v2v4real"
     name: "V2V4Real"
     description: "Real-world vehicle-to-vehicle perception recordings."
@@ -98,6 +114,6 @@ datasets:
     licence: "unknown"
     source_url: "https://github.com/ucla-mobility/V2V4Real"
     paper_url: "https://arxiv.org/abs/2303.07601"
-    status: "planned"
+    status: "local-import"
     requires_terms: false
-    notice: "Not available yet. The data licence was not stated in the repository README checked on 2026-10-24."
+    notice: "The adapter accepts an extracted OpenCOOD-style V2V4Real tree. The data licence was not stated in the repository README checked on 2026-10-24."

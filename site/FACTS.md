@@ -13,7 +13,7 @@ Checked against `main` at `0ee039d` on 2026-10-27.
 
 | Claim on the page | Source |
 | --- | --- |
-| The Mac app is coming soon. / coperceive for Mac is coming soon — same scenes, no terminal. | `docs/adr/0014-desktop-app.md` specifies a desktop app (Tauri, macOS first). `README.md` says this tree does not build a desktop shell. No date. |
+| The Mac app is coming soon. / Download for Mac / Windows / Linux (`DownloadPanel.tsx`) | Hero pill from the original design; `#install` uses `site/src/download/DownloadPanel.tsx` to offer the visitor's platform installer from the latest GitHub Release (`https://api.github.com/repos/adarsh-nl/coperceive/releases/latest`). |
 | Many agents. One scene. | Headline. The scene model holds N agents in one scene (`coperceive/model.py` `Scene.agents`). |
 | Every car, drone and roadside unit in one world frame, on one clock. | `AgentType` is vehicle, uav, infrastructure, other (`coperceive/model.py`); one `world_frame` and one `Clock` per scene (`docs/spec/format.md`). |
 | One car sees what's in front of it. … stays a grey outline. | Describes the simulation (captions 1–3 narrate the story canvas). |
@@ -26,7 +26,7 @@ Checked against `main` at `0ee039d` on 2026-10-27.
 | 03 view — Every agent in 3D. Lidar, camera strips and HD-map lanes. Orbit, bird's-eye, chase, drone and camera views. `serve --root ./scenes` | `HANDOVER.md` (State); `docs/design/viewer-features.md`. |
 | 04 evaluate — Score in the world frame. Match predictions per agent, put precision and recall on the timeline, overlay a second run. `eval compare v1 v2` | `docs/adr/0010-eval-predictions.md` line 9; `README.md` (`eval compare`). |
 | Three commands to your first scene. (`pip install -e ".[app,griffin]"`, `coperceive convert griffin --subset 25m --raw-root ./griffin-release --out ./scenes`, `coperceive serve --root ./scenes`, `→ http://127.0.0.1:8731`) | `README.md` install and quick start; default port 8731 in `coperceive/cli.py`. The `convert` line matches `coperceive convert griffin --help` on `feat/m2-import` at `75640be` (`--subset`, `--raw-root` and `--out` are required); `./griffin-release` is the extracted release directory, as in `README.md`. |
-| Python 3.10–3.13. Apache-2.0. Local by default — nothing leaves your machine. | `README.md` ("Python 3.10–3.13"); `pyproject.toml` `license = "Apache-2.0"`; the server binds loopback unless `--token` is set (`HANDOVER.md`, Phase 5 choices). |
+| Python 3.11–3.13. Apache-2.0. Local by default — nothing leaves your machine. | `README.md` ("Python 3.11 to 3.13"); `pyproject.toml` `requires-python = ">=3.11"`, `license = "Apache-2.0"`; the server binds loopback unless `--token` is set (`HANDOVER.md`, Phase 5 choices). |
 | Score every detection where it happened. Predictions match the agent's own ground truth in the world frame by BEV IoU. | `docs/adr/0010-eval-predictions.md`; BEV IoU at 0.5 and 0.7 (`README.md`). The canvas beneath is a simulation (above). |
 | Read the docs / View on GitHub / GitHub | Links to `https://github.com/adarsh-nl/coperceive/tree/main/docs` and `https://github.com/adarsh-nl/coperceive`. The design left them as `#`. |
 | multi-agent perception data | Footer tagline from the design. |

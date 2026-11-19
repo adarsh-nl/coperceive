@@ -33,6 +33,26 @@ export interface PipelineSpec {
   description: string;
 }
 
+/** One model of an installed plugin, as `coperceive model list --json` reports it. */
+export interface BuiltinModel {
+  gpu: boolean;
+  /** The `--option` keys the model's manifest declares. */
+  options: string[];
+  cpus?: number | null;
+  memory_gb?: number | null;
+  transient_artifacts?: string[];
+  depends_on?: string[];
+}
+
+/** An installed plugin from the cluster's `coperceive model list --json`. */
+export interface BuiltinPlugin {
+  name: string;
+  manifest: string | null;
+  error: string | null;
+  modules: string[];
+  models: Record<string, BuiltinModel>;
+}
+
 export interface PipelineEntry {
   id: string;
   name: string;
@@ -41,6 +61,9 @@ export interface PipelineEntry {
   spec: PipelineSpec;
   registration_path: string | null;
   plugin_manifest: string | null;
+  /** The cluster's listing of a built-in plugin; absent for a custom pipeline or a
+   * cluster whose coperceive is too old to list its models. */
+  builtin?: BuiltinPlugin | null;
 }
 
 export interface RunPlanRequest {
@@ -52,6 +75,9 @@ export interface RunPlanRequest {
   values: Record<string, unknown>;
   checkpoint: string;
   split: string;
+  model: string;
+  raw_root: string;
+  media_root: string;
   environment_override: EnvironmentSetup | null;
 }
 
@@ -60,6 +86,10 @@ export interface PlanArtifact {
   sha256: string | null;
   kind: string;
   real_path: string | null;
+  /** A folder's fingerprint: the sha256 of its file listing (path and size of every file). */
+  listing_sha256?: string | null;
+  /** How many files that listing holds. */
+  file_count?: number | null;
 }
 
 export interface PlanCheck {
@@ -91,10 +121,19 @@ export interface RunPlan {
   environment_note: string;
   checkpoint: PlanArtifact;
   split: PlanArtifact;
+  model: string;
+  raw_root: PlanArtifact;
+  media_root: PlanArtifact;
+  work_dir: string;
+  staging_seconds: number | null;
   output_dir: string;
   scratch_dir: string;
   /** Model-evaluation GPU default, e.g. gpu:lovelace:1; null for CPU-only. */
   gres?: string | null;
+  /** A built-in run's --time as `coperceive model run --slurm` estimates it. */
+  time_estimate?: string | null;
+  /** The profile partition's discovered time limit; null when none was found. */
+  partition_max_time?: string | null;
   checks: PlanCheck[];
   contract_check_script: string;
   nothing_submitted: boolean;
@@ -187,11 +226,56 @@ export function validateArgumentForm(spec: PipelineSpec, form: ArgumentForm): st
   return errors;
 }
 
-/** Every check passed, so the plan can be saved. */
+/**
+ * Whether the plan needs a checkpoint path. A built-in model takes one only when its
+ * manifest declares a `checkpoint` option (Griffin's models pin their own weights, and
+ * the cluster refuses a checkpoint for them). A model the listing does not know, or a
+ * cluster too old to list its models, gets no field: checking the plan names the reason.
+ * A custom pipeline takes one when its registration has a checkpoint-role argument.
+ */
+export function pipelineNeedsCheckpoint(entry: PipelineEntry | null, model: string): boolean {
+  if (!entry) return false;
+  if (entry.source === "builtin") {
+    return entry.builtin?.models[model.trim()]?.options.includes("checkpoint") ?? false;
+  }
+  return entry.spec.arguments.some((argument) => argument.role === "checkpoint");
+}
+
+/** A built-in model always runs over its scenes; a custom pipeline when it declares one. */
+export function pipelineNeedsSplit(entry: PipelineEntry | null): boolean {
+  if (!entry) return false;
+  if (entry.source === "builtin") return true;
+  return entry.spec.arguments.some((argument) => argument.role === "test_data");
+}
+
+/** A file with its sha256, or a non-empty folder with its listing fingerprint (as Rust's
+ * `PlanArtifact::is_fingerprinted`). */
+export function artifactIsFingerprinted(artifact: PlanArtifact): boolean {
+  if (artifact.sha256) return true;
+  return (
+    artifact.kind === "folder" &&
+    Boolean(artifact.listing_sha256) &&
+    (artifact.file_count ?? 0) > 0
+  );
+}
+
+/** What identifies the recorded checkpoint or split, in words for the plan view. */
+export function artifactFingerprintText(artifact: PlanArtifact): string {
+  if (artifact.sha256) return `sha256 ${artifact.sha256}`;
+  if (artifact.kind === "folder" && artifact.listing_sha256) {
+    const files = artifact.file_count ?? 0;
+    return `listing sha256 ${artifact.listing_sha256} (${files} ${files === 1 ? "file" : "files"})`;
+  }
+  return "not recorded";
+}
+
+/** Every check passed and every given path is fingerprinted, so the plan can be saved
+ * (the same rule as Rust's `RunPlan::is_saveable`). */
 export function planIsSaveable(plan: RunPlan | null): boolean {
   if (!plan) return false;
   if (!plan.checks.every((check) => check.ok)) return false;
-  if (!plan.checkpoint.sha256 || !plan.split.sha256) return false;
+  if (plan.checkpoint.path && !plan.checkpoint.sha256) return false;
+  if (plan.split.path && !artifactIsFingerprinted(plan.split)) return false;
   return plan.nothing_submitted === true;
 }
 
@@ -445,6 +529,30 @@ export function slurmSeconds(value: string | null): number | null {
   return Number(days ?? 0) * 86400 + Number(hours ?? 0) * 3600 + Number(minutes) * 60 + Number(seconds);
 }
 
+/** The form's walltime for a plan: the CLI's own estimate, never a fixed default. */
+export function defaultWalltime(plan: Pick<RunPlan, "time_estimate"> | null): string {
+  return plan?.time_estimate ?? "";
+}
+
+/** Why the walltime cannot be submitted (checked before the preview), or null. With no
+ * discovered partition limit nothing is refused; the server checks it again. */
+export function walltimeProblem(
+  walltime: string,
+  plan: Pick<RunPlan, "time_estimate" | "partition_max_time"> | null,
+): string | null {
+  const text = walltime.trim();
+  if (!text) {
+    return "Enter the walltime for this run: the plan has no time estimate.";
+  }
+  const limit = plan?.partition_max_time ?? null;
+  const wanted = slurmSeconds(text);
+  const max = slurmSeconds(limit);
+  if (limit && wanted !== null && max !== null && wanted > max) {
+    return `The walltime ${text} is longer than the partition's time limit ${limit}; enter ${limit} or less.`;
+  }
+  return null;
+}
+
 /** Plain-language state for a history row. */
 export function historyStateLabel(entry: RunHistoryEntry): string {
   if (entry.state === "pending") return "PENDING";
@@ -455,6 +563,90 @@ export function historyStateLabel(entry: RunHistoryEntry): string {
 /** Re-run is possible only while the saved plan is still on the server. */
 export function historyCanRerun(entry: RunHistoryEntry): boolean {
   return entry.plan_available;
+}
+
+function reproText(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null;
+}
+
+function reproObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+/** Plain-language lines for the repro-card preview. */
+export function reproPreviewLines(card: Record<string, unknown>): { included: string[]; missing: string[] } {
+  const datasetObj = reproObject(card.dataset);
+  const datasetId = reproText(datasetObj?.id);
+  const datasetVersion = reproText(datasetObj?.version);
+  const dataset = datasetId
+    ? `Dataset ${datasetId}${datasetVersion ? ` ${datasetVersion}` : ""}.`
+    : "The dataset name was not recorded.";
+  const splitObj = reproObject(card.split);
+  const sceneIds = Array.isArray(splitObj?.scene_ids) ? splitObj.scene_ids : [];
+  const scenes = sceneIds.length;
+  const splitName = reproText(splitObj?.name);
+  const split = splitName
+    ? `Split ${splitName}, ${scenes} scene${scenes === 1 ? "" : "s"}.`
+    : scenes
+      ? `Split name was not recorded. ${scenes} scene${scenes === 1 ? "" : "s"} are listed.`
+      : "The split was not recorded.";
+  const pipelineName = reproText(reproObject(card.pipeline)?.name);
+  const pipeline = pipelineName ? `Pipeline ${pipelineName}.` : "The pipeline name was not recorded.";
+  const checkpointObj = reproObject(card.checkpoint);
+  const checkpointName = reproText(checkpointObj?.file_name);
+  const checkpoint = checkpointName
+    ? `Checkpoint ${checkpointName}${reproText(checkpointObj?.sha256) ? ", with its hash." : "."}`
+    : "The checkpoint file name was not recorded.";
+  const codeCommit = reproText(reproObject(card.code)?.git_commit);
+  const code = codeCommit
+    ? `Code version ${codeCommit.slice(0, 12)}.`
+    : "The code version was not recorded.";
+  const appVersion = reproText(reproObject(card.coperceive)?.version);
+  const version = appVersion ? `coperceive ${appVersion}.` : "The coperceive version was not recorded.";
+  const python = reproText(reproObject(card.environment)?.python);
+  const environment = python
+    ? `Python ${python}.`
+    : "The environment was not captured for this run.";
+  const scores = card.metrics
+    ? "Scores are the ones coperceive computed for this run."
+    : "coperceive has not scored this run yet, so the card has no score.";
+  const phrases: Record<string, string> = {
+    "dataset.id": "The dataset name was not recorded.",
+    "dataset.version": "The dataset version was not recorded.",
+    "dataset.manifest_sha256": "The dataset manifest hash was not recorded.",
+    "split.name": "The split name was not recorded.",
+    "split.scene_ids": "The scene list was not recorded.",
+    "split.split_file_sha256": "The split file hash was not recorded.",
+    "pipeline.name": "The pipeline name was not recorded.",
+    "pipeline.registration_sha256": "The pipeline registration hash was not recorded.",
+    "checkpoint.file_name": "The checkpoint file name was not recorded.",
+    "checkpoint.sha256": "The checkpoint hash was not recorded.",
+    "checkpoint.size_bytes": "The checkpoint size was not recorded.",
+    "code.git_commit": "The code version was not recorded.",
+    "coperceive.git_commit": "The coperceive git commit was not recorded.",
+    "environment.python": "The Python version was not captured.",
+    "environment.pip_freeze_sha256": "The package list hash was not captured.",
+    "environment.container_image_digest": "The container digest was not recorded.",
+    "environment.cuda": "The CUDA version was not captured.",
+    "environment.driver": "The driver version was not captured.",
+    "environment.modules": "The module list was not recorded.",
+    "resources.gpus": "The requested GPUs were not recorded.",
+    "resources.time": "The requested time limit was not recorded.",
+    "resources.memory": "The requested memory was not recorded.",
+    metrics: "coperceive has not scored this run yet, so the card has no score.",
+    predictions_sha256: "The predictions file hash was not recorded.",
+  };
+  const missing: string[] = [];
+  const unknownFields = Array.isArray(card.unknown) ? card.unknown : [];
+  for (const field of unknownFields) {
+    if (typeof field !== "string") continue;
+    const phrase = phrases[field] ?? `${field} was not recorded.`;
+    if (!missing.includes(phrase)) missing.push(phrase);
+  }
+  return {
+    included: [dataset, split, pipeline, checkpoint, code, version, environment, scores],
+    missing,
+  };
 }
 
 /** A compact "elapsed / limit" column. */

@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coperceive.dev/spec/compare.schema.json",
+  "title": "coperceive eval compare",
+  "description": "Version 1 comparison of 2 to 4 evaluated runs. Average precision in a bin is the pooled curve of the ground truth and predictions that fall in that bin. A bin with no ground truth has note \"no objects\" and a null AP, never 0. Every AP carries n_objects. Ground-truth object keys are stable across runs of the same scene.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "format_version",
+    "runs",
+    "thresholds",
+    "distance_edges_m",
+    "visibility_edges",
+    "breakdowns",
+    "distance_source",
+    "definitions",
+    "outputs",
+    "objects"
+  ],
+  "properties": {
+    "format": {"type": "string", "const": "coperceive-compare"},
+    "format_version": {"type": "integer", "const": 1},
+    "runs": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 4,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "thresholds": {"type": "array", "items": {"type": "number"}},
+    "distance_edges_m": {"type": "array", "items": {"type": "number", "minimum": 0}},
+    "visibility_edges": {"type": "array", "items": {"type": "number"}},
+    "breakdowns": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["distance", "occlusion", "agents", "class", "scene"]
+      }
+    },
+    "distance_source": {
+      "type": "string",
+      "enum": ["scene", "outcomes", "unavailable"]
+    },
+    "definitions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["distance", "occlusion", "agents", "reference_agent"],
+      "properties": {
+        "distance": {"type": "string"},
+        "occlusion": {"type": "string"},
+        "agents": {"type": "string"},
+        "reference_agent": {"type": "string"}
+      }
+    },
+    "outputs": {"type": "array", "items": {"$ref": "#/$defs/output"}},
+    "objects": {"type": "array", "items": {"$ref": "#/$defs/object"}}
+  },
+  "$defs": {
+    "apClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ap", "n_objects", "note"],
+      "properties": {
+        "ap": {"type": ["number", "null"]},
+        "n_objects": {"type": "integer", "minimum": 0},
+        "note": {"type": ["string", "null"]}
+      }
+    },
+    "apCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mean", "n_objects", "note", "by_class"],
+      "properties": {
+        "mean": {"type": ["number", "null"]},
+        "n_objects": {"type": "integer", "minimum": 0},
+        "note": {"type": ["string", "null"]},
+        "by_class": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/apClass"}
+        }
+      }
+    },
+    "delta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mean", "by_class"],
+      "properties": {
+        "mean": {"type": ["number", "null"]},
+        "by_class": {
+          "type": "object",
+          "additionalProperties": {"type": ["number", "null"]}
+        }
+      }
+    },
+    "bin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bin", "runs", "delta_b_minus_a"],
+      "properties": {
+        "bin": {"type": "string"},
+        "runs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["n_objects", "ap"],
+            "properties": {
+              "n_objects": {"type": "integer", "minimum": 0},
+              "ap": {
+                "type": "object",
+                "additionalProperties": {"$ref": "#/$defs/apCell"}
+              }
+            }
+          }
+        },
+        "delta_b_minus_a": {
+          "type": ["object", "null"],
+          "additionalProperties": {"$ref": "#/$defs/delta"}
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_id", "source", "breakdowns"],
+      "properties": {
+        "agent_id": {"type": "string"},
+        "source": {"type": "string"},
+        "breakdowns": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/bin"}
+          }
+        }
+      }
+    },
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "iou_bev", "centre_error_m", "yaw_error_deg"],
+      "properties": {
+        "outcome": {"type": "string", "enum": ["tp", "fn", "ignored"]},
+        "iou_bev": {"type": ["number", "null"]},
+        "centre_error_m": {"type": ["number", "null"]},
+        "yaw_error_deg": {"type": ["number", "null"]}
+      }
+    },
+    "object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "kind",
+        "scene_id",
+        "agent_id",
+        "source",
+        "run_id",
+        "time_us",
+        "row",
+        "track_id",
+        "category",
+        "score",
+        "distance_m",
+        "occlusion",
+        "visibility",
+        "agent_count",
+        "agent_bin",
+        "outcome",
+        "iou_bev",
+        "centre_error_m",
+        "yaw_error_deg",
+        "runs",
+        "distance_bin"
+      ],
+      "properties": {
+        "key": {"type": "string"},
+        "kind": {"type": "string", "enum": ["gt", "fp"]},
+        "scene_id": {"type": "string"},
+        "agent_id": {"type": "string"},
+        "source": {"type": ["string", "null"]},
+        "run_id": {"type": ["string", "null"]},
+        "time_us": {"type": "integer"},
+        "row": {"type": "integer"},
+        "track_id": {"type": ["string", "null"]},
+        "category": {"type": "string"},
+        "score": {"type": ["number", "null"]},
+        "distance_m": {"type": ["number", "null"]},
+        "occlusion": {"type": "string"},
+        "visibility": {"type": ["number", "null"]},
+        "agent_count": {"type": ["integer", "null"], "minimum": 0},
+        "agent_bin": {"type": "string"},
+        "outcome": {"type": ["string", "null"], "enum": ["fp", null]},
+        "iou_bev": {"type": ["number", "null"]},
+        "centre_error_m": {"type": ["number", "null"]},
+        "yaw_error_deg": {"type": ["number", "null"]},
+        "runs": {
+          "type": ["object", "null"],
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {"$ref": "#/$defs/match"}
+          }
+        },
+        "distance_bin": {"type": "string"}
+      }
+    }
+  }
+}

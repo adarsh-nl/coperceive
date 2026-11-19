@@ -33,7 +33,7 @@ The `desktop-macos` job constitutes the entire critical path of the CI pipeline,
 | | Playwright Browser Tests (`test_viewer_browser.py`) | 126.0 s | 2.1 m | 144.1 s | 2.4 m |
 | | Artifact Upload | 1.5 s | 0.0 m | 2.0 s | 0.0 m |
 | | **Total `e2e` Duration** | **182.0 s** | **3.0 m** | **200.1 s** | **3.3 m** |
-| **`test`** (3.10 – 3.13) | Setup (pip install `coperceive[app,griffin,dev,viewer]` + torch) | 58.0 s | 1.0 m | 66.0 s | 1.1 m |
+| **`test`** (3.11 – 3.13) | Setup (pip install `coperceive[app,griffin,dev,viewer]` + torch) | 58.0 s | 1.0 m | 66.0 s | 1.1 m |
 | | Test Execution (`pytest`) | 66.0 s | 1.1 m | 72.0 s | 1.2 m |
 | | **Total `test` Duration** | **128.0 s** | **2.1 m** | **140.1 s** | **2.3 m** |
 | **`lint`** | Setup (venv creation, pip install, torch cpu wheel) | 60.5 s | 1.0 m | 67.0 s | 1.1 m |

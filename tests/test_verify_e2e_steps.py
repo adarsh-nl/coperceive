@@ -20,6 +20,7 @@ SAMPLE_PASSING_LOG = (
     'Step 1 verified state.json content: {"viewpoint": "chase"}\n'
     "Step 1b verified: Still exported successfully and non-empty PNG asserted.\n"
     "Step 1c verified: BEV figure exported successfully and non-empty PNG asserted.\n"
+    "Step 1d verified: Paper export wrote a non-empty zip and said Ready for Overleaf.\n"
     "Playback requirement (c) verified: max frame gap = 120.0ms, "
     "loop wraps observed = 1, frames seen = 150\n"
     "Step 2 verified: All restored values from DOM and scene-graph counts match perfectly.\n"
@@ -38,6 +39,7 @@ SAMPLE_PASSING_LOG = (
     "Step 5f verified: Move library relocated synth_001 to the new root, left the old root empty, "
     "and updated state.json.\n"
     "Step 5g verified: Library badge ran in the background and its answer is cached.\n"
+    "Step 5j verified: Export repro card showed missing fields and saved the card.\n"
     "Real-App macOS E2E Test PASSED Successfully!\n"
 )
 
@@ -73,6 +75,18 @@ def test_verify_e2e_log_detects_missing_passed() -> None:
     missing: list[str] = verify_e2e_steps.verify_e2e_log(truncated)
     assert len(missing) == 1
     assert marker in missing[0]
+
+
+def test_lab_profile_marker_is_required_for_that_log() -> None:
+    assert verify_e2e_steps.verify_lab_profile_log("noise\n") == ["E2E_SHARE_MARK:"]
+    assert (
+        verify_e2e_steps.verify_lab_profile_log(
+            "E2E_SHARE_MARK: lab profile export/import verified (alias=student-cluster)\n"
+        )
+        == []
+    )
+    # The viewer log does not have to contain the lab-profile marker.
+    assert verify_e2e_steps.verify_e2e_log(SAMPLE_PASSING_LOG) == []
 
 
 def test_main_cli_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

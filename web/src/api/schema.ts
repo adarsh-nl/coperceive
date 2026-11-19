@@ -311,6 +311,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/scenes/{scene_id}/export/paper": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Scene Paper */
+        post: operations["scene_paper_api_scenes__scene_id__export_paper_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/files": {
         parameters: {
             query?: never;
@@ -389,6 +406,48 @@ export interface components {
             hidden_classes?: string[];
             /** Agents */
             agents?: string[] | null;
+        };
+        /** PaperExportRequest */
+        PaperExportRequest: {
+            /** Run Id */
+            run_id?: string | null;
+            /**
+             * Decimals
+             * @default 3
+             */
+            decimals: number;
+            /**
+             * Bold Best
+             * @default true
+             */
+            bold_best: boolean;
+            /**
+             * Include Counts
+             * @default true
+             */
+            include_counts: boolean;
+            /** Metrics */
+            metrics?: string[];
+            /**
+             * Qualitative
+             * @default false
+             */
+            qualitative: boolean;
+            /** Allow Datasets */
+            allow_datasets?: string[];
+            /** Frames */
+            frames?: components["schemas"]["PaperFrameIn"][];
+        };
+        /** PaperFrameIn */
+        PaperFrameIn: {
+            /** Scene Id */
+            scene_id: string;
+            /** Time Us */
+            time_us: number;
+            /** Agent Id */
+            agent_id?: string | null;
+            /** Sensor Id */
+            sensor_id?: string | null;
         };
         /** PlotRequest */
         PlotRequest: {
@@ -1088,6 +1147,43 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["OverlayRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scene_paper_api_scenes__scene_id__export_paper_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PaperExportRequest"];
             };
         };
         responses: {

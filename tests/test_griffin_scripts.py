@@ -160,7 +160,12 @@ def test_stage_viewer_staging_root_can_come_from_the_environment(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.delenv("COPERCEIVE_SLURM_SCRATCH_TEMPLATE", raising=False)
     monkeypatch.setenv("COPERCEIVE_STAGE_ROOT", str(tmp_path / "stage"))
     assert stage_viewer.default_scratch() == tmp_path / "stage"
     monkeypatch.delenv("COPERCEIVE_STAGE_ROOT")
     assert stage_viewer.default_scratch() is None
+    monkeypatch.setenv("USER", "sam")
+    monkeypatch.setenv("SLURM_JOB_ID", "42")
+    monkeypatch.setenv("COPERCEIVE_SLURM_SCRATCH_TEMPLATE", "/scratch/${USER}/$SLURM_JOB_ID")
+    assert stage_viewer.default_scratch() == Path("/scratch/sam/42")

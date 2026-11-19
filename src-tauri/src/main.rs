@@ -3,57 +3,39 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-#[cfg(target_os = "macos")]
 use std::fs;
-#[cfg(target_os = "macos")]
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(target_os = "macos")]
 use std::sync::{Arc, Mutex};
-#[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
-#[cfg(target_os = "macos")]
 use serde::{Deserialize, Serialize};
 
-#[cfg(target_os = "macos")]
 use tauri::Manager;
 
-#[cfg(target_os = "macos")]
+use coperceive_desktop::platform;
 use coperceive_desktop::controller::{self, ControllerConfig};
-#[cfg(target_os = "macos")]
 use coperceive_desktop::detect::{self, DetectOptions, DetectionReport};
-#[cfg(target_os = "macos")]
 use coperceive_desktop::run_plan::{self, PipelineEntry, RunPlan, RunPlanRequest};
-#[cfg(target_os = "macos")]
 use coperceive_desktop::job_submit::{
     self as job_submit, JobSubmitOutcome, SubmissionPreview, SubmitOptions,
 };
-#[cfg(target_os = "macos")]
 use coperceive_desktop::job_watch::{
     self as job_watch, JobCancelResult, JobLogTail, JobWatchStatus,
 };
-#[cfg(target_os = "macos")]
 use coperceive_desktop::job_report::{
     self as job_report, ImportedPredictions, MetricsReport, PredictionTail,
 };
-#[cfg(target_os = "macos")]
 use coperceive_desktop::job_history::{self as job_history, RunHistoryEntry};
-#[cfg(target_os = "macos")]
+use coperceive_desktop::remote_static;
 use coperceive_desktop::server_profiles::{self, ServerEntry, SshHostSettings};
-#[cfg(target_os = "macos")]
 use coperceive_desktop::remote::{
     RemoteClient, RemoteSessionManager, RemoteStartOptions, RemoteStatusResponse,
 };
-#[cfg(target_os = "macos")]
 use coperceive_desktop::sidecar::SidecarSession;
-#[cfg(target_os = "macos")]
 use coperceive_desktop::slurm_adapter::SshRunner;
-#[cfg(target_os = "macos")]
 use coperceive_desktop::state::{self, AppPersistentState};
 
-#[cfg(target_os = "macos")]
 pub struct AppState {
     pub sidecar: Mutex<Option<SidecarSession>>,
     pub remote: Mutex<Option<RemoteSessionManager>>,
@@ -78,9 +60,11 @@ pub struct AppState {
     pub pending_dataset_prepare:
         Mutex<Option<coperceive_desktop::dataset_jobs::PendingPrepare>>,
     pub startup_crash: Mutex<Option<serde_json::Value>>,
+    pub validated_scenes_this_run: Mutex<std::collections::HashSet<String>>,
+    pub auto_connect_state: Mutex<serde_json::Value>,
+    pub last_open_dialog: Mutex<Option<Instant>>,
 }
 
-#[cfg(target_os = "macos")]
 impl Default for AppState {
     fn default() -> Self {
         Self {
@@ -101,11 +85,55 @@ impl Default for AppState {
             pending_update: Mutex::new(None),
             pending_dataset_prepare: Mutex::new(None),
             startup_crash: Mutex::new(None),
+            validated_scenes_this_run: Mutex::new(std::collections::HashSet::new()),
+            auto_connect_state: Mutex::new(serde_json::json!({ "phase": "idle" })),
+            last_open_dialog: Mutex::new(None),
         }
     }
 }
 
-#[cfg(target_os = "macos")]
+fn set_auto_connect_state(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    phase: &str,
+    detail: serde_json::Value,
+) {
+    let payload = serde_json::json!({
+        "phase": phase,
+        "elapsed_ms": state.startup_instant.elapsed().as_millis() as u64,
+        "detail": detail,
+    });
+    if let Ok(mut lock) = state.auto_connect_state.lock() {
+        *lock = payload.clone();
+    }
+    println!("[auto-connect] state={}", payload);
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    if let Some(main) = app.get_webview_window("main") {
+        let json = serde_json::to_string(&payload).unwrap_or_else(|_| "null".to_string());
+        let _ = main.eval(&format!("window.__COPERCEIVE_AUTOCONNECT_STATE__ = {json};"));
+    }
+}
+
+/// Disconnects any active remote session off the `state.remote` mutex in a
+/// background thread with a bounded timeout so switching to a local scene
+/// never blocks on SSH teardown.
+fn disconnect_remote_in_background(state: &AppState) {
+    let existing = state.remote.lock().ok().and_then(|mut lock| lock.take());
+    if let Ok(mut current) = state.remote_key.lock() {
+        *current = None;
+    }
+    if let Some(mut remote) = existing {
+        std::thread::spawn(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = remote.disconnect();
+                let _ = tx.send(());
+            });
+            let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+        });
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionPayload {
     pub origin: String,
@@ -115,7 +143,6 @@ pub struct SessionPayload {
     pub target_type: String,
 }
 
-#[cfg(target_os = "macos")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HealthPayload {
     pub healthy: bool,
@@ -123,46 +150,49 @@ pub struct HealthPayload {
     pub server_version: Option<String>,
 }
 
-/// Resolves the bundled python-build-standalone interpreter from the Tauri resource directory.
-/// Falls back to dev python if running unbundled.
-#[cfg(target_os = "macos")]
+/// Resolves the bundled python-build-standalone interpreter from the Tauri resource directory
+/// or, when Tauri's `resource_dir()` fails (e.g. macOS symlinked app paths), from `current_exe()`.
+/// Falls back to `COPERCEIVE_PYTHON` or dev python if running unbundled.
 fn resolve_python_binary(app: &tauri::AppHandle) -> PathBuf {
     use tauri::Manager;
 
-    if let Ok(res_dir) = app.path().resource_dir() {
-        // Pinned python-build-standalone inside Tauri resources
-        let candidates = [
-            res_dir.join("resources").join("python").join("bin").join("python3"),
-            res_dir.join("python").join("bin").join("python3"),
-            res_dir.join("python").join("install").join("bin").join("python3"),
-        ];
-        for candidate in &candidates {
-            if candidate.is_file() {
-                return candidate.clone();
-            }
-        }
+    let tauri_res_dir = app.path().resource_dir().ok();
+    let current_exe = std::env::current_exe().ok();
+    if let Some((python_bin, matched_res_dir)) = platform::resolve_bundled_python(
+        tauri_res_dir.as_deref(),
+        current_exe.as_deref(),
+    ) {
+        remote_static::set_resource_dir(matched_res_dir);
+        return python_bin;
+    }
+    if let Some(res_dir) = tauri_res_dir {
+        remote_static::set_resource_dir(res_dir);
     }
 
     if let Ok(env_py) = std::env::var("COPERCEIVE_PYTHON") {
         return PathBuf::from(env_py);
     }
 
-    PathBuf::from("python3")
+    #[cfg(target_os = "windows")]
+    {
+        PathBuf::from("python")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        PathBuf::from("python3")
+    }
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn get_persistent_state() -> Result<AppPersistentState, String> {
     Ok(state::load_state())
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn is_remote_enabled() -> Result<bool, String> {
     Ok(std::env::var("COPERCEIVE_REMOTE").map(|v| v == "1" || v.to_lowercase() == "true").unwrap_or(false))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn pick_data_root(app: tauri::AppHandle) -> Result<Option<String>, String> {
     // Test-only: e2e writes the answer into COPERCEIVE_MOCK_DIALOG_FILE so the
@@ -178,13 +208,11 @@ async fn pick_data_root(app: tauri::AppHandle) -> Result<Option<String>, String>
     Ok(folder.and_then(|fp| fp.into_path().ok()).map(|p| p.to_string_lossy().into_owned()))
 }
 
-#[cfg(target_os = "macos")]
-#[tauri::command]
-async fn pick_save_path(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    default_name: String,
-    extension: String,
+fn pick_save_path_inner(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    default_name: &str,
+    extension: &str,
 ) -> Result<Option<String>, String> {
     if let Some(path) = coperceive_desktop::test_seams::take_mock_dialog_path() {
         state.pending_export.set(Some(PathBuf::from(&path)));
@@ -197,9 +225,9 @@ async fn pick_save_path(
 
     use tauri_plugin_dialog::DialogExt;
 
-    let mut builder = app.dialog().file().set_file_name(&default_name);
+    let mut builder = app.dialog().file().set_file_name(default_name);
     if !extension.is_empty() {
-        builder = builder.add_filter("Export File", &[&extension]);
+        builder = builder.add_filter("Export File", &[extension]);
     }
     let choice = builder.blocking_save_file();
     let chosen_path = choice.and_then(|fp| fp.into_path().ok()).map(|p| p.to_string_lossy().into_owned());
@@ -209,36 +237,59 @@ async fn pick_save_path(
     Ok(chosen_path)
 }
 
-#[cfg(target_os = "macos")]
+fn save_exported_file_inner(
+    state: &AppState,
+    source_relative: Option<&str>,
+    bytes: Option<&[u8]>,
+) -> Result<String, String> {
+    if let Some(b) = bytes {
+        if b.len() > coperceive_desktop::export::MAX_EXPORT_BYTES {
+            return Err(format!(
+                "Export payload exceeds maximum allowed size of {} bytes",
+                coperceive_desktop::export::MAX_EXPORT_BYTES
+            ));
+        }
+    }
+    let dest_path = state.pending_export.take()?;
+    let root_lock = state.current_root.lock().map_err(|e| e.to_string())?;
+    let root_ref = root_lock.as_deref().map(Path::new);
+    coperceive_desktop::export::write_export_file(root_ref, source_relative, &dest_path, bytes)?;
+    let path_str = dest_path.to_string_lossy().into_owned();
+    state.pending_export.set_last_saved(dest_path);
+    Ok(path_str)
+}
+
+#[tauri::command]
+async fn pick_save_path(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    default_name: String,
+    extension: String,
+) -> Result<Option<String>, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        pick_save_path_inner(&app, &st, &default_name, &extension)
+    })
+    .await
+    .map_err(|e| format!("Failed to join export picker task: {e}"))?
+}
+
 #[tauri::command]
 async fn save_exported_file(
     source_relative: Option<String>,
     bytes: Option<Vec<u8>>,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
-    let dest_path = state.pending_export.take()?;
-
-    let root_lock = state.current_root.lock().map_err(|e| e.to_string())?;
-    let root_ref = root_lock.as_deref().map(Path::new);
-    let bytes_ref = bytes.as_deref();
-    let rel_ref = source_relative.as_deref();
-
-    coperceive_desktop::export::write_export_file(
-        root_ref,
-        rel_ref,
-        &dest_path,
-        bytes_ref,
-    )?;
-
-    let path_str = dest_path.to_string_lossy().into_owned();
-    state.pending_export.set_last_saved(dest_path);
-
-    Ok(path_str)
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        save_exported_file_inner(&st, source_relative.as_deref(), bytes.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Failed to join export save task: {e}"))?
 }
 
 /// Poll until no window has `label`, up to `limit`. Never call on the main
 /// thread: closing a window needs the main event loop.
-#[cfg(target_os = "macos")]
 fn wait_for_window_gone(app: &tauri::AppHandle, label: &str, limit: Duration) -> bool {
     use tauri::Manager;
     let deadline = Instant::now() + limit;
@@ -251,7 +302,6 @@ fn wait_for_window_gone(app: &tauri::AppHandle, label: &str, limit: Duration) ->
     true
 }
 
-#[cfg(target_os = "macos")]
 fn open_viewer_window(
     app: &tauri::AppHandle,
     origin: &str,
@@ -282,9 +332,11 @@ fn open_viewer_window(
         }
     }
 
-    if let Ok(mut lock) = state.viewer_origin.lock() {
-        *lock = Some(origin.to_string());
-    }
+    coperceive_desktop::controller::sync_viewer_origin(
+        &state.viewer_origin,
+        &state.controller_config,
+        origin,
+    );
 
     let hash = match query {
         Some(query) if !query.is_empty() => format!("{}/#/viewer?{}", origin, query),
@@ -315,66 +367,67 @@ fn open_viewer_window(
         return Ok(());
     }
 
-    let basename = Path::new(data_root)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(data_root);
+    let is_demo = coperceive_desktop::demo::is_demo_path(Path::new(data_root));
+    let (basename, window_title) = if is_demo {
+        ("Demo (synthetic)".to_string(), "coperceive — Demo (synthetic) — demo-junction".to_string())
+    } else {
+        let base = Path::new(data_root)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(data_root)
+            .to_string();
+        let title = format!("coperceive — {base}");
+        (base, title)
+    };
 
-    let escaped_origin = origin.replace('\\', "\\\\").replace('"', "\\\"");
-    let escaped_token = token.replace('\\', "\\\\").replace('"', "\\\"");
-    let escaped_secret = ctrl_secret.replace('\\', "\\\\").replace('"', "\\\"");
-    let escaped_root = data_root.replace('\\', "\\\\").replace('"', "\\\"");
-    let escaped_base = basename.replace('\\', "\\\\").replace('"', "\\\"");
     let test_env = coperceive_desktop::test_seams::test_env_active();
+    let test_repro = coperceive_desktop::repro::test_repro_dir().is_some();
     let force_motion =
         test_env && std::env::var("COPERCEIVE_FORCE_MOTION").ok().as_deref() == Some("1");
     let update_url = std::env::var("COPERCEIVE_UPDATE_URL").unwrap_or_default();
-    let escaped_update = update_url.replace('\\', "\\\\").replace('"', "\\\"");
 
-    let init_script = format!(
-        r#"
-        (function() {{
-            try {{
-                window.__COPERCEIVE_DESKTOP__ = true;
-                // Tauri injects its IPC object here too, but no command is
-                // permitted for this window (capabilities: main only).
-                window.__COPERCEIVE_VIEWER_WINDOW__ = true;
-                window.__COPERCEIVE_TITLEBAR__ = "overlay";
-                window.__COPERCEIVE_TEST_ENV__ = {test_env};
-                window.__COPERCEIVE_FORCE_MOTION__ = {force_motion};
-                window.__COPERCEIVE_UPDATE_URL__ = "{escaped_update}";
-                window.__COPERCEIVE_CTRL_PORT__ = {ctrl_port};
-                window.__COPERCEIVE_CTRL_SECRET__ = "{escaped_secret}";
-                window.__COPERCEIVE_DATA_ROOT__ = "{escaped_root}";
-                window.__COPERCEIVE_DATA_BASENAME__ = "{escaped_base}";
-                window.__COPERCEIVE_INITIAL_STATE__ = {initial_state_json};
-                if (!window.location.origin || window.location.origin === "null" || window.location.origin === "{escaped_origin}" || window.location.href.indexOf("{escaped_origin}") === 0) {{
-                    try {{
-                        sessionStorage.setItem("coperceive-token", "{escaped_token}");
-                        sessionStorage.setItem("coperceive-origin", "{escaped_origin}");
-                    }} catch (_) {{}}
-                }}
-            }} catch (e) {{
-                console.error("Failed to initialize coperceive desktop state", e);
-            }}
-        }})();
-        "#
+    let titlebar_mode = if cfg!(target_os = "macos") { "overlay" } else { "native" };
+    let os_name = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "macos"
+    };
+
+    let init_script = coperceive_desktop::controller::build_viewer_init_script(
+        &coperceive_desktop::controller::ViewerInitScriptParams {
+            os_name,
+            titlebar_mode,
+            test_env,
+            test_repro,
+            force_motion,
+            update_url: &update_url,
+            origin,
+            token,
+            data_root,
+            data_basename: &basename,
+            initial_state_json: &initial_state_json,
+            ctrl_port: (ctrl_port > 0).then_some(ctrl_port),
+            ctrl_secret: (!ctrl_secret.is_empty()).then_some(ctrl_secret.as_str()),
+        },
     );
 
+    let nav_origin = origin.to_string();
     let mut win_builder = tauri::WebviewWindowBuilder::new(
         app,
         "viewer",
         tauri::WebviewUrl::External(parsed_url),
     )
-    .title(format!("coperceive — {}", basename))
+    .title(&window_title)
     .min_inner_size(900.0, 600.0)
     .resizable(true)
-    // The unified toolbar: no native title bar, the traffic lights inline at
-    // the left of the app's own top bar (as in tauri.conf.json for main).
-    .title_bar_style(tauri::TitleBarStyle::Overlay)
-    .hidden_title(true)
-    .traffic_light_position(tauri::LogicalPosition::new(16.0, 18.0))
+    .on_navigation(move |url| {
+        coperceive_desktop::controller::is_allowed_viewer_navigation(url.as_str(), &nav_origin)
+    })
     .initialization_script(&init_script);
+
+    win_builder = platform::apply_viewer_window_chrome(win_builder);
 
     let monitors_info: Vec<state::MonitorInfo> = {
         let primary = app.primary_monitor().ok().flatten();
@@ -469,7 +522,6 @@ fn open_viewer_window(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 async fn switch_data_root(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -503,11 +555,18 @@ async fn switch_data_root(
     };
 
     let python_bin = resolve_python_binary(app);
-    let mut new_session = SidecarSession::spawn_with_maps(
+    let mut extra_args = Vec::new();
+    if let Some(pred_dir) = coperceive_desktop::demo::demo_predictions_for_path(&new_path) {
+        extra_args.push("--predictions".to_string());
+        extra_args.push(pred_dir.to_string_lossy().into_owned());
+    }
+
+    let mut new_session = SidecarSession::spawn_with_args(
         &python_bin,
         &new_path,
         library_maps_root().as_deref(),
         current_viewer_origin.as_deref(),
+        &extra_args,
     )
         .map_err(|e| format!("Failed to spawn new sidecar: {}", e))?;
 
@@ -515,7 +574,7 @@ async fn switch_data_root(
     let new_token = new_session.token.clone();
 
     // Poll until healthy
-    if let Err(e) = reqwest_like_poll(&new_origin, &new_token, Duration::from_secs(60)) {
+    if let Err(e) = new_session.wait_until_healthy(Duration::from_secs(60)) {
         new_session.preserve_log = true;
         let _ = new_session.stop();
         let err_msg = format!("Failed to start sidecar for new dataset: {}", e);
@@ -538,7 +597,11 @@ async fn switch_data_root(
         if let Ok(mut current) = state.stream_key.lock() {
             *current = None;
         }
+        if let Ok(mut scenes) = state.dataset_scenes.lock() {
+            *scenes = serde_json::Value::Null;
+        }
     }
+    disconnect_remote_in_background(&state);
 
     if let Ok(lock) = state.controller_config.lock() {
         if let Some(ref cfg) = *lock {
@@ -549,17 +612,17 @@ async fn switch_data_root(
     // Update state.json with new root and prepend to recent_roots
     {
         let mut persistent = state::load_state();
+        let previous_recent = persistent.recent_roots.clone();
         persistent.last_data_root = Some(new_path_str.clone());
         persistent.last_scene_id = None;
         persistent.last_sample_index = None;
         persistent.last_timestamp_us = None;
+        persistent._legacy_timestamp_ns = None;
+        persistent.agent_visibility = None;
         state::add_recent_root(&mut persistent, &new_path_str);
         let _ = state::save_state(&persistent);
 
-        // Update application menu with refreshed recent roots
-        if let Ok(menu) = build_app_menu(app, &persistent.recent_roots) {
-            let _ = app.set_menu(menu);
-        }
+        schedule_app_menu_refresh(app, &previous_recent, &persistent.recent_roots);
     }
 
     // Update window title and notify viewer
@@ -593,7 +656,6 @@ async fn switch_data_root(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 pub async fn trigger_open_dataset_dialog(app: &tauri::AppHandle, state: &AppState) {
     // Test-only: e2e answers the folder picker through COPERCEIVE_MOCK_DIALOG_FILE.
     // Inert unless the app was launched with COPERCEIVE_TEST_ENV / MARKER_FILE.
@@ -610,7 +672,6 @@ pub async fn trigger_open_dataset_dialog(app: &tauri::AppHandle, state: &AppStat
     }
 }
 
-#[cfg(target_os = "macos")]
 fn copy_diagnostics_to_clipboard(app: &tauri::AppHandle, state: &AppState) {
     let version = coperceive_desktop::updater::app_version(&app.package_info().version);
     let commit = option_env!("GIT_COMMIT").unwrap_or("580691a");
@@ -675,17 +736,7 @@ fn copy_diagnostics_to_clipboard(app: &tauri::AppHandle, state: &AppState) {
         if log_lines.is_empty() { "No logs recorded." } else { &log_lines }
     );
 
-    let mut copied = false;
-    if let Ok(mut child) = std::process::Command::new("pbcopy")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-    {
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = std::io::Write::write_all(&mut stdin, diagnostics.as_bytes());
-            copied = true;
-        }
-        let _ = child.wait();
-    }
+    let copied = platform::copy_to_clipboard(&diagnostics);
 
     if let Some(viewer) = app.get_webview_window("viewer") {
         let msg = if copied {
@@ -699,7 +750,6 @@ fn copy_diagnostics_to_clipboard(app: &tauri::AppHandle, state: &AppState) {
     }
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn diagnostics_build_report(
     state: tauri::State<'_, Arc<AppState>>,
@@ -715,13 +765,11 @@ fn diagnostics_build_report(
     coperceive_desktop::diagnostics::report(&context)
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn diagnostics_copy_text(context: serde_json::Value, note: String) -> Result<(), String> {
     coperceive_desktop::diagnostics::copy(&context, &note)
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn diagnostics_startup_crash(
     state: tauri::State<'_, Arc<AppState>>,
@@ -733,7 +781,6 @@ fn diagnostics_startup_crash(
         .and_then(|lock| lock.clone())
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn diagnostics_save_zip(
     app: tauri::AppHandle,
@@ -762,7 +809,6 @@ async fn diagnostics_save_zip(
 /// Bring the main window forward on its Library. The viewer window stays the
 /// one viewer (opening a scene from the Library replaces it); it never renders
 /// the Library itself, because it has no Tauri IPC.
-#[cfg(target_os = "macos")]
 fn show_library_window(app: &tauri::AppHandle) -> bool {
     use tauri::{Emitter, Manager};
     let Some(main) = app.get_webview_window("main") else {
@@ -775,8 +821,460 @@ fn show_library_window(app: &tauri::AppHandle) -> bool {
     main.is_visible().unwrap_or(false)
 }
 
-#[cfg(target_os = "macos")]
+fn viewer_session_status(state: &AppState) -> serde_json::Value {
+    let Ok(lock) = state.remote.lock() else {
+        return serde_json::Value::Null;
+    };
+    let Some(session) = lock.as_ref() else {
+        return serde_json::Value::Null;
+    };
+    match session.job_status() {
+        Ok(status) => serde_json::json!({
+            "job_id": status.job_id.or(session.job_id),
+            "state": status.state,
+            "status": status.status,
+            "time_left": status.time_left,
+            "time_left_seconds": status.time_left_seconds,
+            "elapsed": status.elapsed,
+        }),
+        Err(_) => serde_json::json!({ "job_id": session.job_id, "status": "unknown" }),
+    }
+}
+
+fn sanitize_viewer_scene_title(scene: &str) -> Option<String> {
+    let cleaned: String = scene.chars().filter(|c| !c.is_control()).take(200).collect();
+    (!cleaned.trim().is_empty()).then_some(cleaned)
+}
+
+fn apply_viewer_window_title(app: &tauri::AppHandle, scene: &str) {
+    use tauri::Manager;
+    let Some(cleaned) = sanitize_viewer_scene_title(scene) else {
+        return;
+    };
+    if let Some(viewer) = app.get_webview_window("viewer") {
+        let title = if cleaned == "demo-junction" {
+            "coperceive — Demo (synthetic) — demo-junction".to_string()
+        } else {
+            format!("coperceive — {cleaned}")
+        };
+        let _ = viewer.set_title(&title);
+    }
+}
+
+fn prepare_scene_in_main_window(app: &tauri::AppHandle, scene_id: &str) -> Result<bool, String> {
+    if scene_id.is_empty() || scene_id.len() > 256 {
+        return Err("scene_id is required".to_string());
+    }
+    use tauri::{Emitter, Manager};
+    // The main window shows the dataset view's prepare preview for this scene;
+    // the user confirms there (nothing is submitted from the viewer).
+    let Some(main) = app.get_webview_window("main") else {
+        return Ok(false);
+    };
+    let _ = main.unminimize();
+    let _ = main.show();
+    let _ = main.set_focus();
+    let _ = main.emit("prepare-scene", serde_json::json!({ "scene_id": scene_id }));
+    Ok(main.is_visible().unwrap_or(false))
+}
+
+fn reveal_last_export_inner(state: &AppState) -> Result<(), String> {
+    let dest_path = state.pending_export.last_saved()?;
+    platform::reveal_path(Path::new(&dest_path))
+}
+
+fn run_updater_check(
+    handle: &tauri::AppHandle,
+    state: &AppState,
+    is_manual: bool,
+    override_url_opt: Option<String>,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(outcome) = coperceive_desktop::updater::linux_deb_check_outcome(
+            is_manual,
+            std::env::var_os("APPIMAGE").as_deref(),
+            coperceive_desktop::test_seams::test_env_active(),
+            &handle.package_info().version,
+        ) {
+            return Ok(serde_json::to_value(&outcome).unwrap_or_default());
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = is_manual;
+
+    use tauri_plugin_updater::UpdaterExt;
+    let effective_url =
+        coperceive_desktop::updater::resolve_update_endpoint_override(override_url_opt.as_deref());
+    let builder = if let Some(ref override_url) = effective_url {
+        if let Ok(parsed) = tauri::Url::parse(override_url) {
+            handle
+                .updater_builder()
+                .endpoints(vec![parsed])
+                .unwrap_or_else(|_| handle.updater_builder())
+        } else {
+            handle.updater_builder()
+        }
+    } else {
+        handle.updater_builder()
+    };
+    let updater = match builder.build() {
+        Ok(u) => u,
+        Err(err) => {
+            let outcome = coperceive_desktop::updater::UpdateCheckOutcome::Error {
+                error: err.to_string(),
+                is_network: false,
+            };
+            return Ok(serde_json::to_value(&outcome).unwrap_or_default());
+        }
+    };
+    match tauri::async_runtime::block_on(updater.check()) {
+        Ok(Some(update)) => {
+            let date_str = update.date.map(|d| d.to_string());
+            let outcome = coperceive_desktop::updater::UpdateCheckOutcome::Available {
+                version: update.version.clone(),
+                current_version: update.current_version.clone(),
+                notes: update.body.clone(),
+                pub_date: date_str,
+            };
+            if let Ok(mut lock) = state.pending_update.lock() {
+                *lock = Some(update);
+            }
+            Ok(serde_json::to_value(&outcome).unwrap_or_default())
+        }
+        Ok(None) => {
+            let outcome = coperceive_desktop::updater::UpdateCheckOutcome::UpToDate {
+                current_version: coperceive_desktop::updater::app_version(&handle.package_info().version),
+            };
+            Ok(serde_json::to_value(&outcome).unwrap_or_default())
+        }
+        Err(err) => match &err {
+            tauri_plugin_updater::Error::ReleaseNotFound => {
+                let outcome = coperceive_desktop::updater::UpdateCheckOutcome::UpToDate {
+                    current_version: coperceive_desktop::updater::app_version(&handle.package_info().version),
+                };
+                Ok(serde_json::to_value(&outcome).unwrap_or_default())
+            }
+            _ => {
+                let is_network = matches!(
+                    err,
+                    tauri_plugin_updater::Error::Reqwest(_) | tauri_plugin_updater::Error::Network(_)
+                );
+                let outcome = coperceive_desktop::updater::UpdateCheckOutcome::Error {
+                    error: err.to_string(),
+                    is_network,
+                };
+                Ok(serde_json::to_value(&outcome).unwrap_or_default())
+            }
+        },
+    }
+}
+
+fn run_updater_install(
+    handle: &tauri::AppHandle,
+    state: &AppState,
+    override_url_opt: Option<String>,
+) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        if coperceive_desktop::updater::linux_deb_install_prevented(
+            std::env::var_os("APPIMAGE").as_deref(),
+            coperceive_desktop::test_seams::test_env_active(),
+        ) {
+            return Err(coperceive_desktop::updater::DEB_UPDATE_NOTICE.to_string());
+        }
+    }
+
+    let update_opt = {
+        let lock = state.pending_update.lock().map_err(|e| e.to_string())?;
+        lock.clone()
+    };
+    let update = match update_opt {
+        Some(u) => u,
+        None => {
+            use tauri_plugin_updater::UpdaterExt;
+            let effective_url = coperceive_desktop::updater::resolve_update_endpoint_override(
+                override_url_opt.as_deref(),
+            );
+            let builder = if let Some(ref override_url) = effective_url {
+                if let Ok(parsed) = tauri::Url::parse(override_url) {
+                    handle
+                        .updater_builder()
+                        .endpoints(vec![parsed])
+                        .unwrap_or_else(|_| handle.updater_builder())
+                } else {
+                    handle.updater_builder()
+                }
+            } else {
+                handle.updater_builder()
+            };
+            let updater = builder.build().map_err(|e| e.to_string())?;
+            let u = tauri::async_runtime::block_on(updater.check()).map_err(|e| e.to_string())?;
+            u.ok_or_else(|| "No update available to install".to_string())?
+        }
+    };
+
+    if coperceive_desktop::test_seams::test_env_active() && update.signature.is_empty() {
+        return Ok(());
+    }
+
+    let download_result = tauri::async_runtime::block_on(async {
+        update.download(|_chunk, _total| {}, || {}).await
+    });
+
+    match download_result {
+        Ok(bytes) => {
+            if coperceive_desktop::test_seams::test_env_active() {
+                return Ok(());
+            }
+            update.install(&bytes).map_err(|e| format!("Installation failed: {e}"))?;
+            handle.restart();
+            #[allow(unreachable_code)]
+            Ok(())
+        }
+        Err(err) => Err(format!("Update rejected: {err}")),
+    }
+}
+
+#[tauri::command]
+fn update_persistent_state(patch: serde_json::Value) -> Result<(), String> {
+    let mut persistent = state::load_state();
+    state::apply_state_patch(&mut persistent, &patch, state::StatePatchScope::Full)?;
+    state::save_state(&persistent)
+}
+
+#[tauri::command]
+async fn check_desktop_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    is_manual: bool,
+    update_url: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || run_updater_check(&app, &st, is_manual, update_url))
+        .await
+        .map_err(|e| format!("Update check task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn install_desktop_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    update_url: Option<String>,
+) -> Result<(), String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || run_updater_install(&app, &st, update_url))
+        .await
+        .map_err(|e| format!("Update install task failed: {e}"))?
+}
+
+mod viewer_bridge {
+    use super::*;
+
+    fn ensure_viewer_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+        if window.label() != "viewer" {
+            return Err("viewer-bridge commands are restricted to the viewer window".to_string());
+        }
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub fn viewer_get_dataset_scenes(
+        window: tauri::WebviewWindow,
+        state: tauri::State<'_, Arc<AppState>>,
+    ) -> Result<serde_json::Value, String> {
+        ensure_viewer_window(&window)?;
+        let scenes = state
+            .dataset_scenes
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or(serde_json::Value::Null);
+        Ok(serde_json::json!({ "dataset": scenes }))
+    }
+
+    #[tauri::command]
+    pub fn viewer_get_job(
+        window: tauri::WebviewWindow,
+        state: tauri::State<'_, Arc<AppState>>,
+    ) -> Result<serde_json::Value, String> {
+        ensure_viewer_window(&window)?;
+        Ok(serde_json::json!({ "session": viewer_session_status(&state) }))
+    }
+
+    #[tauri::command]
+    pub fn viewer_set_title(
+        window: tauri::WebviewWindow,
+        app: tauri::AppHandle,
+        scene: String,
+    ) -> Result<(), String> {
+        ensure_viewer_window(&window)?;
+        apply_viewer_window_title(&app, &scene);
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub fn viewer_prepare_scene(
+        window: tauri::WebviewWindow,
+        app: tauri::AppHandle,
+        scene_id: String,
+    ) -> Result<bool, String> {
+        ensure_viewer_window(&window)?;
+        prepare_scene_in_main_window(&app, &scene_id)
+    }
+
+    #[tauri::command]
+    pub fn viewer_show_library(
+        window: tauri::WebviewWindow,
+        app: tauri::AppHandle,
+    ) -> Result<bool, String> {
+        ensure_viewer_window(&window)?;
+        let shown = show_library_window(&app);
+        eprintln!("[viewer] show-library -> shown={shown} (ipc)");
+        Ok(shown)
+    }
+
+    #[tauri::command]
+    pub fn viewer_open_folder_dialog(
+        window: tauri::WebviewWindow,
+        app: tauri::AppHandle,
+        state: tauri::State<'_, Arc<AppState>>,
+    ) -> Result<(), String> {
+        ensure_viewer_window(&window)?;
+        let now = Instant::now();
+        {
+            let mut lock = state.last_open_dialog.lock().map_err(|e| e.to_string())?;
+            if let Some(last) = *lock {
+                if now.duration_since(last) < controller::OPEN_DIALOG_RATE_LIMIT {
+                    return Ok(());
+                }
+            }
+            *lock = Some(now);
+        }
+        let st = state.inner().clone();
+        tauri::async_runtime::spawn(async move {
+            trigger_open_dataset_dialog(&app, &st).await;
+        });
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub async fn viewer_pick_save_path(
+        window: tauri::WebviewWindow,
+        app: tauri::AppHandle,
+        state: tauri::State<'_, Arc<AppState>>,
+        default_name: String,
+        extension: String,
+    ) -> Result<Option<String>, String> {
+        ensure_viewer_window(&window)?;
+        let st = state.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            pick_save_path_inner(&app, &st, &default_name, &extension)
+        })
+        .await
+        .map_err(|e| format!("Failed to join export picker task: {e}"))?
+    }
+
+    #[tauri::command]
+    pub async fn viewer_save_exported_file(
+        window: tauri::WebviewWindow,
+        state: tauri::State<'_, Arc<AppState>>,
+        source_relative: Option<String>,
+        bytes: Option<Vec<u8>>,
+    ) -> Result<String, String> {
+        ensure_viewer_window(&window)?;
+        let st = state.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            save_exported_file_inner(&st, source_relative.as_deref(), bytes.as_deref())
+        })
+        .await
+        .map_err(|e| format!("Failed to join export save task: {e}"))?
+    }
+
+    #[tauri::command]
+    pub fn viewer_reveal_last_export(
+        window: tauri::WebviewWindow,
+        state: tauri::State<'_, Arc<AppState>>,
+    ) -> Result<(), String> {
+        ensure_viewer_window(&window)?;
+        reveal_last_export_inner(&state)
+    }
+
+    #[tauri::command]
+    pub fn viewer_get_preferences(
+        window: tauri::WebviewWindow,
+    ) -> Result<state::ViewerPreferences, String> {
+        ensure_viewer_window(&window)?;
+        Ok(state::viewer_preferences(&state::load_state()))
+    }
+
+    #[tauri::command]
+    pub fn viewer_update_preferences(
+        window: tauri::WebviewWindow,
+        patch: serde_json::Value,
+    ) -> Result<(), String> {
+        ensure_viewer_window(&window)?;
+        let mut persistent = state::load_state();
+        state::apply_state_patch(&mut persistent, &patch, state::StatePatchScope::ViewerOnly)?;
+        state::save_state(&persistent)
+    }
+
+    #[tauri::command]
+    pub async fn viewer_check_update(
+        window: tauri::WebviewWindow,
+        app: tauri::AppHandle,
+        state: tauri::State<'_, Arc<AppState>>,
+        is_manual: bool,
+        update_url: Option<String>,
+    ) -> Result<serde_json::Value, String> {
+        ensure_viewer_window(&window)?;
+        let st = state.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            run_updater_check(&app, &st, is_manual, update_url)
+        })
+        .await
+        .map_err(|e| format!("Update check task failed: {e}"))?
+    }
+
+    #[tauri::command]
+    pub async fn viewer_install_update(
+        window: tauri::WebviewWindow,
+        app: tauri::AppHandle,
+        state: tauri::State<'_, Arc<AppState>>,
+        update_url: Option<String>,
+    ) -> Result<(), String> {
+        ensure_viewer_window(&window)?;
+        let st = state.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || run_updater_install(&app, &st, update_url))
+            .await
+            .map_err(|e| format!("Update install task failed: {e}"))?
+    }
+}
+
+fn build_viewer_bridge_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("viewer-bridge")
+        .invoke_handler(tauri::generate_handler![
+            viewer_bridge::viewer_get_dataset_scenes,
+            viewer_bridge::viewer_get_job,
+            viewer_bridge::viewer_set_title,
+            viewer_bridge::viewer_prepare_scene,
+            viewer_bridge::viewer_show_library,
+            viewer_bridge::viewer_open_folder_dialog,
+            viewer_bridge::viewer_pick_save_path,
+            viewer_bridge::viewer_save_exported_file,
+            viewer_bridge::viewer_reveal_last_export,
+            viewer_bridge::viewer_get_preferences,
+            viewer_bridge::viewer_update_preferences,
+            viewer_bridge::viewer_check_update,
+            viewer_bridge::viewer_install_update,
+        ])
+        .build()
+}
+
 fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppState>) -> Result<u16, String> {
+    let test_env = coperceive_desktop::test_seams::test_env_active();
+    if !coperceive_desktop::controller::controller_enabled(test_env) {
+        return Err("Loopback controller is disabled outside test mode".to_string());
+    }
     let secret = coperceive_desktop::token::generate_secure_token().map_err(|e| e.to_string())?;
     let mut cfg = ControllerConfig::new(0, secret.clone(), None);
     let handle_eval = app_handle.clone();
@@ -798,45 +1296,14 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     cfg.library_shower = Some(Arc::new(move || show_library_window(&handle_library)));
     cfg.dataset_scenes = app_state.dataset_scenes.clone();
     let session_state = app_state.clone();
-    cfg.viewer_session = Some(Arc::new(move || {
-        let Ok(lock) = session_state.remote.lock() else {
-            return serde_json::Value::Null;
-        };
-        let Some(session) = lock.as_ref() else {
-            return serde_json::Value::Null;
-        };
-        match session.job_status() {
-            Ok(status) => serde_json::json!({
-                "job_id": status.job_id.or(session.job_id),
-                "state": status.state,
-                "status": status.status,
-                "time_left": status.time_left,
-                "time_left_seconds": status.time_left_seconds,
-                "elapsed": status.elapsed,
-            }),
-            Err(_) => serde_json::json!({ "job_id": session.job_id, "status": "unknown" }),
-        }
-    }));
+    cfg.viewer_session = Some(Arc::new(move || viewer_session_status(&session_state)));
     let handle_title = app_handle.clone();
     cfg.viewer_titler = Some(Arc::new(move |scene: String| {
-        use tauri::Manager;
-        if let Some(viewer) = handle_title.get_webview_window("viewer") {
-            let _ = viewer.set_title(&format!("coperceive — {scene}"));
-        }
+        apply_viewer_window_title(&handle_title, &scene);
     }));
     let handle_prepare = app_handle.clone();
     cfg.scene_preparer = Some(Arc::new(move |scene_id: String| {
-        use tauri::{Emitter, Manager};
-        // The main window shows the dataset view's prepare preview for this scene;
-        // the user confirms there (nothing is submitted from the viewer).
-        let Some(main) = handle_prepare.get_webview_window("main") else {
-            return false;
-        };
-        let _ = main.unminimize();
-        let _ = main.show();
-        let _ = main.set_focus();
-        let _ = main.emit("prepare-scene", serde_json::json!({ "scene_id": scene_id }));
-        main.is_visible().unwrap_or(false)
+        prepare_scene_in_main_window(&handle_prepare, &scene_id).unwrap_or(false)
     }));
     let handle_close = app_handle.clone();
     cfg.window_closer = Some(Arc::new(move |label: &str| {
@@ -849,213 +1316,42 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     let picker_handle = app_handle.clone();
     let picker_state = app_state.clone();
     cfg.export_picker = Some(Arc::new(move |default_name: &str, extension: &str| {
-        if let Some(path) = coperceive_desktop::test_seams::take_mock_dialog_path() {
-            picker_state.pending_export.set(Some(PathBuf::from(&path)));
-            return Ok(Some(path));
-        }
-        if coperceive_desktop::test_seams::test_env_active() {
-            picker_state.pending_export.set(None);
-            return Err("No mock dialog file path provided in test environment (seed COPERCEIVE_MOCK_DIALOG_FILE)".into());
-        }
-        #[cfg(target_os = "macos")]
-        {
-            use tauri_plugin_dialog::DialogExt;
-            let mut builder = picker_handle.dialog().file().set_file_name(default_name);
-            if !extension.is_empty() {
-                builder = builder.add_filter("Export File", &[extension]);
-            }
-            let choice = builder.blocking_save_file();
-            let path = choice.and_then(|fp| fp.into_path().ok()).map(|p| p.to_string_lossy().into_owned());
-            picker_state.pending_export.set(path.as_deref().map(PathBuf::from));
-            Ok(path)
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            picker_state.pending_export.set(None);
-            Ok(None)
-        }
+        pick_save_path_inner(&picker_handle, &picker_state, default_name, extension)
     }));
 
     let saver_state = app_state.clone();
     cfg.export_saver = Some(Arc::new(move |source_relative: Option<&str>, bytes: Option<&[u8]>| {
-        let dest_path = saver_state.pending_export.take()?;
-        let root_lock = saver_state.current_root.lock().map_err(|e| e.to_string())?;
-        let root_ref = root_lock.as_deref().map(Path::new);
-        coperceive_desktop::export::write_export_file(
-            root_ref,
-            source_relative,
-            &dest_path,
-            bytes,
-        )?;
-        let path_str = dest_path.to_string_lossy().into_owned();
-        saver_state.pending_export.set_last_saved(dest_path);
-        Ok(path_str)
+        save_exported_file_inner(&saver_state, source_relative, bytes)
     }));
 
     let revealer_state = app_state.clone();
-    cfg.finder_revealer = Some(Arc::new(move || {
-        let dest_path = revealer_state.pending_export.last_saved()?;
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open")
-                .arg("-R")
-                .arg(&dest_path)
-                .spawn()
-                .map_err(|e| format!("Failed to reveal in Finder: {e}"))?;
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = dest_path;
-        }
-        Ok(())
-    }));
+    cfg.finder_revealer = Some(Arc::new(move || reveal_last_export_inner(&revealer_state)));
 
     let check_handle = app_handle.clone();
     let check_state = app_state.clone();
-    cfg.updater_checker = Some(Arc::new(move |_is_manual: bool, override_url_opt: Option<String>| {
-        #[cfg(target_os = "macos")]
-        {
-            use tauri_plugin_updater::UpdaterExt;
-            let effective_url = coperceive_desktop::updater::resolve_update_endpoint_override(override_url_opt.as_deref());
-            let builder = if let Some(ref override_url) = effective_url {
-                if let Ok(parsed) = tauri::Url::parse(override_url) {
-                    check_handle.updater_builder().endpoints(vec![parsed]).unwrap_or_else(|_| check_handle.updater_builder())
-                } else {
-                    check_handle.updater_builder()
-                }
-            } else {
-                check_handle.updater_builder()
-            };
-            let updater = match builder.build() {
-                Ok(u) => u,
-                Err(err) => {
-                    let outcome = coperceive_desktop::updater::UpdateCheckOutcome::Error {
-                        error: err.to_string(),
-                        is_network: false,
-                    };
-                    return Ok(serde_json::to_value(&outcome).unwrap_or_default());
-                }
-            };
-            match tauri::async_runtime::block_on(updater.check()) {
-                Ok(Some(update)) => {
-                    let date_str = update.date.map(|d| d.to_string());
-                    let outcome = coperceive_desktop::updater::UpdateCheckOutcome::Available {
-                        version: update.version.clone(),
-                        current_version: update.current_version.clone(),
-                        notes: update.body.clone(),
-                        pub_date: date_str,
-                    };
-                    if let Ok(mut lock) = check_state.pending_update.lock() {
-                        *lock = Some(update);
-                    }
-                    Ok(serde_json::to_value(&outcome).unwrap_or_default())
-                }
-                Ok(None) => {
-                    let outcome = coperceive_desktop::updater::UpdateCheckOutcome::UpToDate {
-                        current_version: coperceive_desktop::updater::app_version(&check_handle.package_info().version),
-                    };
-                    Ok(serde_json::to_value(&outcome).unwrap_or_default())
-                }
-                Err(err) => {
-                    match &err {
-                        tauri_plugin_updater::Error::ReleaseNotFound => {
-                            let outcome = coperceive_desktop::updater::UpdateCheckOutcome::UpToDate {
-                                current_version: coperceive_desktop::updater::app_version(&check_handle.package_info().version),
-                            };
-                            Ok(serde_json::to_value(&outcome).unwrap_or_default())
-                        }
-                        _ => {
-                            let is_network = matches!(
-                                err,
-                                tauri_plugin_updater::Error::Reqwest(_) | tauri_plugin_updater::Error::Network(_)
-                            );
-                            let outcome = coperceive_desktop::updater::UpdateCheckOutcome::Error {
-                                error: err.to_string(),
-                                is_network,
-                            };
-                            Ok(serde_json::to_value(&outcome).unwrap_or_default())
-                        }
-                    }
-                }
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            Ok(serde_json::json!({
-                "status": "uptodate",
-                "current_version": coperceive_desktop::updater::app_version(&check_handle.package_info().version),
-            }))
-        }
+    cfg.updater_checker = Some(Arc::new(move |is_manual: bool, override_url_opt: Option<String>| {
+        run_updater_check(&check_handle, &check_state, is_manual, override_url_opt)
     }));
 
     let install_handle = app_handle.clone();
     let install_state = app_state.clone();
     cfg.updater_installer = Some(Arc::new(move |override_url_opt: Option<String>| {
-        #[cfg(target_os = "macos")]
-        {
-            let update_opt = {
-                let lock = install_state.pending_update.lock().map_err(|e| e.to_string())?;
-                lock.clone()
-            };
-            let update = match update_opt {
-                Some(u) => u,
-                None => {
-                    use tauri_plugin_updater::UpdaterExt;
-                    let effective_url = coperceive_desktop::updater::resolve_update_endpoint_override(override_url_opt.as_deref());
-                    let builder = if let Some(ref override_url) = effective_url {
-                        if let Ok(parsed) = tauri::Url::parse(override_url) {
-                            install_handle.updater_builder().endpoints(vec![parsed]).unwrap_or_else(|_| install_handle.updater_builder())
-                        } else {
-                            install_handle.updater_builder()
-                        }
-                    } else {
-                        install_handle.updater_builder()
-                    };
-                    let updater = builder.build().map_err(|e| e.to_string())?;
-                    let u = tauri::async_runtime::block_on(updater.check()).map_err(|e| e.to_string())?;
-                    u.ok_or_else(|| "No update available to install".to_string())?
-                }
-            };
-
-            if coperceive_desktop::test_seams::test_env_active() && update.signature.is_empty() {
-                return Ok(());
-            }
-
-            let download_result = tauri::async_runtime::block_on(async {
-                update.download(|_chunk, _total| {}, || {}).await
-            });
-
-            match download_result {
-                Ok(bytes) => {
-                    if coperceive_desktop::test_seams::test_env_active() {
-                        return Ok(());
-                    }
-                    update.install(&bytes).map_err(|e| format!("Installation failed: {e}"))?;
-                    install_handle.restart();
-                    Ok(())
-                }
-                Err(err) => {
-                    Err(format!("Update rejected: {err}"))
-                }
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            Ok(())
-        }
+        run_updater_install(&install_handle, &install_state, override_url_opt)
     }));
 
     let cfg_clone = cfg.clone();
     let handle = app_handle.clone();
     let st = app_state.clone();
 
-    let (port, _) = controller::spawn_controller(cfg, move || {
+    let Some((port, _)) = controller::spawn_controller_if_enabled(test_env, cfg, move || {
         let h = handle.clone();
         let s = st.clone();
         tauri::async_runtime::spawn(async move {
             trigger_open_dataset_dialog(&h, &s).await;
         });
-    })?;
+    })? else {
+        return Err("Loopback controller is disabled outside test mode".to_string());
+    };
 
     if let Ok(mut lock) = app_state.ctrl_port.lock() {
         *lock = Some(port);
@@ -1083,21 +1379,13 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     Ok(port)
 }
 
-#[cfg(target_os = "macos")]
 fn build_app_menu(
     app: &tauri::AppHandle,
     recent_roots: &[String],
 ) -> Result<tauri::menu::Menu<tauri::Wry>, tauri::Error> {
     use tauri::menu::*;
 
-    // App Submenu
-    let app_submenu = SubmenuBuilder::new(app, "Coperceive")
-        .item(&MenuItem::with_id(app, "about_coperceive", "About Coperceive", true, None::<&str>)?)
-        .separator()
-        .item(&MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrControl+,"))?)
-        .separator()
-        .quit()
-        .build()?;
+    let is_macos = cfg!(target_os = "macos");
 
     // File Submenu
     let mut file_builder = SubmenuBuilder::new(app, "File")
@@ -1123,9 +1411,19 @@ fn build_app_menu(
         }
     }
     let recent_submenu = recent_builder.build()?;
-    file_builder = file_builder.item(&recent_submenu)
-        .separator()
-        .close_window();
+    file_builder = file_builder.item(&recent_submenu);
+
+    if !is_macos {
+        file_builder = file_builder
+            .separator()
+            .item(&MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrControl+,"))?)
+            .separator()
+            .item(&MenuItem::with_id(app, "quit", "Exit", true, Some("CmdOrControl+Q"))?);
+    } else {
+        file_builder = file_builder
+            .separator()
+            .close_window();
+    }
     let file_submenu = file_builder.build()?;
 
     // Edit Submenu
@@ -1174,7 +1472,15 @@ fn build_app_menu(
         .build()?;
 
     // Help Submenu
-    let help_submenu = SubmenuBuilder::new(app, "Help")
+    let mut help_builder = SubmenuBuilder::new(app, "Help");
+    if !is_macos {
+        help_builder = help_builder
+            .item(&MenuItem::with_id(app, "about_coperceive", "About Coperceive", true, None::<&str>)?)
+            .separator();
+    }
+    let help_submenu = help_builder
+        .item(&MenuItem::with_id(app, "open_demo", "Open the Demo", true, None::<&str>)?)
+        .separator()
         .item(&MenuItem::with_id(app, "check_updates", "Check for Updates…", true, None::<&str>)?)
         .separator()
         .item(&MenuItem::with_id(app, "help_logs", "Show Logs", true, None::<&str>)?)
@@ -1186,22 +1492,91 @@ fn build_app_menu(
         .item(&MenuItem::with_id(app, "help_issue", "Report Issue", true, None::<&str>)?)
         .build()?;
 
-    MenuBuilder::new(app)
-        .items(&[
-            &app_submenu,
-            &file_submenu,
-            &edit_submenu,
-            &view_submenu,
-            &playback_submenu,
-            &help_submenu,
-        ])
-        .build()
+    let menu_builder = MenuBuilder::new(app);
+    if is_macos {
+        let app_submenu = SubmenuBuilder::new(app, "Coperceive")
+            .item(&MenuItem::with_id(app, "about_coperceive", "About Coperceive", true, None::<&str>)?)
+            .separator()
+            .item(&MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrControl+,"))?)
+            .separator()
+            .quit()
+            .build()?;
+        menu_builder
+            .items(&[
+                &app_submenu,
+                &file_submenu,
+                &edit_submenu,
+                &view_submenu,
+                &playback_submenu,
+                &help_submenu,
+            ])
+            .build()
+    } else {
+        menu_builder
+            .items(&[
+                &file_submenu,
+                &edit_submenu,
+                &view_submenu,
+                &playback_submenu,
+                &help_submenu,
+            ])
+            .build()
+    }
+}
+
+fn schedule_app_menu_refresh(
+    app: &tauri::AppHandle,
+    previous_recent: &[String],
+    updated_recent: &[String],
+) {
+    if !state::recent_roots_changed(previous_recent, updated_recent) {
+        return;
+    }
+    let handle = app.clone();
+    let recent_roots = updated_recent.to_vec();
+    let _ = app.run_on_main_thread(move || {
+        if let Ok(menu) = build_app_menu(&handle, &recent_roots) {
+            let _ = handle.set_menu(menu);
+        }
+    });
+}
+
+fn write_test_marker_file(state: &AppState, session: Option<(&str, &str)>) {
+    let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") else {
+        return;
+    };
+    let (origin, token, log_path_str) = match session {
+        Some((orig, tok)) => {
+            let log_path = state
+                .sidecar
+                .lock()
+                .ok()
+                .and_then(|s| s.as_ref().map(|sess| sess.log_path.display().to_string()))
+                .unwrap_or_default();
+            (orig, tok, log_path)
+        }
+        None => ("", "", String::new()),
+    };
+    let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
+    let ctrl_secret = state
+        .ctrl_secret
+        .lock()
+        .ok()
+        .and_then(|s| s.clone())
+        .unwrap_or_default();
+    let _ = coperceive_desktop::test_seams::write_test_marker_atomic(
+        Path::new(&marker_path),
+        origin,
+        token,
+        &log_path_str,
+        ctrl_port,
+        &ctrl_secret,
+    );
 }
 
 /// The library's shared maps root, passed to the local server so maps installed
 /// from the Library card (library_root/maps) are found even when the server root
 /// is a single scene directory.
-#[cfg(target_os = "macos")]
 fn library_maps_root() -> Option<PathBuf> {
     let persistent = state::load_state();
     let root = persistent
@@ -1216,11 +1591,19 @@ fn library_maps_root() -> Option<PathBuf> {
     Some(root.join("maps"))
 }
 
-#[cfg(target_os = "macos")]
 async fn start_local_session(
     app: &tauri::AppHandle,
     state: &AppState,
     data_root: String,
+) -> Result<SessionPayload, String> {
+    start_local_session_inner(app, state, data_root, false).await
+}
+
+async fn start_local_session_inner(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    data_root: String,
+    is_restore: bool,
 ) -> Result<SessionPayload, String> {
     let root_path = PathBuf::from(&data_root);
     if let Err(msg) = state::validate_dataset_root(&root_path) {
@@ -1236,11 +1619,37 @@ async fn start_local_session(
         if let Ok(mut current) = state.stream_key.lock() {
             *current = None;
         }
+        if let Ok(mut scenes) = state.dataset_scenes.lock() {
+            *scenes = serde_json::Value::Null;
+        }
     }
+    disconnect_remote_in_background(&state);
 
     let python_bin = resolve_python_binary(app);
+    let maps_root = library_maps_root();
+    let cwd = std::env::current_dir().ok();
+    let path_len = std::env::var_os("PATH").map(|p| p.len()).unwrap_or(0);
+    set_auto_connect_state(
+        app,
+        state,
+        "spawning_sidecar",
+        serde_json::json!({
+            "python_bin": python_bin.display().to_string(),
+            "python_exists": python_bin.is_file(),
+            "data_root": data_root,
+            "maps_root": maps_root.as_ref().map(|p| p.display().to_string()),
+            "cwd": cwd.as_ref().map(|p| p.display().to_string()),
+            "path_len": path_len,
+        }),
+    );
+    let mut extra_args = Vec::new();
+    if let Some(pred_dir) = coperceive_desktop::demo::demo_predictions_for_path(&root_path) {
+        extra_args.push("--predictions".to_string());
+        extra_args.push(pred_dir.to_string_lossy().into_owned());
+    }
+
     let mut session =
-        SidecarSession::spawn_with_maps(&python_bin, &root_path, library_maps_root().as_deref(), None)
+        SidecarSession::spawn_with_args(&python_bin, &root_path, maps_root.as_deref(), None, &extra_args)
         .map_err(|e| format!("Failed to spawn local sidecar: {}", e))?;
 
     let origin = format!("http://127.0.0.1:{}", session.port);
@@ -1254,7 +1663,29 @@ async fn start_local_session(
 
     // Poll until healthy (up to 60 seconds)
     let start_time = Instant::now();
-    if let Err(e) = reqwest_like_poll(&origin, &token, Duration::from_secs(60)) {
+    set_auto_connect_state(
+        app,
+        state,
+        "polling_health",
+        serde_json::json!({
+            "port": session.port,
+            "alive": session.is_alive(),
+        }),
+    );
+    if let Err(e) = session.wait_until_healthy(Duration::from_secs(60)) {
+        let alive_after_timeout = session.is_alive();
+        set_auto_connect_state(
+            app,
+            state,
+            "error",
+            serde_json::json!({
+                "stage": "polling_health",
+                "port": session.port,
+                "alive": alive_after_timeout,
+                "poll_elapsed_ms": start_time.elapsed().as_millis() as u64,
+                "error": e,
+            }),
+        );
         // Prevent deletion of log on failed start
         session.preserve_log = true;
         let mut log_tail = String::new();
@@ -1263,9 +1694,9 @@ async fn start_local_session(
             let start = lines.len().saturating_sub(20);
             log_tail = lines[start..].join("\n");
         }
-        // Copy serve-<port>.log to ~/Library/Logs/Coperceive/
-        if let Some(home) = std::env::var_os("HOME") {
-            let log_dir = PathBuf::from(home).join("Library/Logs/Coperceive");
+        // Copy serve-<port>.log to log dir
+        {
+            let log_dir = platform::get_log_dir();
             let _ = fs::create_dir_all(&log_dir);
             let dest_log = log_dir.join(format!("serve-{}.log", session.port));
             let _ = fs::copy(&session.log_path, &dest_log);
@@ -1276,13 +1707,23 @@ async fn start_local_session(
             format!("Last 20 lines of server log ({}):\n{}", session.log_path.display(), log_tail)
         };
         let _ = session.stop();
-        return Err(format!("Timed out waiting for local serve: {}\n\n{}", e, tail_msg));
+        return Err(format!("Timed out waiting for local serve (alive={}): {}\n\n{}", alive_after_timeout, e, tail_msg));
     }
 
     let elapsed = start_time.elapsed();
+    set_auto_connect_state(
+        app,
+        state,
+        "health_ready",
+        serde_json::json!({
+            "port": session.port,
+            "poll_elapsed_ms": elapsed.as_millis() as u64,
+        }),
+    );
     println!("[local-serve] Local server started and became healthy in {:.2?}", elapsed);
-    if let Some(home) = std::env::var_os("HOME") {
-        let log_dir = PathBuf::from(home).join("Library/Logs/Coperceive");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    {
+        let log_dir = platform::get_log_dir();
         let _ = fs::create_dir_all(&log_dir);
         let log_file = log_dir.join("desktop.log");
         if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&log_file) {
@@ -1294,24 +1735,53 @@ async fn start_local_session(
     // Persist new root to state.json and update recent_roots
     {
         let mut persistent = state::load_state();
+        let previous_recent = persistent.recent_roots.clone();
+        if !is_restore || persistent.last_data_root.as_deref() != Some(data_root.as_str()) {
+            persistent.last_scene_id = None;
+            persistent.last_sample_index = None;
+            persistent.last_timestamp_us = None;
+            persistent._legacy_timestamp_ns = None;
+            persistent.agent_visibility = None;
+        }
         persistent.last_data_root = Some(data_root.clone());
         state::add_recent_root(&mut persistent, &data_root);
         let _ = state::save_state(&persistent);
 
-        // Update application menu with refreshed recent roots
-        if let Ok(menu) = build_app_menu(app, &persistent.recent_roots) {
-            let _ = app.set_menu(menu);
-        }
+        schedule_app_menu_refresh(app, &previous_recent, &persistent.recent_roots);
     }
 
     let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
+    set_auto_connect_state(
+        app,
+        state,
+        "state_saved",
+        serde_json::json!({ "origin": origin }),
+    );
 
     // Open viewer window at session.origin with initialization_script
+    set_auto_connect_state(
+        app,
+        state,
+        "opening_viewer",
+        serde_json::json!({ "origin": origin }),
+    );
     if let Err(e) = open_viewer_window(app, &origin, &token, &data_root, ctrl_port, state, None) {
+        set_auto_connect_state(
+            app,
+            state,
+            "error",
+            serde_json::json!({ "stage": "opening_viewer", "error": e }),
+        );
         session.preserve_log = true;
         let _ = session.stop();
         return Err(e);
     }
+    set_auto_connect_state(
+        app,
+        state,
+        "connected",
+        serde_json::json!({ "origin": origin }),
+    );
 
     let payload = SessionPayload {
         origin,
@@ -1330,10 +1800,11 @@ async fn start_local_session(
         *lock = Some(data_root);
     }
 
+    write_test_marker_file(state, Some((&payload.origin, &payload.token)));
+
     Ok(payload)
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn start_local(
     app: tauri::AppHandle,
@@ -1356,7 +1827,6 @@ async fn start_local(
     start_local_session(&app, state.inner(), data_root).await
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn stop_local(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
     let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
@@ -1366,14 +1836,11 @@ async fn stop_local(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 static IMPORT_PID: Mutex<Option<u32>> = Mutex::new(None);
 
 /// One background library validation at a time.
-#[cfg(target_os = "macos")]
 static VALIDATION_RUNNING: AtomicBool = AtomicBool::new(false);
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn import_from_folder(
     app: tauri::AppHandle,
@@ -1385,7 +1852,7 @@ fn import_from_folder(
 ) -> Result<(), String> {
     use coperceive_desktop::pack::scene_pack_args;
     use std::io::{BufRead, BufReader};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use tauri::Emitter;
 
     {
@@ -1409,7 +1876,7 @@ fn import_from_folder(
         griffin_root.as_deref(),
     )?;
     let python = resolve_python_binary(&app);
-    let mut child = Command::new(&python)
+    let mut child = platform::python_command(&python)
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1458,7 +1925,6 @@ fn import_from_folder(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn cancel_import() -> Result<(), String> {
     let pid = {
@@ -1466,18 +1932,13 @@ fn cancel_import() -> Result<(), String> {
         slot.take()
     };
     if let Some(pid) = pid {
-        // SAFETY: pid is the id of the scene-pack child this process spawned.
-        unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
-        }
+        let _ = platform::terminate_process(pid);
     }
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 static DATASET_JOB_PID: Mutex<Option<u32>> = Mutex::new(None);
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn library_thumbnail(scene_path: String) -> Result<Option<Vec<u8>>, String> {
     let p = state::load_state();
@@ -1488,14 +1949,12 @@ fn library_thumbnail(scene_path: String) -> Result<Option<Vec<u8>>, String> {
 }
 
 /// Open Folder's "Folder check": what a folder holds, read from its manifests.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn inspect_folder(path: String) -> coperceive_desktop::library::FolderCheck {
     let library_root = state::load_state().library_root.map(PathBuf::from);
     coperceive_desktop::library::inspect_folder(Path::new(&path), library_root.as_deref())
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn get_storage_info() -> Result<coperceive_desktop::library::StorageStats, String> {
     let p = state::load_state();
@@ -1506,7 +1965,6 @@ fn get_storage_info() -> Result<coperceive_desktop::library::StorageStats, Strin
     Ok(coperceive_desktop::library::get_storage_stats(Path::new(&root), is_configured))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn set_library_root(new_root: String) -> Result<coperceive_desktop::library::StorageStats, String> {
     let mut p = state::load_state();
@@ -1515,7 +1973,6 @@ fn set_library_root(new_root: String) -> Result<coperceive_desktop::library::Sto
     Ok(coperceive_desktop::library::get_storage_stats(Path::new(&new_root), true))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn move_library_root(new_root: String) -> Result<coperceive_desktop::library::StorageStats, String> {
     let mut p = state::load_state();
@@ -1530,11 +1987,136 @@ fn move_library_root(new_root: String) -> Result<coperceive_desktop::library::St
     Ok(coperceive_desktop::library::get_storage_stats(Path::new(&new_root), true))
 }
 
+/// The verified CARLA town table plus installed maps under <library_root>/maps.
+#[tauri::command]
+async fn list_carla_maps(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let persistent = state::load_state();
+        let library_root = persistent
+            .library_root
+            .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
+        let maps_root = PathBuf::from(library_root).join("maps");
+        let python = resolve_python_binary(&app);
+        let output = platform::python_command(&python)
+            .args([
+                "-m", "coperceive.cli", "maps", "list",
+                "--maps", &maps_root.to_string_lossy(),
+            ])
+            .output()
+            .map_err(|error| format!("Could not list CARLA maps: {error}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        serde_json::from_slice(&output.stdout)
+            .map_err(|error| format!("Could not read CARLA map list: {error}"))
+    })
+    .await
+    .map_err(|error| format!("CARLA map list failed: {error}"))?
+}
+
+/// Install one town whose SHA-256 is pinned in ADR 0008.
+#[tauri::command]
+async fn install_carla_map(
+    app: tauri::AppHandle,
+    town: String,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::{BufRead, BufReader, Read};
+        use std::process::Stdio;
+        use tauri::Emitter;
+        let persistent = state::load_state();
+        let library_root = persistent
+            .library_root
+            .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
+        let library_root = PathBuf::from(library_root)
+            .canonicalize()
+            .map_err(|error| format!("Could not open the library root: {error}"))?;
+        let maps_root = library_root.join("maps");
+        let python = resolve_python_binary(&app);
+        let mut child = platform::python_command(&python)
+            .args([
+                "-m", "coperceive.cli", "maps", "install",
+                "--town", &town,
+                "--maps", &maps_root.to_string_lossy(),
+                "--scenes", &library_root.to_string_lossy(),
+                "--progress-json",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("Could not start the CARLA map installer: {error}"))?;
+        let stderr = child.stderr.take().map(|stderr| {
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                let _ = BufReader::new(stderr).read_to_string(&mut text);
+                text
+            })
+        });
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "Could not read CARLA map progress.".to_string())?;
+        let mut report: Option<serde_json::Value> = None;
+        for line in BufReader::new(stdout).lines() {
+            let line = line.map_err(|error| format!("Could not read CARLA map progress: {error}"))?;
+            if line.trim().is_empty() { continue; }
+            match serde_json::from_str::<serde_json::Value>(&line) {
+                Ok(event) if event.get("event").and_then(|v| v.as_str()) == Some("result") => {
+                    report = event.get("report").cloned();
+                }
+                Ok(event) => { let _ = app.emit("carla-map-progress", event); }
+                Err(_) => {
+                    let _ = app.emit(
+                        "carla-map-progress",
+                        serde_json::json!({"event": "log", "message": line}),
+                    );
+                }
+            }
+        }
+        let status = child
+            .wait()
+            .map_err(|error| format!("The CARLA map installer did not finish: {error}"))?;
+        let stderr = stderr.and_then(|handle| handle.join().ok()).unwrap_or_default();
+        if !status.success() {
+            return Err(format!(
+                "CARLA map install failed: {}",
+                stderr.trim().lines().last().unwrap_or("unknown error")
+            ));
+        }
+        report.ok_or_else(|| "The CARLA map installer returned no result.".to_string())
+    })
+    .await
+    .map_err(|error| format!("CARLA map install failed: {error}"))?
+}
+
+#[tauri::command]
+async fn remove_carla_map(app: tauri::AppHandle, town: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let persistent = state::load_state();
+        let library_root = persistent
+            .library_root
+            .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
+        let maps_root = PathBuf::from(library_root).join("maps");
+        let python = resolve_python_binary(&app);
+        let output = platform::python_command(&python)
+            .args([
+                "-m", "coperceive.cli", "maps", "remove",
+                "--town", &town,
+                "--maps", &maps_root.to_string_lossy(),
+            ])
+            .output()
+            .map_err(|error| format!("Could not remove the CARLA map: {error}"))?;
+        if output.status.success() { Ok(()) }
+        else { Err(String::from_utf8_lossy(&output.stderr).trim().to_string()) }
+    })
+    .await
+    .map_err(|error| format!("CARLA map removal failed: {error}"))?
+}
+
 /// One-click install of the official Town03 OpenDRIVE for a library scene:
 /// download (pinned mirror + SHA), ingest as a shared map, align to the scene
 /// poses, store under library_root/maps. Progress events are streamed as
 /// `town-map-progress` payloads.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn download_town_map(
     app: tauri::AppHandle,
@@ -1542,7 +2124,7 @@ async fn download_town_map(
 ) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::{BufRead, BufReader, Read};
-        use std::process::{Command, Stdio};
+        use std::process::Stdio;
         use tauri::Emitter;
 
         let persistent = state::load_state();
@@ -1567,7 +2149,7 @@ async fn download_town_map(
         }
         let maps_root = library_root.join("maps");
         let python = resolve_python_binary(&app);
-        let mut child = Command::new(&python)
+        let mut child = platform::python_command(&python)
             .args([
                 "-m",
                 "coperceive.cli",
@@ -1635,7 +2217,6 @@ async fn download_town_map(
     .map_err(|error| format!("Town03 map install failed: {error}"))?
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn get_library_scenes(
     app: tauri::AppHandle,
@@ -1645,42 +2226,116 @@ fn get_library_scenes(
         .library_root
         .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
     let cache = p.validation_cache.unwrap_or_default();
-    let scenes = coperceive_desktop::library::scan_library_scenes_with_cache(Path::new(&root), &cache);
-    let pending = scenes
-        .iter()
-        .map(|scene| (scene.path.clone(), scene.is_valid.is_some()))
-        .collect();
+    let mut scenes = coperceive_desktop::library::scan_library_scenes_with_cache(Path::new(&root), &cache);
+    if coperceive_desktop::demo::is_demo_valid() {
+        if let Ok(demo_scene) = coperceive_desktop::demo::demo_scene_path() {
+            if let Some(mut info) = coperceive_desktop::library::parse_scene_info_with_cache(
+                &demo_scene,
+                &cache,
+                demo_scene.parent().unwrap_or(Path::new("")),
+            ) {
+                info.dataset = "Demo (synthetic)".to_string();
+                info.is_valid = Some(true);
+                scenes.push(info);
+            }
+        }
+    }
+    scenes.sort_by(|a, b| a.scene_id.cmp(&b.scene_id));
+    let pending = {
+        use tauri::Manager;
+        let app_state = app.state::<Arc<AppState>>();
+        let mut seen = app_state
+            .validated_scenes_this_run
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        scenes
+            .iter()
+            .filter(|scene| {
+                !coperceive_desktop::demo::is_demo_path(Path::new(&scene.path))
+                    || scene.duration_s.is_none()
+            })
+            .map(|scene| {
+                let needs_duration_backfill =
+                    scene.is_valid.is_some() && scene.duration_s.is_none();
+                let already_tried = needs_duration_backfill && !seen.insert(scene.path.clone());
+                let cached =
+                    scene.is_valid.is_some() && (scene.duration_s.is_some() || already_tried);
+                (scene.path.clone(), cached)
+            })
+            .collect()
+    };
     spawn_library_validation(app, pending);
     Ok(scenes)
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
-fn delete_library_scene(scene_path: String) -> Result<(), String> {
-    coperceive_desktop::library::delete_scene_to_trash(Path::new(&scene_path))
-        .map_err(|e| format!("Failed to delete scene: {e}"))
+async fn delete_library_scene(scene_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = Path::new(&scene_path);
+        if coperceive_desktop::demo::is_demo_path(path) {
+            return coperceive_desktop::demo::delete_demo();
+        }
+        coperceive_desktop::library::delete_scene_to_trash(path)
+            .map_err(|e| format!("Failed to delete scene: {e}"))
+    })
+    .await
+    .map_err(|e| format!("Task execution failed: {e}"))?
 }
 
-#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn ensure_demo_scene(app: tauri::AppHandle) -> Result<coperceive_desktop::demo::DemoOutcome, String> {
+    use tauri::Emitter;
+    let python = resolve_python_binary(&app);
+    let app_for_progress = app.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        coperceive_desktop::demo::ensure_demo_with_progress(&python, |stage, elapsed_seconds| {
+            let _ = app_for_progress.emit(
+                "coperceive-demo-progress",
+                serde_json::json!({
+                    "stage": stage,
+                    "elapsed_seconds": elapsed_seconds,
+                }),
+            );
+        })
+    })
+    .await
+    .map_err(|e| format!("Task execution failed: {e}"))??;
+
+    println!(
+        "COPERCEIVE_DEMO_OUTCOME: python={} elapsed_s={:.2} bytes={} cached={} path={}",
+        outcome.python_path,
+        outcome.elapsed_seconds,
+        outcome.bytes,
+        outcome.cached,
+        outcome.path
+    );
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    Ok(outcome)
+}
+
+#[tauri::command]
+fn cancel_demo_scene() -> Result<(), String> {
+    coperceive_desktop::demo::cancel_demo()
+}
+
+#[tauri::command]
+fn dismiss_welcome_card() -> Result<(), String> {
+    let mut p = state::load_state();
+    p.welcome_card_dismissed = true;
+    state::save_state(&p)
+}
+
 #[tauri::command]
 fn reveal_in_finder(path: String) -> Result<(), String> {
-    std::process::Command::new("open")
-        .arg("-R")
-        .arg(&path)
-        .spawn()
-        .map_err(|e| format!("Failed to reveal in Finder: {e}"))?;
-    Ok(())
+    platform::reveal_path(Path::new(&path))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn dataset_dry_run(
     app: tauri::AppHandle,
     dataset_id: String,
     preset_id: String,
 ) -> Result<serde_json::Value, String> {
-    use std::process::Command;
-
     // Test-only: the e2e cannot wait for the Hugging Face tree listing, so the
     // deterministic fake job returns the same JSON shape without network access.
     // Inert unless COPERCEIVE_TEST_FAKE_DATASET_JOB is set in test mode.
@@ -1695,7 +2350,7 @@ fn dataset_dry_run(
         .library_root
         .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
     let python = resolve_python_binary(&app);
-    let output = Command::new(&python)
+    let output = platform::python_command(&python)
         .args([
             "-m",
             "coperceive.cli",
@@ -1722,7 +2377,6 @@ fn dataset_dry_run(
     ))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn start_dataset_job(
     app: tauri::AppHandle,
@@ -1777,7 +2431,7 @@ fn start_dataset_job(
         if accept_terms {
             cmd_args.push("--accept-terms".to_string());
         }
-        let mut command = Command::new(&python);
+        let mut command = platform::python_command(&python);
         command.args(&cmd_args);
         command
     };
@@ -1835,7 +2489,6 @@ fn start_dataset_job(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn cancel_dataset_job() -> Result<(), String> {
     let pid = {
@@ -1843,43 +2496,35 @@ fn cancel_dataset_job() -> Result<(), String> {
         slot.take()
     };
     if let Some(pid) = pid {
-        unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
-        }
+        let _ = platform::terminate_process(pid);
     }
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
-fn signal_dataset_job(signal: i32) -> Result<(), String> {
+#[tauri::command]
+fn pause_dataset_job() -> Result<(), String> {
     let slot = DATASET_JOB_PID.lock().map_err(|err| err.to_string())?;
     if let Some(pid) = *slot {
-        unsafe {
-            libc::kill(pid as i32, signal);
-        }
-        Ok(())
+        platform::pause_process(pid)
     } else {
         Err("No download is running.".into())
     }
 }
 
-#[cfg(target_os = "macos")]
-#[tauri::command]
-fn pause_dataset_job() -> Result<(), String> {
-    signal_dataset_job(libc::SIGSTOP)
-}
-
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn resume_dataset_job() -> Result<(), String> {
-    signal_dataset_job(libc::SIGCONT)
+    let slot = DATASET_JOB_PID.lock().map_err(|err| err.to_string())?;
+    if let Some(pid) = *slot {
+        platform::resume_process(pid)
+    } else {
+        Err("No download is running.".into())
+    }
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn dataset_catalog(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let python = resolve_python_binary(&app);
-    let output = std::process::Command::new(&python)
+    let output = platform::python_command(&python)
         .args(["-m", "coperceive.cli", "dataset", "catalog"])
         .output()
         .map_err(|err| format!("Could not read the dataset list. Try again. {err}"))?;
@@ -1893,7 +2538,6 @@ fn dataset_catalog(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         .map_err(|err| format!("Could not read the dataset list. {err}"))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn set_auto_download_updates(enabled: bool) -> Result<(), String> {
     let mut persistent = state::load_state();
@@ -1901,13 +2545,10 @@ fn set_auto_download_updates(enabled: bool) -> Result<(), String> {
     state::save_state(&persistent)
 }
 
-#[cfg(target_os = "macos")]
 fn run_scene_validation(
     python: &Path,
     scene_path: &str,
 ) -> Result<(bool, String, String, SceneTiming), String> {
-    use std::process::Command;
-
     let report_dir = std::env::temp_dir().join(format!(
         "coperceive-validate-{}-{}",
         std::process::id(),
@@ -1920,7 +2561,7 @@ fn run_scene_validation(
         .map_err(|err| format!("Failed to create the validation report directory: {err}"))?;
     let json_path = report_dir.join("report.json");
     let markdown_path = report_dir.join("report.md");
-    let output = Command::new(python)
+    let output = platform::python_command(python)
         .args(["-m", "coperceive.cli", "validate", scene_path])
         .arg("--json")
         .arg(&json_path)
@@ -1959,14 +2600,12 @@ fn run_scene_validation(
 }
 
 /// Frames per agent and pose time range of the one scene a validate report read.
-#[cfg(target_os = "macos")]
 #[derive(Default)]
 struct SceneTiming {
     frames: Option<usize>,
     time_range_us: Option<(i64, i64)>,
 }
 
-#[cfg(target_os = "macos")]
 impl SceneTiming {
     fn from_report(report: &serde_json::Value) -> Self {
         let scene = report.pointer("/scenes/0");
@@ -1984,7 +2623,6 @@ impl SceneTiming {
 }
 
 /// Remember a validation answer, keyed by the scene directory and manifest mtime.
-#[cfg(target_os = "macos")]
 fn remember_scene_validation(scene_path: &str, valid: bool, timing: SceneTiming) {
     let Some(mtime) = coperceive_desktop::library::manifest_mtime_ms(Path::new(scene_path)) else {
         return;
@@ -2008,7 +2646,6 @@ fn remember_scene_validation(scene_path: &str, valid: bool, timing: SceneTiming)
 }
 
 /// Validate a scene in the background and remember the answer in `state.json`.
-#[cfg(target_os = "macos")]
 fn store_scene_validation(python: &Path, scene_path: &str) -> Result<bool, String> {
     let (valid, _, _, timing) = run_scene_validation(python, scene_path)?;
     remember_scene_validation(scene_path, valid, timing);
@@ -2016,7 +2653,6 @@ fn store_scene_validation(python: &Path, scene_path: &str) -> Result<bool, Strin
 }
 
 /// Validate stale library scenes in the background. One run at a time.
-#[cfg(target_os = "macos")]
 fn spawn_library_validation(app: tauri::AppHandle, scenes: Vec<(String, bool)>) {
     if scenes.iter().all(|(_, fresh)| *fresh) {
         return;
@@ -2036,7 +2672,6 @@ fn spawn_library_validation(app: tauri::AppHandle, scenes: Vec<(String, bool)>) 
     });
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn validate_scene(
     app: tauri::AppHandle,
@@ -2053,7 +2688,6 @@ fn validate_scene(
     }))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn health(state: tauri::State<'_, Arc<AppState>>) -> Result<HealthPayload, String> {
     let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
@@ -2075,23 +2709,20 @@ async fn health(state: tauri::State<'_, Arc<AppState>>) -> Result<HealthPayload,
 
 /// Local ssh binary. `COPERCEIVE_SSH_BIN` is used by tests and the CI
 /// packaged-app e2e harness; production uses the system ssh.
-#[cfg(target_os = "macos")]
 fn ssh_bin() -> String {
     std::env::var("COPERCEIVE_SSH_BIN").unwrap_or_else(|_| "ssh".to_string())
 }
 
-#[cfg(target_os = "macos")]
 fn ssh_config_path() -> PathBuf {
-    std::env::var_os("HOME")
+    let base = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".ssh")
-        .join("config")
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join(".ssh").join("config")
 }
 
 /// Lists hosts from the user's `~/.ssh/config` so "Add server" can offer them.
 /// Only Host aliases are read; no key material or options are returned.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn list_ssh_config_hosts() -> Result<Vec<String>, String> {
     let path = ssh_config_path();
@@ -2103,38 +2734,73 @@ async fn list_ssh_config_hosts() -> Result<Vec<String>, String> {
 }
 
 /// Reads effective settings for a `~/.ssh/config` alias with `ssh -G`.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn read_ssh_host_settings(alias: String) -> Result<SshHostSettings, String> {
     detect::probe_ssh_alias(&alias, &ssh_bin())
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn list_server_profiles() -> Result<Vec<ServerEntry>, String> {
     Ok(server_profiles::load_servers())
 }
 
 /// Saves a server profile locally. Rejects secret-like fields and unsafe paths.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn save_server_profile(entry: ServerEntry) -> Result<ServerEntry, String> {
     let mut servers = server_profiles::load_servers();
     server_profiles::upsert_server(&mut servers, entry)
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn delete_server_profile(id: String) -> Result<(), String> {
     let mut servers = server_profiles::load_servers();
     server_profiles::remove_server(&mut servers, &id)
 }
 
+/// Exports a server profile as a secret-free lab file. The returned text is the
+/// JSON to save; placeholders stand in for one person's home, user and scratch.
+#[tauri::command]
+async fn export_lab_profile(
+    entry: ServerEntry,
+    pipelines: Vec<coperceive_desktop::hpc::PipelineSpec>,
+) -> Result<String, String> {
+    server_profiles::export_lab_profile(&entry, &pipelines)
+}
+
+/// Fills a lab profile with this person's SSH alias and paths. Nothing is saved
+/// until the user saves the returned entry.
+#[tauri::command]
+async fn prepare_lab_import(
+    document: String,
+    identity: server_profiles::LabImportIdentity,
+) -> Result<ServerEntry, String> {
+    server_profiles::prepare_lab_import(&document, &identity)
+}
+
 /// Runs the read-only "Test connection" checks off the async runtime, bounded by
 /// per-check timeouts. The result can be applied to the draft profile in the UI.
-#[cfg(target_os = "macos")]
+fn validate_ssh_token(label: &str, raw: Option<&str>) -> Result<(), String> {
+    let Some(val) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(());
+    };
+    if val.starts_with('-') {
+        return Err(format!("The {label} may not start with '-'."));
+    }
+    if val.chars().any(|ch| ch.is_whitespace() || ch.is_control()) {
+        return Err(format!("The {label} cannot contain spaces or control characters."));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn test_server_connection(entry: ServerEntry) -> Result<DetectionReport, String> {
+    validate_ssh_token("SSH alias", entry.profile.ssh_alias.as_deref())?;
+    validate_ssh_token("host name", entry.profile.host.as_deref())?;
+    validate_ssh_token("user name", entry.profile.user.as_deref())?;
+    validate_ssh_token(
+        "proxy jump",
+        entry.ssh.as_ref().and_then(|s| s.proxy_jump.as_deref()),
+    )?;
     tauri::async_runtime::spawn_blocking(move || {
         detect::detect_server(&entry, &DetectOptions { ssh_bin: ssh_bin() })
     })
@@ -2143,7 +2809,6 @@ async fn test_server_connection(entry: ServerEntry) -> Result<DetectionReport, S
 }
 
 /// The saved server profile a plan/command belongs to.
-#[cfg(target_os = "macos")]
 fn find_server_entry(profile_id: &str) -> Result<ServerEntry, String> {
     server_profiles::load_servers()
         .into_iter()
@@ -2152,13 +2817,11 @@ fn find_server_entry(profile_id: &str) -> Result<ServerEntry, String> {
 }
 
 /// SSH runner for a saved profile, using the user's own ssh config and agent.
-#[cfg(target_os = "macos")]
 fn plan_runner(entry: &ServerEntry) -> Result<SshRunner, String> {
     Ok(SshRunner::new(ssh_bin(), entry.ssh_target()?))
 }
 
 /// Read-only dataset detection for a raw path on the cluster.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_detect(
     profile_id: String,
@@ -2178,7 +2841,6 @@ async fn dataset_detect(
 }
 
 /// Read-only scene index for a detected raw dataset.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_index(
     profile_id: String,
@@ -2204,7 +2866,6 @@ async fn dataset_index(
 /// Installed model plugins on the cluster, offered as built-in pipelines. A
 /// cluster without plugins returns an empty list; the UI also accepts a custom
 /// `coperceive-pipeline.json` script path.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn list_pipeline_options(profile_id: String) -> Result<Vec<PipelineEntry>, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2218,7 +2879,6 @@ async fn list_pipeline_options(profile_id: String) -> Result<Vec<PipelineEntry>,
 
 /// Reads a custom pipeline registration (`coperceive-pipeline.json` next to the
 /// script) read-only over SSH.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn read_custom_pipeline(
     profile_id: String,
@@ -2235,7 +2895,6 @@ async fn read_custom_pipeline(
 
 /// Builds and checks a run plan. Nothing is submitted: the plan only renders the
 /// argv, environment, checks and the contract-check script for the user to see.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn build_run_plan(
     profile_id: String,
@@ -2252,7 +2911,6 @@ async fn build_run_plan(
 
 /// Saves a checked plan under the profile's `results_root/plans/<id>.json`.
 /// Nothing is submitted.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn save_run_plan(
     profile_id: String,
@@ -2270,7 +2928,6 @@ async fn save_run_plan(
 
 /// Renders the complete job script for a saved plan without submitting anything.
 /// The UI shows this text and sends its `preview_hash` back on confirm.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn preview_submission(
     profile_id: String,
@@ -2289,7 +2946,6 @@ async fn preview_submission(
 
 /// Submits a saved plan after the user explicitly confirmed the previewed
 /// script. Unconfirmed calls and preview-hash mismatches submit nothing.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn submit_run_plan(
     profile_id: String,
@@ -2315,7 +2971,6 @@ async fn submit_run_plan(
 }
 
 /// Live state, elapsed and remaining wall time for a run submitted by this app.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn job_watch_status(
     profile_id: String,
@@ -2333,7 +2988,6 @@ async fn job_watch_status(
 
 /// State of a dataset prepare job this app submitted (Queued -> Preparing ->
 /// Ready in the dataset view); it must still carry the name the preview gave it.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_prepare_job_status(
     profile_id: String,
@@ -2354,7 +3008,6 @@ async fn dataset_prepare_job_status(
 }
 
 /// A bounded tail (10..=200 lines) of the run's stdout or stderr log.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn job_watch_logs(
     profile_id: String,
@@ -2373,7 +3026,6 @@ async fn job_watch_logs(
 }
 
 /// Cancels a running/pending job this app submitted, after an explicit confirm.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn cancel_run_job(
     profile_id: String,
@@ -2391,7 +3043,6 @@ async fn cancel_run_job(
 }
 
 /// One bounded read of the streamed predictions file for a saved run plan.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn prediction_stream(
     profile_id: String,
@@ -2416,7 +3067,6 @@ async fn prediction_stream(
 }
 
 /// The pipeline's own final metrics report, once it exists.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn run_metrics(
     profile_id: String,
@@ -2433,7 +3083,6 @@ async fn run_metrics(
 }
 
 /// Imports the run's predictions as a stored run and opens the viewer on it.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn open_predictions(
     app: tauri::AppHandle,
@@ -2482,8 +3131,60 @@ async fn open_predictions(
     Ok(imported)
 }
 
+/// Build a repro card for one finished run. The card is the same JSON
+/// `coperceive repro export` writes.
+#[tauri::command]
+async fn preview_repro_card(
+    app: tauri::AppHandle,
+    profile_id: String,
+    plan_id: String,
+    time_limit: Option<String>,
+    gpus: Option<String>,
+    memory: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let python = resolve_python_binary(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        let profile = if plan_id == coperceive_desktop::repro::TEST_PLAN_ID {
+            if let Some(dir) = coperceive_desktop::repro::test_repro_dir() {
+                dir.join("profile.json")
+            } else {
+                return Err(
+                    "The sample repro card is not available. Export a finished run instead."
+                        .to_string(),
+                );
+            }
+        } else {
+            let entry = find_server_entry(&profile_id)?;
+            let runner = plan_runner(&entry)?;
+            let staging = std::env::temp_dir().join(format!(
+                "coperceive-repro-{}-{}",
+                std::process::id(),
+                &plan_id
+            ));
+            let _ = std::fs::remove_dir_all(&staging);
+            std::fs::create_dir_all(&staging)
+                .map_err(|error| format!("Could not prepare the repro card: {error}"))?;
+            coperceive_desktop::repro::stage_remote_run(
+                &runner,
+                &entry.profile,
+                &plan_id,
+                &staging,
+            )?
+        };
+        coperceive_desktop::repro::card_from_profile(
+            &python,
+            &plan_id,
+            &profile,
+            time_limit.as_deref(),
+            gpus.as_deref(),
+            memory.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| format!("Could not build the repro card: {error}"))?
+}
+
 /// The app's submitted runs from Slurm accounting, newest first.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn list_run_history(
     profile_id: String,
@@ -2503,7 +3204,6 @@ async fn list_run_history(
 }
 
 /// Render the CPU-only Slurm script that prepares selected dataset scenes.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_prepare(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2636,7 +3336,6 @@ async fn dataset_prepare(
     }))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_prepare_submit(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2669,7 +3368,6 @@ async fn dataset_prepare_submit(
     .map_err(|error| format!("Dataset preparation submit could not finish: {error}"))?
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_status(
     profile_id: String,
@@ -2727,19 +3425,27 @@ async fn dataset_status(
     .map_err(|error| format!("Dataset status could not finish: {error}"))?
 }
 
+fn resolve_viewer_dataset_scenes(has_remote: bool, dataset: serde_json::Value) -> serde_json::Value {
+    if has_remote {
+        dataset
+    } else {
+        serde_json::Value::Null
+    }
+}
+
 /// The open cluster dataset's scenes (id, state) from the dataset view, so the
 /// viewer's scene list can show the ones that are not prepared yet.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn set_viewer_dataset_scenes(state: tauri::State<'_, Arc<AppState>>, dataset: serde_json::Value) {
+    let has_remote = state.stream_key.lock().ok().and_then(|k| k.clone()).is_some()
+        || state.remote_key.lock().ok().and_then(|k| k.clone()).is_some();
     if let Ok(mut scenes) = state.dataset_scenes.lock() {
-        *scenes = dataset;
+        *scenes = resolve_viewer_dataset_scenes(has_remote, dataset);
     }
 }
 
 /// Remember the cluster dataset open in the HPC workspace (or forget it on
 /// Close), so the workspace reopens it after a restart.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn remember_cluster_dataset(profile_id: String, dataset: Option<serde_json::Value>) -> Result<(), String> {
     let mut persistent = state::load_state();
@@ -2759,7 +3465,6 @@ fn remember_cluster_dataset(profile_id: String, dataset: Option<serde_json::Valu
 }
 
 /// The dataset last open in the HPC workspace: `{ profile_id, dataset }`, or null.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn last_cluster_dataset() -> serde_json::Value {
     let persistent = state::load_state();
@@ -2776,7 +3481,6 @@ fn last_cluster_dataset() -> serde_json::Value {
 }
 
 /// Settings → Cluster datasets → "Camera images when preparing".
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn get_camera_images_setting(profile_id: Option<String>) -> state::CameraImagesSetting {
     state::load_state().camera_images(profile_id.as_deref())
@@ -2784,7 +3488,6 @@ fn get_camera_images_setting(profile_id: Option<String>) -> state::CameraImagesS
 
 /// Changes only what the next prepare preview starts with; prepared scenes keep
 /// their mode. `mode: null` clears the per-profile (or app-wide) choice.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn set_camera_images_setting(
     profile_id: Option<String>,
@@ -2798,7 +3501,6 @@ fn set_camera_images_setting(
 
 /// Disk used by camera previews in a profile's cache; `remove` deletes only the
 /// previews (the UI asks for confirmation first).
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_previews(profile_id: String, remove: bool) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2813,7 +3515,6 @@ async fn dataset_previews(profile_id: String, remove: bool) -> Result<serde_json
 /// Where viewing over SSH keeps its local files: per-dataset mirrors of the
 /// scenes' small files and the size-capped cache of sweeps and images. This is
 /// the app's own cache directory; nothing is written on the cluster.
-#[cfg(target_os = "macos")]
 fn remote_view_cache_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("COPERCEIVE_REMOTE_VIEW_CACHE") {
         return PathBuf::from(dir);
@@ -2824,7 +3525,6 @@ fn remote_view_cache_dir() -> PathBuf {
         .join("Library/Caches/nl.adarsh.coperceive/remote-view")
 }
 
-#[cfg(target_os = "macos")]
 fn directory_bytes(dir: &Path) -> u64 {
     fs::read_dir(dir)
         .map(|entries| {
@@ -2842,7 +3542,6 @@ fn directory_bytes(dir: &Path) -> u64 {
 
 /// Settings → Cluster datasets → "Viewing cache": its cap, what it uses, and
 /// `clear` to empty it (sweeps and images only; they are fetched again).
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn remote_view_cache(cap_bytes: Option<u64>, clear: Option<bool>) -> Result<serde_json::Value, String> {
     let mut persistent = state::load_state();
@@ -2869,7 +3568,6 @@ fn remote_view_cache(cap_bytes: Option<u64>, clear: Option<bool>) -> Result<serd
 /// read-only streamer confined to this dataset's cache split and raw root
 /// (docs/datasets/cluster-datasets.md, "Viewing"). Opening another scene of
 /// the same dataset reuses the server and its connection.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_open(
     app: tauri::AppHandle,
@@ -2902,6 +3600,15 @@ async fn dataset_open(
             _ => None,
         }
     };
+    {
+        let mut persistent = state::load_state();
+        persistent.last_scene_id = scene_id.clone();
+        persistent.last_sample_index = None;
+        persistent.last_timestamp_us = None;
+        persistent._legacy_timestamp_ns = None;
+        persistent.agent_visibility = None;
+        let _ = state::save_state(&persistent);
+    }
     if let Some((origin, token)) = reusable {
         if !show_scene_in_viewer(&app, state.inner(), &origin, scene_id.as_deref()) {
             open_viewer_window(&app, &origin, &token, &cache, ctrl_port, state.inner(), query.as_deref())?;
@@ -2968,7 +3675,7 @@ async fn dataset_open(
             cfg.set_allowed_origin(origin.clone());
         }
     }
-    if let Err(error) = reqwest_like_poll(&origin, &token, Duration::from_secs(60)) {
+    if let Err(error) = session.wait_until_healthy(Duration::from_secs(60)) {
         session.preserve_log = true;
         let tail = fs::read_to_string(&session.log_path)
             .map(|content| {
@@ -3004,7 +3711,6 @@ async fn dataset_open(
 /// the fixture server, then calls the real `dataset_*` commands in order and
 /// records each response or error. A failing step does not stop the flow; the
 /// e2e asserts on every recorded outcome.
-#[cfg(target_os = "macos")]
 fn run_dataset_flow_probe(
     app: &tauri::AppHandle,
     request_path: &Path,
@@ -3162,14 +3868,12 @@ fn run_dataset_flow_probe(
 }
 
 /// What a remote viewer session serves: reused only for exactly the same thing.
-#[cfg(target_os = "macos")]
 fn viewer_session_key(alias: &str, profile_id: Option<&str>, data_root: &str, media_roots: &[String]) -> String {
     format!("{alias}|{}|{data_root}|{}", profile_id.unwrap_or(""), media_roots.join("\n"))
 }
 
 /// Point the open viewer at another scene of the same session, without a new
 /// window: the viewer reads `scene=` from its hash.
-#[cfg(target_os = "macos")]
 fn show_scene_in_viewer(app: &tauri::AppHandle, state: &AppState, origin: &str, scene_id: Option<&str>) -> bool {
     use tauri::Manager;
     let same_origin = state
@@ -3181,6 +3885,11 @@ fn show_scene_in_viewer(app: &tauri::AppHandle, state: &AppState, origin: &str, 
     let Some(viewer) = app.get_webview_window("viewer").filter(|_| same_origin) else {
         return false;
     };
+    coperceive_desktop::controller::sync_viewer_origin(
+        &state.viewer_origin,
+        &state.controller_config,
+        origin,
+    );
     if let Some(scene) = scene_id {
         let hash = serde_json::to_string(&format!("#/viewer?scene={}", urlencoding_component(scene)))
             .unwrap_or_else(|_| "\"#/viewer\"".to_string());
@@ -3194,7 +3903,6 @@ fn show_scene_in_viewer(app: &tauri::AppHandle, state: &AppState, origin: &str, 
     true
 }
 
-#[cfg(target_os = "macos")]
 fn urlencoding_component(value: &str) -> String {
     value
         .bytes()
@@ -3205,7 +3913,6 @@ fn urlencoding_component(value: &str) -> String {
         .collect()
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 async fn remote_connect(
@@ -3242,6 +3949,15 @@ async fn remote_connect(
             _ => None,
         }
     };
+    {
+        let mut persistent = state::load_state();
+        persistent.last_scene_id = scene_id.clone();
+        persistent.last_sample_index = None;
+        persistent.last_timestamp_us = None;
+        persistent._legacy_timestamp_ns = None;
+        persistent.agent_visibility = None;
+        let _ = state::save_state(&persistent);
+    }
     if let Some((origin, token)) = reusable {
         if !show_scene_in_viewer(&app, state.inner(), &origin, scene_id.as_deref()) {
             let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
@@ -3386,7 +4102,6 @@ async fn remote_connect(
     Ok(payload)
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_status(
     alias: String,
@@ -3405,7 +4120,6 @@ async fn remote_status(
     client.status(uuid.as_deref(), job_id).map_err(|e| e.to_string())
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_disconnect(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
     let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
@@ -3421,7 +4135,6 @@ async fn remote_disconnect(state: tauri::State<'_, Arc<AppState>>) -> Result<(),
 /// Metadata only: the remote `coperceive remote scan` reads folder entries and
 /// scene manifests, never scene data, and it bounds depth, entries and time so
 /// the login node stays light. The result is the command's own JSON.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_scan(
     profile_id: String,
@@ -3454,76 +4167,10 @@ async fn remote_scan(
     .map_err(|e| format!("The folder scan could not finish: {e}"))?
 }
 
-/// Simple loopback HTTP polling using TcpStream without external HTTP client crate.
-/// Reads until headers end (\r\n\r\n) rather than assuming a single buffer read.
-#[cfg(target_os = "macos")]
-fn reqwest_like_poll(origin: &str, token: &str, timeout: Duration) -> Result<(), String> {
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-
-    let port_str = origin.split(':').last().unwrap_or("8731");
-    let port: u16 = port_str.parse().unwrap_or(8731);
-    let deadline = Instant::now() + timeout;
-
-    while Instant::now() < deadline {
-        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
-            let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
-            let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
-            let req = format!(
-                "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
-                port, token
-            );
-            if stream.write_all(req.as_bytes()).is_ok() {
-                let mut resp_bytes = Vec::new();
-                let mut chunk = [0u8; 1024];
-                while let Ok(n) = stream.read(&mut chunk) {
-                    if n == 0 {
-                        break;
-                    }
-                    resp_bytes.extend_from_slice(&chunk[..n]);
-                    if resp_bytes.windows(4).any(|w| w == b"\r\n\r\n") {
-                        break;
-                    }
-                }
-                let resp = String::from_utf8_lossy(&resp_bytes);
-                if resp.contains("200 OK") || resp.contains("HTTP/1.1 200") || resp.contains("HTTP/1.0 200") {
-                    return Ok(());
-                }
-            }
-        }
-        std::thread::sleep(Duration::from_millis(150));
-    }
-    Err("Health check probe timed out".to_string())
-}
-
-#[cfg(target_os = "macos")]
 fn handle_fatal_error(err_msg: &str) {
-    eprintln!("Fatal startup error: {err_msg}");
-    if let Some(home) = std::env::var_os("HOME") {
-        let log_dir = std::path::PathBuf::from(home).join("Library/Logs/Coperceive");
-        let _ = std::fs::create_dir_all(&log_dir);
-        let log_file = log_dir.join("startup-error.log");
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_file) {
-            use std::io::Write;
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let _ = writeln!(f, "[{now}] Fatal startup error: {err_msg}");
-        }
-    }
-
-    let escaped = err_msg.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
-    let script = format!(
-        "display alert \"Coperceive Startup Error\" message \"{escaped}\" as critical giving up after 15"
-    );
-    let _ = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .status();
+    platform::handle_fatal_error(err_msg);
 }
 
-#[cfg(target_os = "macos")]
 fn main() {
     let test_mode = coperceive_desktop::test_seams::test_env_active();
     std::panic::set_hook(Box::new(move |info| {
@@ -3564,9 +4211,13 @@ fn main() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(build_viewer_bridge_plugin())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             get_persistent_state,
+            update_persistent_state,
+            check_desktop_update,
+            install_desktop_update,
             is_remote_enabled,
             pick_data_root,
             start_local,
@@ -3578,7 +4229,13 @@ fn main() {
             set_library_root,
             move_library_root,
             get_library_scenes,
+            ensure_demo_scene,
+            cancel_demo_scene,
+            dismiss_welcome_card,
             download_town_map,
+            list_carla_maps,
+            install_carla_map,
+            remove_carla_map,
             library_thumbnail,
             delete_library_scene,
             reveal_in_finder,
@@ -3596,6 +4253,8 @@ fn main() {
             list_server_profiles,
             save_server_profile,
             delete_server_profile,
+            export_lab_profile,
+            prepare_lab_import,
             test_server_connection,
             list_pipeline_options,
             read_custom_pipeline,
@@ -3627,6 +4286,7 @@ fn main() {
             run_metrics,
             open_predictions,
             list_run_history,
+            preview_repro_card,
             remote_connect,
             remote_view_cache,
             remote_status,
@@ -3646,32 +4306,47 @@ fn main() {
                 return;
             }
             let test_env = coperceive_desktop::test_seams::test_env_active();
+            let test_repro = coperceive_desktop::repro::test_repro_dir().is_some();
             let force = test_env
                 && std::env::var("COPERCEIVE_FORCE_MOTION").ok().as_deref() == Some("1");
             let import_source = std::env::var("COPERCEIVE_TEST_IMPORT_SOURCE").unwrap_or_default();
             let update_url = std::env::var("COPERCEIVE_UPDATE_URL").unwrap_or_default();
             let app = webview.app_handle();
             let state = app.state::<Arc<AppState>>();
-            let port = state.ctrl_port.lock().ok().and_then(|slot| *slot).unwrap_or(0);
-            let secret = state
-                .ctrl_secret
-                .lock()
-                .ok()
-                .and_then(|slot| slot.clone())
-                .unwrap_or_default()
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"");
+            let port = state.ctrl_port.lock().ok().and_then(|slot| *slot);
+            let secret = state.ctrl_secret.lock().ok().and_then(|slot| slot.clone());
+            let ctrl_snippet = coperceive_desktop::controller::ctrl_window_init_snippet(
+                test_env,
+                port,
+                secret.as_deref(),
+            );
             let import_js = import_source.replace('\\', "\\\\").replace('"', "\\\"");
             let update_js = update_url.replace('\\', "\\\\").replace('"', "\\\"");
+            let auto_connect_js = state
+                .auto_connect_state
+                .lock()
+                .ok()
+                .and_then(|v| serde_json::to_string(&*v).ok())
+                .unwrap_or_else(|| "null".to_string());
+            let titlebar_mode = if cfg!(target_os = "macos") { "overlay" } else { "native" };
+            let os_name = if cfg!(target_os = "windows") {
+                "windows"
+            } else if cfg!(target_os = "linux") {
+                "linux"
+            } else {
+                "macos"
+            };
             let _ = webview.eval(&format!(
-                r#"window.__COPERCEIVE_TITLEBAR__ = "overlay";
+                r#"window.__COPERCEIVE_OS__ = "{os_name}";
+                window.__COPERCEIVE_TITLEBAR__ = "{titlebar_mode}";
                 window.dispatchEvent(new Event("coperceive-titlebar"));
-                window.__COPERCEIVE_CTRL_PORT__ = {port};
-                window.__COPERCEIVE_CTRL_SECRET__ = "{secret}";
+                {ctrl_snippet}
                 window.__COPERCEIVE_TEST_ENV__ = {test_env};
+                window.__COPERCEIVE_TEST_REPRO__ = {test_repro};
                 window.__COPERCEIVE_FORCE_MOTION__ = {force};
                 window.__COPERCEIVE_TEST_IMPORT_SOURCE__ = "{import_js}";
                 window.__COPERCEIVE_UPDATE_URL__ = "{update_js}";
+                window.__COPERCEIVE_AUTOCONNECT_STATE__ = {auto_connect_js};
                 window.dispatchEvent(new Event("coperceive-test-import"));
                 if ({force}) window.dispatchEvent(new Event("coperceive-force-motion"));"#,
             ));
@@ -4031,6 +4706,52 @@ fn main() {
                 });
             }
 
+            if let Some((server_path, result_path)) =
+                coperceive_desktop::test_seams::hpc_share_probe_request()
+            {
+                std::thread::spawn(move || {
+                    let result = (|| -> Result<serde_json::Value, String> {
+                        let json = fs::read_to_string(&server_path).map_err(|error| {
+                            format!("Could not read the server fixture: {error}")
+                        })?;
+                        let entry: ServerEntry = serde_json::from_str(&json)
+                            .map_err(|error| format!("Server fixture is not valid: {error}"))?;
+                        let exported = server_profiles::export_lab_profile(&entry, &[])?;
+                        let identity = server_profiles::LabImportIdentity {
+                            ssh_alias: "student-cluster".to_string(),
+                            user: "sam".to_string(),
+                            home: "/home/sam".to_string(),
+                            scratch: "/scratch/$USER/$SLURM_JOB_ID".to_string(),
+                        };
+                        let imported =
+                            server_profiles::prepare_lab_import(&exported, &identity)?;
+                        let rendered = serde_json::to_string(&imported).unwrap_or_default();
+                        if rendered.contains("alice") || rendered.contains("bob") {
+                            return Err(
+                                "The imported profile still contains the shared file's user name."
+                                    .to_string(),
+                            );
+                        }
+                        Ok(serde_json::json!({
+                            "ok": true,
+                            "ssh_alias": imported.profile.ssh_alias,
+                            "scratch_template": imported.profile.scratch_template,
+                            "command": imported.profile.environment.coperceive_command,
+                            "data_roots": imported.profile.data_roots,
+                            "has_admin_name": false,
+                        }))
+                    })();
+                    let payload = match result {
+                        Ok(value) => value,
+                        Err(error) => serde_json::json!({"ok": false, "error": error}),
+                    };
+                    let _ = fs::write(
+                        &result_path,
+                        serde_json::to_string_pretty(&payload).unwrap_or_default(),
+                    );
+                });
+            }
+
             // Test-only cluster-dataset flow: call the same Tauri commands the
             // Dataset view invokes, in the listed order, against the fake cluster.
             if let Some(probe) = coperceive_desktop::test_seams::dataset_flow_probe_request() {
@@ -4154,23 +4875,36 @@ fn main() {
                 });
             }
 
-            // 1. Start loopback desktop controller
-            match start_desktop_controller(handle.clone(), state.clone()) {
-                Ok(port) => {
-                    if let Ok(mut lock) = state.ctrl_port.lock() {
-                        *lock = Some(port);
+            // 1. Start loopback desktop controller in test mode only
+            if coperceive_desktop::controller::controller_enabled(
+                coperceive_desktop::test_seams::test_env_active(),
+            ) {
+                match start_desktop_controller(handle.clone(), state.clone()) {
+                    Ok(port) => {
+                        if let Ok(mut lock) = state.ctrl_port.lock() {
+                            *lock = Some(port);
+                        }
+                        println!("[desktop-ctrl] Loopback controller listening on port {}", port);
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
                     }
-                    println!("[desktop-ctrl] Loopback controller listening on port {}", port);
-                }
-                Err(e) => {
-                    eprintln!("[desktop-ctrl] Failed to start loopback controller: {}", e);
+                    Err(e) => {
+                        eprintln!("[desktop-ctrl] Failed to start loopback controller: {}", e);
+                        let _ = std::io::Write::flush(&mut std::io::stderr());
+                    }
                 }
             }
 
-            // 2. Set macOS native application menu
             let persistent = state::load_state();
+
+            // 2. Set native application menu
             if let Ok(menu) = build_app_menu(&handle, &persistent.recent_roots) {
                 let _ = app.set_menu(menu);
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.set_decorations(true);
+                let _ = main.set_title("Coperceive");
             }
 
             // 3. Auto-connect on launch if data root exists and is valid.
@@ -4212,33 +4946,32 @@ fn main() {
                 } else if state::validate_dataset_root(&root_path).is_ok() {
                     let h = handle.clone();
                     let st = state.clone();
+                    set_auto_connect_state(
+                        &handle,
+                        &state,
+                        "validating_root_ok",
+                        serde_json::json!({
+                            "root": root_str,
+                            "from_saved_state": from_saved_state,
+                        }),
+                    );
                     std::thread::spawn(move || {
                         std::thread::sleep(Duration::from_millis(300));
                         tauri::async_runtime::block_on(async move {
-                            match start_local_session(&h, &st, root_str).await {
+                            match start_local_session_inner(&h, &st, root_str, true).await {
                                 Ok(payload) => {
                                     println!("[auto-connect] Successfully connected: origin={}", payload.origin);
-                                    if let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") {
-                                        let log_path = {
-                                            let lock = st.sidecar.lock().ok();
-                                            lock.and_then(|s| s.as_ref().map(|sess| sess.log_path.clone()))
-                                                .unwrap_or_default()
-                                        };
-                                        let ctrl_port = st.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
-                                        let ctrl_secret = st.ctrl_secret.lock().ok().and_then(|s| s.clone()).unwrap_or_default();
-                                        let content = format!(
-                                            "{}\n{}\n{}\n{}\n{}\n",
-                                            payload.origin,
-                                            payload.token,
-                                            log_path.display(),
-                                            ctrl_port,
-                                            ctrl_secret,
-                                        );
-                                        let _ = std::fs::write(&marker_path, content);
-                                    }
+                                    let _ = std::io::Write::flush(&mut std::io::stdout());
                                 }
                                 Err(err) => {
+                                    set_auto_connect_state(
+                                        &h,
+                                        &st,
+                                        "error",
+                                        serde_json::json!({ "stage": "start_local_session_inner", "error": err }),
+                                    );
                                     eprintln!("[auto-connect] Error connecting to last root: {err}");
+                                    let _ = std::io::Write::flush(&mut std::io::stderr());
                                     if let Some(main) = h.get_webview_window("main") {
                                         let _ = main.show();
                                     }
@@ -4247,14 +4980,22 @@ fn main() {
                         });
                     });
                 } else {
+                    set_auto_connect_state(
+                        &handle,
+                        &state,
+                        "invalid_root",
+                        serde_json::json!({ "root": root_str }),
+                    );
                     if let Some(main) = app.get_webview_window("main") {
                         let _ = main.show();
                     }
+                    write_test_marker_file(&state, None);
                 }
             } else {
                 if let Some(main) = app.get_webview_window("main") {
                     let _ = main.show();
                 }
+                write_test_marker_file(&state, None);
             }
 
             Ok(())
@@ -4277,6 +5018,9 @@ fn main() {
                         .message(&about_text)
                         .title("About Coperceive")
                         .show(|_| {});
+                }
+                "quit" => {
+                    app.exit(0);
                 }
                 "settings" => {
                     if let Some(v) = app.get_webview_window("viewer") {
@@ -4443,6 +5187,15 @@ fn main() {
                 "help_share_diagnostics" => {
                     if let Some(viewer) = app.get_webview_window("viewer") {
                         let _ = viewer.eval("window.dispatchEvent(new CustomEvent('coperceive-open-diagnostics'))");
+                    }
+                }
+                "open_demo" => {
+                    use tauri::Emitter;
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.unminimize();
+                        let _ = main.show();
+                        let _ = main.set_focus();
+                        let _ = main.emit("coperceive-open-demo", ());
                     }
                 }
                 "help_diagnostics" => {
@@ -4625,16 +5378,13 @@ fn main() {
         });
 
     let mut context = tauri::generate_context!();
-    #[cfg(target_os = "macos")]
-    {
-        if coperceive_desktop::test_seams::test_env_active() {
-            if let Some(updater_cfg) = context.config_mut().plugins.0.get_mut("updater") {
-                if let Some(map) = updater_cfg.as_object_mut() {
-                    map.insert(
-                        "dangerousInsecureTransportProtocol".to_string(),
-                        serde_json::Value::Bool(true),
-                    );
-                }
+    if coperceive_desktop::test_seams::test_env_active() {
+        if let Some(updater_cfg) = context.config_mut().plugins.0.get_mut("updater") {
+            if let Some(map) = updater_cfg.as_object_mut() {
+                map.insert(
+                    "dangerousInsecureTransportProtocol".to_string(),
+                    serde_json::Value::Bool(true),
+                );
             }
         }
     }
@@ -4668,7 +5418,24 @@ fn main() {
     });
 }
 
-#[cfg(not(target_os = "macos"))]
-fn main() {
-    println!("coperceive-desktop: macOS Apple Silicon target build.");
+#[cfg(test)]
+mod tests {
+    use super::resolve_viewer_dataset_scenes;
+
+    #[test]
+    fn dataset_scenes_is_cleared_when_no_remote_session_is_active() {
+        let cluster_dataset = serde_json::json!({
+            "scenes": [{ "scene_id": "train_0000", "state": "ready" }],
+            "about": { "label": "V2XSET train", "server": "HPC" }
+        });
+        assert_eq!(
+            resolve_viewer_dataset_scenes(false, cluster_dataset.clone()),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            resolve_viewer_dataset_scenes(true, cluster_dataset.clone()),
+            cluster_dataset
+        );
+    }
 }
+

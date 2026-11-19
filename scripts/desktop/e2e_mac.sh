@@ -168,6 +168,67 @@ cat << 'EOF' > "${STATE_FILE}"
 EOF
 
 echo ""
+echo "--- Prepare a local repro-card fixture (no cluster, synthetic files only) ---"
+REPRO_DIR="${TMP_DIR}/repro"
+python3 - "${REPRO_DIR}" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+data = root / "data"
+code = root / "code" / "pipelines"
+results = root / "results"
+run_id = "plan-1790000000-aabbccddeeff"
+for path in (data / "weights", code, results / "plans", results / "runs" / run_id):
+    path.mkdir(parents=True)
+weights = data / "weights" / "model.pt"
+weights.write_bytes(b"weights")
+(results / "runs" / run_id / "predictions.jsonl").write_text(
+    '{"scene_id":"scene-a","score":0.2}\n', encoding="utf-8"
+)
+plan = {
+    "id": run_id,
+    "pipeline": {"name": "synthetic", "source": "custom"},
+    "argv": ["python3", str(code / "run.py"), "--checkpoint", str(weights)],
+    "environment": {"kind": "none"},
+    "checkpoint": {
+        "path": str(weights),
+        "sha256": hashlib.sha256(weights.read_bytes()).hexdigest(),
+        "kind": "file",
+    },
+    "split": {"path": "", "kind": ""},
+    "output_dir": str(results / "runs" / run_id),
+    "gres": None,
+    "nothing_submitted": True,
+}
+(results / "plans" / f"{run_id}.json").write_text(json.dumps(plan), encoding="utf-8")
+profile = {
+    "name": "Repro fixture",
+    "ssh_alias": "repro-fixture",
+    "host": None,
+    "user": None,
+    "data_roots": [str(data)],
+    "scratch_template": str(root / "scratch") + "/$USER/$SLURM_JOB_ID",
+    "results_root": str(results),
+    "code_roots": [str(root / "code")],
+    "scheduler": "slurm",
+    "defaults": {},
+    "environment": {
+        "kind": "none",
+        "modules": [],
+        "interpreter": None,
+        "container_image": None,
+        "coperceive_command": ["coperceive"],
+        "wheelhouse": None,
+        "compute_has_internet": False,
+    },
+    "notes": None,
+}
+(root / "profile.json").write_text(json.dumps(profile), encoding="utf-8")
+(code / "run.py").write_text("print('synthetic')\n", encoding="utf-8")
+PY
+export COPERCEIVE_TEST_REPRO_DIR="${REPRO_DIR}"
+
+echo ""
 echo "--- Step 1: Launch App with Fixture 1 (Multi-Scene Root) ---"
 export COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_1}"
 export COPERCEIVE_TEST_ENV="1"
@@ -552,6 +613,54 @@ assert "Saved to " in res["note"], "Expected Saved to in note: " + str(res.get("
 assert os.path.basename(bev_dest) in res["note"], "Expected filename in note: " + str(res.get("note"))
 
 print("Step 1c verified: BEV figure exported successfully and non-empty PNG asserted.", flush=True)
+
+print("Driving real UI: opening Export dialog for the paper zip...")
+eval_js("""(() => {
+    const exportBtn = Array.from(document.querySelectorAll(\x27button\x27)).find(b => b.textContent && b.textContent.trim() === "Export");
+    if (!exportBtn) throw new Error("Export button not found");
+    exportBtn.click();
+})()""")
+time.sleep(0.5)
+paper_dest = os.path.join(tmp_dir, f"e2e_paper_{int(time.time())}.zip")
+Path(mock_dialog_file).write_text(paper_dest + "\n", encoding="utf-8")
+print(f"Seeded mock dialog for paper export: {paper_dest}")
+eval_js("""(() => {
+    const dialog = document.querySelector(\x27.dialog\x27);
+    if (!dialog) throw new Error("Export dialog not found in DOM");
+    const paperBtn = dialog.querySelector(\x27#export-paper\x27);
+    if (!paperBtn) throw new Error("Export for paper button not found");
+    paperBtn.click();
+})()""")
+print("Waiting for paper export to finish...")
+deadline = time.monotonic() + 60.0
+paper_exported = False
+paper_res = None
+while time.monotonic() < deadline:
+    paper_res = eval_js("""(() => {
+        const dialog = document.querySelector(\x27.dialog\x27);
+        const note = dialog ? dialog.querySelector(\x27p.muted\x27) : null;
+        const noteText = note ? note.textContent : "";
+        if (noteText.includes("Ready for Overleaf")) {
+            return { done: true, note: noteText };
+        }
+        if (noteText.includes("Failed") || noteText.includes("Error") || noteText.includes("error")) {
+            return { error: noteText };
+        }
+        return { done: false, note: noteText };
+    })()""")
+    err_text = paper_res.get("error") if paper_res else None
+    if err_text:
+        raise RuntimeError(f"Paper export failed in UI: {err_text}")
+    if paper_res and paper_res.get("done"):
+        paper_exported = True
+        break
+    time.sleep(0.5)
+assert paper_exported, "Paper export timed out in UI"
+assert os.path.isfile(paper_dest), f"Paper zip does not exist at {paper_dest}"
+paper_size = os.path.getsize(paper_dest)
+print(f"Asserting non-empty paper zip: {paper_dest} is {paper_size} bytes")
+assert paper_size > 0, f"Paper zip {paper_dest} is empty"
+print("Step 1d verified: Paper export wrote a non-empty zip and said Ready for Overleaf.", flush=True)
 '
 
 screencapture -x "${SCREENSHOT_DIR}/02-before-quit.png" 2>/dev/null || true
@@ -3093,6 +3202,33 @@ def eval_js(script, timeout=15):
         raise RuntimeError(data["error"])
     return data.get("result")
 
+def poll_until(read_fn, expected_desc, match_fn, context, timeout_s=5.0, interval_s=0.1):
+    deadline = time.monotonic() + timeout_s
+    last_val = None
+    while True:
+        last_val = read_fn()
+        if match_fn(last_val):
+            return last_val
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"{context}: holds {last_val!r}, expected {expected_desc} after {timeout_s:.1f}s"
+            )
+        time.sleep(interval_s)
+
+def wait_for_field_value(field_id, expected, context, timeout_s=5.0, interval_s=0.1):
+    script = f"(() => (document.getElementById({json.dumps(field_id)}) || {{}}).value)()"
+    return poll_until(
+        lambda: eval_js(script),
+        repr(expected),
+        lambda v: v == expected,
+        f"{context} (#{field_id})",
+        timeout_s=timeout_s,
+        interval_s=interval_s,
+    )
+
+def wait_for_dom(predicate_js, context, timeout_s=5.0, interval_s=0.1):
+    return poll_until(lambda: eval_js(predicate_js), "truthy", bool, context, timeout_s, interval_s)
+
 # 1. Click HPC Workspace tab
 res = eval_js("""(() => {
     const tab = Array.from(document.querySelectorAll('nav button')).find(b => (b.textContent || '').trim() === 'HPC Workspace');
@@ -3101,7 +3237,10 @@ res = eval_js("""(() => {
     return 'clicked';
 })()""")
 print(f"Step 5h HPC tab navigation: {res}")
-time.sleep(0.5)
+wait_for_dom(
+    "(() => document.getElementById('hpc-user') ? 'already_open' : (Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Add server') ? 'ready' : ''))()",
+    "Step 5h HPC Workspace tab",
+)
 
 # 2. Click Add server button if editor is not open
 res = eval_js("""(() => {
@@ -3112,7 +3251,7 @@ res = eval_js("""(() => {
     return 'clicked';
 })()""")
 print(f"Step 5h Add server button: {res}")
-time.sleep(0.5)
+wait_for_dom("(() => document.getElementById('hpc-user') ? 'open' : '')()", "Step 5h Add server editor")
 
 # 3. Assert HTML attributes disable platform autocorrect and autocapitalize
 attrs = json.loads(eval_js("""(() => {
@@ -3156,25 +3295,31 @@ eval_js("""(() => {
         sel.dispatchEvent(new Event('change', { bubbles: true }));
     }
 })()""")
-time.sleep(0.2)
+wait_for_dom(
+    "(() => { const p = document.getElementById('hpc-partition'); return p && !p.disabled ? 'enabled' : ''; })()",
+    "Step 5h Slurm partition field enable",
+)
 
-cases = [
-    ("hpc-user", "nanjaiyalatha"),
-    ("hpc-partition", "ps"),
-    ("hpc-host", "hpc-head1"),
-]
-
-for field_id, text in cases:
-    # Focus field and clear it
-    eval_js(f"""(() => {{
-        const el = document.getElementById('{field_id}');
+def focus_and_clear(field_id):
+    res = eval_js(f"""(() => {{
+        const el = document.getElementById({json.dumps(field_id)});
         if (!el) return 'missing';
         el.focus();
         el.value = '';
         el.dispatchEvent(new Event('input', {{ bubbles: true }}));
         return 'focused';
     }})()""")
-    time.sleep(0.2)
+    assert res == "focused", f"Input #{field_id} missing when focusing: {res}"
+    wait_for_field_value(field_id, "", f"Clearing #{field_id}")
+
+cases = [
+    ("hpc-user", "alicelowercase"),
+    ("hpc-partition", "ps"),
+    ("hpc-host", "login1"),
+]
+
+for field_id, text in cases:
+    focus_and_clear(field_id)
 
     # Use AppleScript System Events to keystroke the text into the focused field
     as_script = f'''
@@ -3186,25 +3331,18 @@ for field_id, text in cases:
     end tell
     '''
     subprocess.run(["osascript", "-e", as_script], check=True)
-    time.sleep(0.3)
-
-    val = eval_js(f"(() => (document.getElementById('{field_id}') || {{}}).value)()")
-    assert val == text, f"Expected typed value '{text}', got '{val}' (auto-capitalisation bug!)"
+    val = wait_for_field_value(
+        field_id,
+        text,
+        f"Typed #{field_id} lowercase check (auto-capitalisation bug!)",
+    )
     print(f"Step 5h typed #{field_id}: '{val}' (matched expected lowercase)")
 
 # 5. Test macOS Edit Menu Shortcuts (Cmd+A, Cmd+C, Cmd+V, Cmd+X)
 print("Testing macOS Edit menu shortcuts in real app...", flush=True)
 
 # Test Cmd+A + typing: type text into #hpc-user, Cmd+A, type replacement, assert field holds ONLY replacement
-eval_js("""(() => {
-    const el = document.getElementById('hpc-user');
-    if (!el) return 'missing';
-    el.focus();
-    el.value = '';
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    return 'focused';
-})()""")
-time.sleep(0.2)
+focus_and_clear("hpc-user")
 
 as_type_initial = '''
 tell application "System Events"
@@ -3215,10 +3353,7 @@ tell application "System Events"
 end tell
 '''
 subprocess.run(["osascript", "-e", as_type_initial], check=True)
-time.sleep(0.3)
-
-val_orig = eval_js("(() => (document.getElementById('hpc-user') || {}).value)()")
-assert val_orig == "original-text", f"Setup failed: expected 'original-text', got '{val_orig}'"
+val_orig = wait_for_field_value("hpc-user", "original-text", "Step 5i Cmd+A initial setup")
 
 # Cmd+A (Select All) then type "replaced"
 as_select_all_and_replace = '''
@@ -3232,14 +3367,12 @@ tell application "System Events"
 end tell
 '''
 subprocess.run(["osascript", "-e", as_select_all_and_replace], check=True)
-time.sleep(0.3)
-
-val_replaced = eval_js("(() => (document.getElementById('hpc-user') || {}).value)()")
-assert val_replaced == "replaced", f"Cmd+A failed! Expected 'replaced', got '{val_replaced}'"
+val_replaced = wait_for_field_value("hpc-user", "replaced", "Cmd+A select-all and replace failed")
 print(f"Step 5i Cmd+A select-all and replace verified: '{val_replaced}'")
 
 # Test Cmd+C / Cmd+V round trip:
 # Select all in #hpc-user with Cmd+A and copy with Cmd+C
+subprocess.run(["pbcopy"], input="", text=True, check=False)
 as_copy = '''
 tell application "System Events"
     tell process "Coperceive"
@@ -3251,18 +3384,15 @@ tell application "System Events"
 end tell
 '''
 subprocess.run(["osascript", "-e", as_copy], check=True)
-time.sleep(0.2)
+poll_until(
+    lambda: subprocess.run(["pbpaste"], check=False, capture_output=True, text=True).stdout,
+    repr("replaced"),
+    lambda v: v == "replaced",
+    "Cmd+C copy clipboard",
+)
 
 # Focus #hpc-host, clear it
-eval_js("""(() => {
-    const el = document.getElementById('hpc-host');
-    if (!el) return 'missing';
-    el.focus();
-    el.value = '';
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    return 'focused';
-})()""")
-time.sleep(0.2)
+focus_and_clear("hpc-host")
 
 # Paste with Cmd+V into #hpc-host
 as_paste = '''
@@ -3274,10 +3404,7 @@ tell application "System Events"
 end tell
 '''
 subprocess.run(["osascript", "-e", as_paste], check=True)
-time.sleep(0.3)
-
-val_pasted = eval_js("(() => (document.getElementById('hpc-host') || {}).value)()")
-assert val_pasted == "replaced", f"Cmd+C / Cmd+V round trip failed! Expected 'replaced', got '{val_pasted}'"
+val_pasted = wait_for_field_value("hpc-host", "replaced", "Cmd+C / Cmd+V round trip failed")
 print(f"Step 5i Cmd+C copy and Cmd+V paste verified: '{val_pasted}'")
 
 # Test Cmd+X (Cut) and Cmd+V (Paste):
@@ -3292,16 +3419,10 @@ tell application "System Events"
 end tell
 '''
 subprocess.run(["osascript", "-e", as_cut], check=True)
-time.sleep(0.3)
-
-val_cut = eval_js("(() => (document.getElementById('hpc-host') || {}).value)()")
-assert val_cut == "", f"Cmd+X cut failed! Expected empty field, got '{val_cut}'"
+val_cut = wait_for_field_value("hpc-host", "", "Cmd+X cut failed")
 
 subprocess.run(["osascript", "-e", as_paste], check=True)
-time.sleep(0.3)
-
-val_recut_pasted = eval_js("(() => (document.getElementById('hpc-host') || {}).value)()")
-assert val_recut_pasted == "replaced", f"Cmd+V paste after cut failed! Expected 'replaced', got '{val_recut_pasted}'"
+val_recut_pasted = wait_for_field_value("hpc-host", "replaced", "Cmd+V paste after cut failed")
 print(f"Step 5i Cmd+X cut and Cmd+V paste verified: '{val_recut_pasted}'")
 
 # 6. Close server editor
@@ -3520,6 +3641,124 @@ fi
 RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
 RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
 echo "Step 5i verified: crash $(basename "${CRASH_FILE}") -> notice -> Share diagnostics -> saved zip scanned with no planted secrets."
+
+echo "--- Step 5j: Export a repro card from run history ---"
+REPRO_CARD="${TMP_DIR}/repro-card.json"
+rm -f "${REPRO_CARD}"
+printf '%s\n' "${REPRO_CARD}" > "${MOCK_DIALOG_FILE}"
+python3 - <<EOF
+import json
+import time
+import urllib.request
+
+port = ${RELAUNCH_PORT}
+secret = "${RELAUNCH_SECRET}"
+
+def eval_js(script, timeout=20):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script, "window": "main"}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout + 5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+opened = eval_js("""(() => {
+    const back = Array.from(document.querySelectorAll('a, button')).find(
+        (item) => (item.textContent || '').trim() === 'Return to Library'
+    );
+    if (back) back.click();
+    const tab = Array.from(document.querySelectorAll('nav button, [role="tab"]')).find(
+        (button) => (button.textContent || '').trim() === 'HPC Workspace'
+    );
+    if (tab) tab.click();
+    return 'clicked';
+})()""")
+print(f"Step 5j history tab: {opened}")
+
+def wait_for(script, label, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < deadline:
+        last = eval_js(script)
+        if last == "clicked":
+            return
+        time.sleep(0.1)
+    diag = eval_js("""(() => ({
+        hash: location.hash,
+        tabs: Array.from(document.querySelectorAll('[role="tab"], nav button')).map(
+            (item) => (item.textContent || '').trim()
+        ).filter(Boolean).slice(0, 20),
+        buttons: Array.from(document.querySelectorAll('button')).map(
+            (item) => (item.textContent || '').trim()
+        ).filter(Boolean).slice(0, 30),
+    }))()""")
+    raise SystemExit(f"{label} did not appear: {last}; page={json.dumps(diag)}")
+
+wait_for("""(() => {
+    const history = Array.from(document.querySelectorAll('[role="tab"], button')).find(
+        (button) => (button.textContent || '').trim() === 'Run history'
+    );
+    if (!history) return 'missing_history_tab';
+    history.click();
+    return 'clicked';
+})()""", "Run history tab")
+print("Step 5j history tab: clicked")
+wait_for("""(() => {
+    const button = Array.from(document.querySelectorAll('button')).find(
+        (item) => (item.textContent || '').trim() === 'Export repro card'
+    );
+    if (!button) return 'missing_export_button';
+    button.click();
+    return 'clicked';
+})()""", "Export repro card button")
+print("Step 5j export button: clicked")
+preview = ""
+for _ in range(40):
+    time.sleep(0.25)
+    preview = eval_js("document.body.innerText") or ""
+    if "Not recorded" in preview or "was not" in preview or "has not scored" in preview:
+        break
+if "Not recorded" not in preview and "was not" not in preview and "has not scored" not in preview:
+    raise SystemExit("repro card preview did not say what is missing:\\n" + preview[-1500:])
+saved = eval_js("""(() => {
+    const button = Array.from(document.querySelectorAll('button')).find(
+        (item) => (item.textContent || '').trim() === 'Save repro card'
+    );
+    if (!button) return 'missing_save_button';
+    button.click();
+    return 'clicked';
+})()""")
+print(f"Step 5j save button: {saved}")
+finder = ""
+for _ in range(40):
+    time.sleep(0.25)
+    finder = eval_js("document.body.innerText") or ""
+    if "Show in Finder" in finder:
+        break
+if "Show in Finder" not in finder:
+    raise SystemExit("repro card save did not offer Show in Finder:\\n" + finder[-1500:])
+print("Step 5j preview listed the missing fields and offered Show in Finder.")
+EOF
+python3 - "${REPRO_CARD}" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+if not path.is_file() or path.stat().st_size == 0:
+    raise SystemExit(f"repro card was not written to {path}")
+card = json.loads(path.read_text(encoding="utf-8"))
+if card.get("schema") != "coperceive-repro-card":
+    raise SystemExit(f"saved file is not a repro card: {card.get('schema')!r}")
+text = path.read_text(encoding="utf-8")
+for forbidden in ("ghp_", "/home/", "example.edu"):
+    if forbidden in text:
+        raise SystemExit(f"repro card contains {forbidden}")
+print(f"Step 5j card bytes: {path.stat().st_size}")
+print("Step 5j verified: Export repro card showed missing fields and saved the card.")
+PY
 
 echo ""
 echo "--- Step 6: Quit Application and Verify Clean Process Exit ---"

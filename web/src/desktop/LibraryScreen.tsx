@@ -4,12 +4,18 @@ import type { LibrarySceneInfo, StorageStats } from "./types";
 import PanelState from "./PanelState";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import {
+  cancelDemoScene,
   deleteLibraryScene,
+  dismissWelcomeCard,
   downloadTownMap,
+  ensureDemoScene,
   getLibraryScenes,
+  getPersistentState,
   getStorageInfo,
   libraryThumbnail,
+  listServerProfiles,
   moveLibraryRoot,
+  onDemoProgress,
   onTownMapProgress,
   pickDataRoot,
   revealInFinder,
@@ -17,6 +23,8 @@ import {
   validateScene,
 } from "./local";
 import { errorText } from "./errors";
+import { DEMO_APPROX_SIZE_LABEL, formatDemoSize, runDemoOpenFlow } from "./demoMeta";
+import { getRevealLabel } from "./platform";
 import {
   Facts,
   GridTable,
@@ -39,7 +47,7 @@ function formatBytes(bytes: number): string {
 
 interface Props {
   onOpenScene: (scenePath: string) => void;
-  onNavigateGetData: () => void;
+  onNavigateGetData: (initialDatasetId?: string, initialPresetId?: string) => void;
   onNavigateOpenFolder?: () => void;
   onNavigateServers?: () => void;
 }
@@ -88,6 +96,227 @@ function ValidationBadge({ status }: { status: "valid" | "invalid" | "checking" 
   );
 }
 
+export function DemoProgressBanner({
+  stage,
+  elapsedSec,
+  demoBytes,
+  onCancel,
+}: {
+  stage: string;
+  elapsedSec: number;
+  demoBytes?: number | null;
+  onCancel: () => void;
+}) {
+  const activeStage =
+    stage ||
+    (elapsedSec < 3
+      ? "Starting bundled Python generator…"
+      : elapsedSec < 8
+        ? "Synthesising LiDAR & multi-agent cameras…"
+        : "Packing LiDAR frames & scoring predictions…");
+
+  return (
+    <div
+      data-testid="demo-progress-banner"
+      role="status"
+      aria-live="polite"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "12px",
+        padding: "10px 14px",
+        margin: "8px 16px",
+        background: "var(--panel)",
+        border: "1px solid var(--line)",
+        borderRadius: "8px",
+      }}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+        <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)" }}>
+          Generating demo scene… ({formatDemoSize(demoBytes)} demo cache) · {elapsedSec}s elapsed
+        </div>
+        <div style={{ fontSize: "12px", color: "var(--text-subtle)" }}>
+          {activeStage} · This can take up to 2 minutes on older Macs.
+        </div>
+      </div>
+      <button
+        type="button"
+        data-testid="demo-progress-cancel"
+        className="ghost"
+        onClick={onCancel}
+        style={{
+          padding: "5px 12px",
+          fontSize: "12px",
+          border: "1px solid var(--line)",
+          borderRadius: "6px",
+          flexShrink: 0,
+        }}
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
+export function WelcomeCard({
+  generatingDemo,
+  demoElapsedSec,
+  demoStage,
+  demoError,
+  onOpenDemo,
+  onCancelDemo,
+  onTrySample,
+  onDismiss,
+}: {
+  generatingDemo: boolean;
+  demoElapsedSec: number;
+  demoStage?: string;
+  demoError: string | null;
+  onOpenDemo: () => void;
+  onCancelDemo?: () => void;
+  onTrySample: () => void;
+  onDismiss: () => void;
+}) {
+  const activeStage =
+    demoStage ||
+    (demoElapsedSec < 3
+      ? "Starting bundled Python generator…"
+      : demoElapsedSec < 8
+        ? "Synthesising LiDAR & multi-agent cameras…"
+        : "Packing LiDAR frames & scoring predictions…");
+
+  return (
+    <div
+      className="welcome-card"
+      role="region"
+      aria-label="Welcome to Coperceive"
+      style={{
+        maxWidth: "600px",
+        margin: "0 auto",
+        padding: "24px 28px",
+        background: "var(--panel)",
+        border: "1px solid var(--line)",
+        borderRadius: "10px",
+        boxShadow: "var(--shadow)",
+        display: "flex",
+        flexDirection: "column",
+        gap: "18px",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px" }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: "17px", fontWeight: 600, color: "var(--text)" }}>
+            Welcome to Coperceive
+          </h2>
+          <p style={{ margin: "6px 0 0", fontSize: "13px", color: "var(--text-subtle)", lineHeight: 1.45 }}>
+            Explore multi-agent cooperative perception, inspect multi-vehicle & roadside LiDAR and cameras,
+            and evaluate connected vehicle detections.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss welcome card"
+          title="Dismiss welcome card"
+          className="ghost"
+          style={{
+            fontSize: "16px",
+            lineHeight: 1,
+            padding: "4px 8px",
+            color: "var(--muted)",
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+        >
+          ✕
+        </button>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+        <button
+          type="button"
+          data-testid="welcome-open-demo"
+          className="c-primary-wide"
+          disabled={generatingDemo}
+          onClick={onOpenDemo}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            padding: "12px 16px",
+            gap: "2px",
+            textAlign: "left",
+          }}
+        >
+          <span style={{ fontWeight: 600, fontSize: "13.5px" }}>
+            {generatingDemo
+              ? `Generating demo scene… (${DEMO_APPROX_SIZE_LABEL}) · ${demoElapsedSec}s elapsed`
+              : "Open the demo"}
+          </span>
+          <span style={{ fontSize: "11.5px", opacity: 0.85 }}>
+            {generatingDemo
+              ? `${activeStage} · This can take up to 2 minutes on older Macs.`
+              : `Works offline · No download needed (${DEMO_APPROX_SIZE_LABEL} synthetic junction)`}
+          </span>
+        </button>
+
+        {generatingDemo && onCancelDemo && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px" }}>
+            <span style={{ fontSize: "12px", color: "var(--text-subtle)" }}>
+              Running in background — you can still browse other tabs or cancel.
+            </span>
+            <button
+              type="button"
+              data-testid="welcome-cancel-demo"
+              className="ghost"
+              onClick={onCancelDemo}
+              style={{
+                padding: "4px 10px",
+                fontSize: "12px",
+                border: "1px solid var(--line)",
+                borderRadius: "6px",
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
+        <button
+          type="button"
+          data-testid="welcome-try-sample"
+          className="ghost"
+          onClick={onTrySample}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            padding: "10px 16px",
+            gap: "2px",
+            textAlign: "left",
+            border: "1px solid var(--line)",
+            borderRadius: "6px",
+          }}
+        >
+          <span style={{ fontWeight: 550, fontSize: "13px", color: "var(--text)" }}>
+            Try a real sample (Griffin, MIT licence)
+          </span>
+          <span style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
+            Dev sample · 143 MB download from Hugging Face
+          </span>
+        </button>
+      </div>
+
+      {demoError && (
+        <div style={{ fontSize: "12px", color: "var(--danger)" }}>
+          Failed to generate demo scene: {demoError}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function LibraryScreen({
   onOpenScene,
   onNavigateGetData,
@@ -110,6 +339,12 @@ export default function LibraryScreen({
   >({});
   const [filterQuery, setFilterQuery] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [welcomeCardDismissed, setWelcomeCardDismissed] = useState<boolean>(false);
+  const [serverCount, setServerCount] = useState<number>(0);
+  const [generatingDemo, setGeneratingDemo] = useState<boolean>(false);
+  const [demoElapsedSec, setDemoElapsedSec] = useState<number>(0);
+  const [demoStage, setDemoStage] = useState<string>("");
+  const [demoError, setDemoError] = useState<string | null>(null);
   const [clusterProgress, setClusterProgress] = useState<DatasetJobs | null>(() => datasetJobs()[0] ?? null);
   useEffect(() => subscribeDatasetJobs(() => setClusterProgress(datasetJobs()[0] ?? null)), []);
   const applyScenes = (list: LibrarySceneInfo[]) => {
@@ -134,9 +369,18 @@ export default function LibraryScreen({
       const custom = event as CustomEvent<{
         scenes?: LibrarySceneInfo[];
         storage?: StorageStats | null;
+        welcomeCardDismissed?: boolean;
+        serverCount?: number;
       }>;
       if (custom.detail?.storage !== undefined) {
         setStorage(custom.detail.storage);
+        setShowFirstRunModal(custom.detail.storage?.is_configured === false);
+      }
+      if (custom.detail?.welcomeCardDismissed !== undefined) {
+        setWelcomeCardDismissed(custom.detail.welcomeCardDismissed);
+      }
+      if (custom.detail?.serverCount !== undefined) {
+        setServerCount(custom.detail.serverCount);
       }
       if (custom.detail?.scenes) {
         applyScenes(custom.detail.scenes);
@@ -225,17 +469,60 @@ export default function LibraryScreen({
     }
   };
 
+  const handleOpenDemo = async () => {
+    setDemoElapsedSec(0);
+    setDemoStage("Starting bundled Python generator…");
+    setDemoError(null);
+    try {
+      const outcome = await runDemoOpenFlow({
+        ensureDemo: ensureDemoScene,
+        subscribeProgress: onDemoProgress,
+        onGeneratingStart: () => setGeneratingDemo(true),
+        onGeneratingEnd: () => setGeneratingDemo(false),
+        onProgress: (stage, elapsed) => {
+          if (stage) setDemoStage(stage);
+          setDemoElapsedSec(elapsed);
+        },
+      });
+      onOpenScene(outcome.path);
+    } catch (err) {
+      setGeneratingDemo(false);
+      const msg = errorText(err);
+      if (!msg.toLowerCase().includes("cancelled")) {
+        setDemoError(msg);
+      }
+    }
+  };
+
+  const handleCancelDemo = async () => {
+    await cancelDemoScene();
+    setGeneratingDemo(false);
+  };
+
+  const handleDismissWelcomeCard = async () => {
+    setWelcomeCardDismissed(true);
+    await dismissWelcomeCard();
+  };
+
   const loadData = async () => {
     setLoading(true);
     setLoadError(null);
     try {
-      const stats = await getStorageInfo();
+      const [stats, list, pState, servers] = await Promise.all([
+        getStorageInfo().catch(() => null),
+        getLibraryScenes().catch(() => []),
+        getPersistentState().catch(() => null),
+        listServerProfiles().catch(() => []),
+      ]);
       setStorage(stats);
+      applyScenes(list);
       if (stats && stats.is_configured === false) {
         setShowFirstRunModal(true);
       }
-      const list = await getLibraryScenes();
-      applyScenes(list);
+      if (pState?.welcome_card_dismissed) {
+        setWelcomeCardDismissed(true);
+      }
+      setServerCount(servers.length);
     } catch (err) {
       setLoadError(errorText(err));
     } finally {
@@ -350,7 +637,7 @@ export default function LibraryScreen({
           .join(" · ")
       : undefined,
     actions: (
-      <button type="button" className="c-header-action has-plus" onClick={onNavigateGetData}>
+      <button type="button" className="c-header-action has-plus" onClick={() => onNavigateGetData?.()}>
         Add scenes
       </button>
     ),
@@ -552,7 +839,7 @@ export default function LibraryScreen({
               <InspectorSection title={`${formatBytes(selected.size_bytes)} on disk`}>
                 <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                   <button type="button" className="c-secondary" onClick={() => revealInFinder(selected.path)}>
-                    Show in Finder
+                    {getRevealLabel()}
                   </button>
                   <button
                     type="button"
@@ -582,7 +869,7 @@ export default function LibraryScreen({
               {storage.library_root}
             </span>
             <button type="button" className="c-link" onClick={() => revealInFinder(storage.library_root)}>
-              Show in Finder
+              {getRevealLabel()}
             </button>
             <button type="button" className="c-link" onClick={() => setShowSettingsModal(true)}>
               Change location…
@@ -638,15 +925,28 @@ export default function LibraryScreen({
             />
           </div>
         )}
-        {!loading && !loadError && scenes.length === 0 && (
+        {!loading && !loadError && scenes.length === 0 && !showFirstRunModal && (
           <div style={{ padding: "24px" }}>
-            <PanelState
-              kind="empty"
-              title={PANEL_DEFINITIONS.library.empty.title}
-              description={PANEL_DEFINITIONS.library.empty.description}
-              actionLabel={PANEL_DEFINITIONS.library.empty.actionLabel}
-              onAction={onNavigateGetData}
-            />
+            {serverCount === 0 && !welcomeCardDismissed ? (
+              <WelcomeCard
+                generatingDemo={generatingDemo}
+                demoElapsedSec={demoElapsedSec}
+                demoStage={demoStage}
+                demoError={demoError}
+                onOpenDemo={() => void handleOpenDemo()}
+                onCancelDemo={() => void handleCancelDemo()}
+                onTrySample={() => onNavigateGetData("griffin", "dev")}
+                onDismiss={() => void handleDismissWelcomeCard()}
+              />
+            ) : (
+              <PanelState
+                kind="empty"
+                title={PANEL_DEFINITIONS.library.empty.title}
+                description={PANEL_DEFINITIONS.library.empty.description}
+                actionLabel={PANEL_DEFINITIONS.library.empty.actionLabel}
+                onAction={() => onNavigateGetData()}
+              />
+            )}
           </div>
         )}
 
@@ -667,7 +967,7 @@ export default function LibraryScreen({
             Add more scenes
           </div>
           <div className="c-add-cards">
-            <button type="button" className="c-add-card" onClick={onNavigateGetData}>
+            <button type="button" className="c-add-card" onClick={() => onNavigateGetData?.()}>
               <span className="c-add-title">Download from catalog →</span>
               <span className="c-add-note">Datasets with a recorded licence, measured before you download</span>
             </button>

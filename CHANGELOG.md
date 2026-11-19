@@ -1,6 +1,103 @@
 # Changelog
 
-## 0.0.0
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Security
+- Remote viewer: the session file is written as data (SCRIPTS-01, security review #170). The cluster job wrote its session file with an unquoted shell heredoc, so a data-root folder name could set the session's `ip` and `port`, and the login node then sent the session bearer token to that address. The job now writes the file with `json.dump` from separate arguments, 0600, through a temporary file. Session ids must be plain names (no `..`, `/` or spaces), and data roots, media roots, the viewer page folder and the interpreter path may not contain control characters. `start` and `status` use a session file only when its job id and session id match the job just submitted. **Behaviour that changes:** `coperceive remote start --uuid` refuses ids that are not 1–128 of `A-Za-z0-9._-`; the app never passes one.
+
+## [0.1.1] - 2026-11-19
+
+### Added
+- First-run demo mode (`coperceive demo create`, PR #142, PR #152): an empty library shows a welcome card with "Open the demo" (offline, generated on demand by the bundled Python runtime into `<state_dir>/demo/` with progress and cancel, then cached) and "Try a real sample (Griffin, MIT licence)" (opens Get Data with the Griffin `dev` preset pre-selected; the welcome card button shows `143 MB download` and Get Data's dry run shows `228.6 MB` (`239,749,191` bytes) for `Dev tier`). The synthetic cooperative scene (`demo-junction`: 3 agents `cav-a`, `cav-b`, and `rsu` with no drone, 100 frames at 10 Hz, 10 moving actors, no HD map) includes one synthetic prediction run (`demo`) clearly labelled "synthetic predictions" across the library and viewer. On disk, `scenes/demo-junction/` is 1.7 MiB (`1,818,047` bytes; the full `<state_dir>/demo/` tree including `raw/` and `predictions/` is 7.8 MiB / `8,218,139` bytes, while the welcome card button displays the hard-coded UI string `~8.2 MB`). Deleting the demo removes only `<state_dir>/demo/`.
+- The public site offers one download for the visitor's operating system (PR #148). It paints the release captured at build time, then replaces that release when the live GitHub tag differs. A platform with no installer says it is coming in the next release. macOS without a reported chip is offered both disk images.
+- Viewer styles (Settings → Viewer → Style, PR #144): Classic (today's layout, the default), Studio, Instrument and Cinema, each a live preview of one scene. The choice is stored in state.json and applies at once. Cinema's camera drift shows only for Cinema and stays off when the system asks for reduced motion. Boxes can be coloured by who recorded them (both, ego only, the other agent) only when that dataset stores each agent's own list and a shared track id: OPV2V (`vehicles`) and Griffin (per-agent `track_id`). V2XSet, V2V4Real, DAIR-V2X-C, generic scenes and the demo hide it. V2V4Real's per-CAV `vehicles` keys are not a shared observation; `ass_id` is the cross-CAV field and is not read.
+- Four-target release pipeline and updater manifest (`latest.json`, PR #140): automated release builds and minisign signature verification (`minisign -Vm`) across `darwin-aarch64` (`Coperceive_aarch64.app.tar.gz`), `darwin-x86_64` (`Coperceive_x64.app.tar.gz`), `windows-x86_64` (`Coperceive_<version>_x64-setup.exe`), and `linux-x86_64` (`Coperceive_<version>_amd64.AppImage`), plus Debian `.deb` package-manager update handling.
+- Native installers across three operating systems (PR #134): Windows NSIS installer (`.exe`) with silent `/S` install and uninstall, Linux Debian package (`.deb`) and standalone AppImage, and macOS Apple Silicon (`arm64`) and Intel (`x86_64`) disk images (`.dmg`). The bundled Python standalone runtime is bundled and verified across all four targets. The Intel Mac build is cross-compiled on Apple Silicon runners and verified under Rosetta 2 emulation, but remains untested on physical Intel Mac hardware until verified by a user.
+- Evaluation breakdowns, failure ranking, reproducibility cards, Overleaf paper export, and lab server profile sharing (PR #136, PR #137, PR #138, PR #139): multi-run comparison with distance/occlusion breakdowns (`coperceive eval compare`), worst-frame failure ranking (`coperceive eval failures`), seeded robustness perturbations (`coperceive model run --perturb`), secret-scrubbed portability/repro cards (`coperceive repro export`), Overleaf `.zip` paper bundle export (`coperceive export paper`), and secret-free `.coperceive-server.json` lab profile import/export.
+- Generic multi-view scene adapter (`coperceive/adapters/generic.py`), validator, and two runnable examples (PR #133).
+- V2V4Real 10 Hz playback and optional camera manifests (PR #132): V2V4Real streams and plays at 10 Hz (0.1 s per frame), and camera records are marked optional so LiDAR-only manifests validate and play cleanly without requiring phantom camera files.
+- Windows and Linux platform behaviour (PR #129): native window decorations, Ctrl shortcut accelerator menu, dynamic reveal labels ("Show in Explorer", "Show in folder", "Show in Finder"), Windows OpenSSH support with `%USERPROFILE%\.ssh\config` and `ControlMaster=no`, process pause and resume via `ntdll.dll` on Windows, strict Windows ACL checks for token and state files, and pure Rust `zip` crate for diagnostics export.
+- V2V4Real LiDAR-only release confirmation and box angle keys in degrees `[roll, yaw, pitch]` (PR #131).
+- Dataset adapters for V2V4Real and DAIR-V2X-C with automated detection (PR #126). V2V4Real supports LiDAR point clouds and poses in OpenCOOD layout with unverified coordinate convention warnings; DAIR-V2X-C adds support for cooperative infrastructure-vehicle setups.
+- CARLA town road maps one-click download and verification in viewer and settings (PR #128), covering two verification classes: towns verified against the official CARLA 0.9.15 package (Town03, Town06, Town07, Town10HD) and towns matching public mirrors without package verification (Town01, Town02, Town04, Town05).
+- Cross-platform desktop foundation for Windows and Linux targets (PR #122).
+- Automated CI test matrix and headless smoke test pipelines for `ubuntu-latest` and `windows-latest`.
+- Push CI trigger support on `release/**` branches for integration testing.
+
+### Changed
+- Public-launch cleanup: `LICENSE` is now the unmodified Apache-2.0 text, so GitHub detects the licence; the copyright line moved to a new `NOTICE` file. `CONTRIBUTING.md` is rewritten as a contributor guide (setup, checks, adding a dataset or a model plugin, PR checklist). Internal working files are no longer in the repository (`HANDOVER.md`, `TASKS.md`, `spikes/`, `docs/superpowers/`, `docs/log/`, three personal Slurm scripts), and cluster-specific usernames, hostnames and paths in the docs and test inputs are replaced with placeholders. `scripts/site/export_hero_clip.py` now takes its paths as arguments.
+- Python 3.10 is no longer supported; the minimum version is 3.11 because Pillow 13 dropped 3.10 (PR #130). Note that the released v0.1.0 app already bundled Pillow 13.0.0.
+- Tauri desktop dependencies and build configuration are no longer macOS-only.
+- System log directories, application data directories, and clipboard interactions abstracted into platform-specific implementations.
+
+### Fixed
+- Evaluations of a built-in model submitted from the app now run, and their Slurm job is the one `coperceive model run --slurm` writes for the same inputs. Before, a Griffin evaluation from New evaluation could not run:
+  - the form demanded a checkpoint that Griffin does not take;
+  - the job passed `--output-dir`, which `model run` refuses at once;
+  - the job ignored the manifest's 8 CPUs, 64 GB, GPU, `a40` constraint and CUDA modules on venv, conda and plain profiles;
+  - `module purge` unloaded the venv's own Python;
+  - the job asked for 04:00:00;
+  - logs went to the results folder;
+  - `environment.json` was recorded with whatever `python3` the node found first.
+
+  The app's job now writes the same lines as the CLI's:
+  - `model run --out --run-id --work "$SCRATCH_DIR/work"`;
+  - `--gres=gpu:1` plus the manifest's `--constraint` (no GPU when the manifest says `gpu: false`);
+  - the manifest's CPUs and memory;
+  - `--time` from the CLI's estimate (01:00:00 for Griffin), shown in the form and editable, and refused before preview when it is over the partition's limit;
+  - `--mail-type=END,FAIL`;
+  - logs in `~/logs/%x-%j.out|err` (the folder is made at submit);
+  - `module purge`, then the venv's `python/<version>`, then the manifest's modules;
+  - `PYTHONPATH` set to the cluster's coperceive;
+  - `environment.json` beside `run.json`, recorded with the run's own interpreter.
+
+  More changes:
+  - A run succeeds when `model run` exits 0 and writes `run.json`. `boxes.parquet` is required only when `run.json`'s new `provenance.boxes_written` is above zero.
+  - A scenes folder can be the test split. It is fingerprinted by its listing and checked again at save and submit.
+  - The app reads plugins with the new `coperceive model list --json`. One plugin that fails or exits while importing is shown with its reason, and the rest of the list stays.
+  - A manifest whose models depend on each other in a loop gets a clear message instead of hanging.
+  - A built-in plan saved before this fix is refused with "Rebuild this plan" before anything is submitted.
+  - CLI: the job's final `echo` quotes its path. `--slurm-logs` folders containing whitespace or control characters are refused, because `#SBATCH --output` cannot quote them.
+
+  The remaining differences are in ADR 0021, and `tests/test_plan_parity.py` with `src-tauri/tests/plan_parity.rs` hold the two scripts together.
+- Evaluation plan builder and CLI parity (PR #143, PR #149): pass `--model`, `--raw-root`, `--media-root`, and `--work` to `coperceive model run`, validate and shell-quote run IDs, and quote Slurm environment paths as a single shell word.
+- Diagnostics reporting and zip bundle export made cross-platform with clipboard fallback and clear missing-tool errors.
+- Release asset packaging tightened to copy only exact application bundle and DMG assets, excluding stray dependencies (`dateutil-zoneinfo.tar.gz`).
+
+### Security
+- Upgraded Pillow to 13.0.0 in `uv.lock` and tokio to 1.54.1 (PR #130).
+- Restricted Pillow image decoders strictly to PNG and JPEG to reduce parser attack surface (PR #130). Note that the released v0.1.0 app already bundled Pillow 13.0.0.
+- `coperceive serve` auth with `--root-path` and DNS rebinding without a token (FOLD-02, FOLD-06, security review #170; backported from release/v0.1.2). FOLD-02: with `--root-path` set, the bearer-token and `X-Coperceive-Request` checks never ran, because uvicorn puts the prefix in front of the path, so every `/api` route behind a proxy was open. They now apply to every `/api` route whatever the root path: a `--root-path` deployment with a token now requires the token on every `/api` route, and the CSRF header on every POST. FOLD-06: a token-less `coperceive serve` accepted any `Host` header, so a DNS-rebinding page could read the root and start jobs. **Behaviour that changes:** without a token, serve now answers only `127.0.0.1`, `localhost` or `[::1]` on its own port and returns 400 for any other `Host`, including an SSH tunnel that arrives on a different local port (keep the same port, for example `-L 8731:127.0.0.1:8731`, or use a token). Token-less serve behind a hub proxy no longer works: use `COPERCEIVE_TOKEN` or `--token-file` and enter the token in the page. With a token the `Host` is not checked, so the desktop app, which always starts serve with `--token-file`, is unchanged.
+
+## [0.1.0] - 2026-11-05
+
+### Added
+- Native desktop application for macOS (Apple Silicon) built with Tauri and React.
+- Dense, calm user interface matching the redesigned layout across Library, Get Data, Servers, and Dataset View.
+- HPC Cluster Workspace: SSH remote directory browser, Slurm batch job array preparation, and live cluster job monitoring.
+- Zero-Slurm-job cluster dataset viewing over long-lived SSH streaming pipe (`coperceive dataset stream`).
+- Interactive 3D scene viewer with lidar point cloud playback, 3D bounding boxes, camera frustums, and multi-agent tracking.
+- Multi-agent camera filmstrip with scrolling thumbnails, active-camera split view, and depth-colored lidar point projection.
+- Offline and local dataset inspection, validation, and conversion for OPV2V, V2XSet, and Griffin datasets.
+- Privacy-preserving crash capture and user-initiated diagnostics dialog with automated secret redaction (preview, clipboard copy, zip bundle export).
+- In-app update notifications via sidebar card with release notes popover and restart-to-install workflow.
+
+### Changed
+- Redesigned scene viewer and dataset view layout to eliminate element overlap at all window sizes down to 900 × 600.
+- Unified window toolbar on macOS with inline traffic light controls.
+- Optimized cold raw file reads and YAML parsing during Slurm dataset preparation.
+
+### Fixed
+- Prevented point cloud and bounding box desynchronization during playback over high-latency SSH connections.
+- Fixed camera frustum image plane poses to stay synchronized with moving agent poses.
+- Fixed concurrent remote viewer start conflicts when sharing remote manifests.
+
+### Details
 
 Viewer layout fixes, the camera filmstrip back as a setting, and the update notice as a sidebar card. Nothing in the viewer overlaps any more at the window sizes people use, down to the 900 × 600 minimum. The top bar is one row: the connection text ("Streaming over SSH from <server>") sits after "k of n" and is the part that gives way, with an ellipsis and the full text in its tooltip, down to its status dot; it used to be drawn over "31 of 33" and the ‹ › buttons. The stage's view chip, mode switch and frame chip share a grid: on a narrow stage (the camera viewer open) the switch moves to its own row, then the chips shorten to "t = 7.5 s" and "99 m"; the legend wraps before it reaches the scale bar. The left panel cannot scroll sideways any more (a trackpad swipe moved it and clipped the start of every row: "a frustums", "ap name in this scene."); labels and notes wrap inside it and counts stay right-aligned. Saved panel widths give way before the 3D view gets narrower than 250 px. Settings → Viewer → "Camera strip" chooses "All cameras (scroll)", the filmstrip of every agent's cameras from before the v0.1.1 layout and now the default, or "One agent at a time" with Switch agent; the strip's All | Agent toggle sets the same `camera_strip` in state.json, applied at once. The filmstrip scrolls with the trackpad, Shift and the wheel, or the wheel alone, settles on a thumbnail, never scrolls vertically, keeps each camera's aspect ratio, labels each thumbnail with its agent's colour and name, its camera and its box count, and keeps the selected camera (split view or Camera view) highlighted and in view; thumbnails still load only while on screen. "Update available" is a card at the bottom of the main window's sidebar, above Settings: "New update available" and "coperceive X is ready" in the theme's blue on a tinted panel, What's new (the notes in a popover), an Install pill (restart into the update, the old "Restart now") and ✕ ("Later", now for the whole session: the background check no longer brings the same version back; Help → Check for Updates does). A collapsed sidebar shows a blue dot on its toggle; the viewer has no banner, only "Update ready" in its top bar, which brings the main window forward. Download and signature errors show in the card with Retry; manual checks keep their toast. A browser test asserts that no two siblings in the top bar, the stage chips, the left-panel rows, the strip header and the timeline row intersect at 1280 × 800, 1440 × 900, 1600 × 1000, 2560 × 1440 and 900 × 600, with the camera viewer open and closed and the side panels shown, at their narrowest and widest, and hidden.
 
