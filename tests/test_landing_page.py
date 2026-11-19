@@ -263,6 +263,29 @@ def _wait_canvas_moved(page: Page, selector: str, before: int) -> None:
         page.wait_for_timeout(100)
 
 
+def _assert_simulated_badge(page: Page, container_selector: str) -> None:
+    badge = page.locator(f"{container_selector} [data-simulated-badge]")
+    assert badge.count() == 1
+    assert badge.is_visible()
+    assert badge.inner_text().strip() == "Simulated"
+
+
+def _assert_badge_avoids_controls(page: Page, container_selector: str) -> None:
+    badge_box = page.locator(f"{container_selector} [data-simulated-badge]").bounding_box()
+    assert badge_box is not None
+    controls = page.locator(f"{container_selector} [role='group']")
+    for idx in range(controls.count()):
+        ctrl_box = controls.nth(idx).bounding_box()
+        assert ctrl_box is not None
+        overlaps = not (
+            badge_box["x"] + badge_box["width"] <= ctrl_box["x"]
+            or ctrl_box["x"] + ctrl_box["width"] <= badge_box["x"]
+            or badge_box["y"] + badge_box["height"] <= ctrl_box["y"]
+            or ctrl_box["y"] + ctrl_box["height"] <= badge_box["y"]
+        )
+        assert not overlaps, f"Badge {badge_box} overlaps control {ctrl_box}"
+
+
 def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path):
     with sync_playwright() as playwright:
         browser = _launch(playwright)
@@ -305,6 +328,9 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
         page.wait_for_selector("canvas[data-bev=hero]", timeout=15000)
         _wait_canvas_drawn(page, "canvas[data-bev=hero]")
         assert _pixel_count(page, "canvas[data-bev=hero]") > 20
+        hero_label = page.locator("canvas[data-bev=hero]").get_attribute("aria-label") or ""
+        assert hero_label.startswith("A simulated city block")
+        _assert_simulated_badge(page, "[data-screen-label='Story']")
         hero_a = _hash(page, "canvas[data-bev=hero]")
         _wait_canvas_moved(page, "canvas[data-bev=hero]", hero_a)
         assert hero_a != _hash(page, "canvas[data-bev=hero]")
@@ -363,6 +389,10 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
         )
         assert page.get_by_role("button", name="det-v2").get_attribute("aria-pressed") == "true"
         assert _pixel_count(page, "canvas[data-eval]") > 20
+        eval_label = page.locator("canvas[data-eval]").get_attribute("aria-label") or ""
+        assert eval_label.startswith("A simulated drive")
+        _assert_simulated_badge(page, "#evaluate")
+        _assert_badge_avoids_controls(page, "#evaluate")
         page.evaluate("() => window.scrollBy(0, window.innerHeight * 0.8)")
         page.wait_for_timeout(1500)
         _shot(page, tmp_path, "landing-1440-evaluate")
@@ -389,12 +419,15 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
         assert isinstance(overflow, (int, float)) and overflow <= 0
         page.wait_for_selector("canvas[data-bev=hero]", timeout=15000)
         page.wait_for_timeout(800)
+        _assert_simulated_badge(page, "[data-screen-label='Story']")
         _shot(page, tmp_path, "landing-375-hero")
         page.locator("#evaluate").scroll_into_view_if_needed()
         page.evaluate("() => window.scrollBy(0, window.innerHeight * 0.8)")
         page.wait_for_selector("canvas[data-eval]", timeout=15000)
         _wait_canvas_drawn(page, "canvas[data-eval]")
         page.wait_for_timeout(800)
+        _assert_simulated_badge(page, "#evaluate")
+        _assert_badge_avoids_controls(page, "#evaluate")
         overflow_eval = page.evaluate(
             "() => document.documentElement.scrollWidth - window.innerWidth"
         )
