@@ -77,7 +77,13 @@ ignore_gt_visibility_below: null     # null, or a number: GT with visibility bel
 max_range_m: null                    # null, or metres from the agent body origin at that time, measured horizontally; GT and predictions farther are ignored
 score_threshold: 0.3                 # operating point for statuses and per-sample counts
 gt_class_map: {}                     # optional: ground-truth class -> class, applied before matching, e.g. {truck: car, bus: car, motorcycle: bicycle}
+ranking_scope: per_frame             # per_frame | pooled: the order of the AP walk
+gt_scope: connected_union            # connected_union | ego_only: the ground truth of a fused output
+comm_range_m: 70.0                   # metres, horizontal: the range of connected_union
+protocol: default                    # default | legacy: a preset of ranking_scope and gt_scope; not copied into metrics.json
 ```
+
+`protocol: legacy` sets `ranking_scope: pooled` and `gt_scope: ego_only`, the rules of v0.1.1 and earlier; `eval run --protocol legacy` does the same. A config that also sets either key to another value is an error, and so is a `--protocol` that differs from the file's `protocol`. `metrics.json` records the two keys it set, not `protocol`.
 
 Unknown keys are errors. `display_threshold` not in `thresholds` is an error. `criterion: centre` without `thresholds` is an error: the default thresholds are IoU values.
 

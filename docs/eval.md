@@ -49,9 +49,34 @@ class_thresholds: {}                 # class -> list of the same length, e.g. {p
 ignore_gt_visibility_below: null     # a number drops ground truth below it; null visibility is kept
 max_range_m: null                    # a number drops ground truth and predictions farther from the agent body origin
 score_threshold: 0.3                 # the operating point for statuses and per-sample counts
+ranking_scope: per_frame             # per_frame | pooled: the order of the AP walk
+gt_scope: connected_union            # connected_union | ego_only: the ground truth of a fused output
+comm_range_m: 70.0                   # metres, horizontal: the range of connected_union
+protocol: default                    # default | legacy: see "Reproduce v0.1.1 numbers"
 ```
 
 `thresholds` are strictly increasing for `iou_bev` and strictly decreasing for `centre`. With `criterion: centre` the `thresholds` key is required: the default list is IoU values. An unknown key, a `display_threshold` that is not one of `thresholds`, or a class list of the wrong length is an error that names the key.
+
+### Reproduce v0.1.1 numbers
+
+v0.1.2 scores the same predictions under another protocol than v0.1.1, so its AP differs (see the changelog). One switch brings back the old rules, in the config or on the command line:
+
+```yaml
+protocol: legacy                     # ranking_scope: pooled, gt_scope: ego_only
+```
+
+```bash
+coperceive eval run <run_id> --root <scenes> --protocol legacy
+```
+
+`eval report` then heads the tables with `protocol: legacy (pooled, ego-only)`, the label a run evaluated by v0.1.1 has, and `eval compare` sets the two side by side. On the demo run (`coperceive demo create`), every count, precision, recall and AP of `metrics.json` and of `eval report` equals v0.1.1's. `tests/test_eval_legacy_protocol.py` checks this against values written by the v0.1.1 code. It checks the same for the cooperative test scene, which has a `fused` output.
+
+The switch restores the protocol, not the defects v0.1.2 fixed. These still differ from v0.1.1 under `protocol: legacy`:
+
+- the BEV IoU of a pair, in the last bits (`tp_errors.iou_bev`; at most 6e-16 on both test runs);
+- the bottom `all` row of `eval report` and `eval compare`, which counts `recovered` and `lost_by_fusion` once per agent and merges the outputs in a fixed order. On the cooperative test scene its mAP is 0.343 where v0.1.1 printed 0.310, and `recovered` is 1 where it printed 2;
+- every AP of `eval compare --by`, now the AP of the bin;
+- the ground truth of scenes and agents with no prediction, which now counts.
 
 ## Matching rules
 

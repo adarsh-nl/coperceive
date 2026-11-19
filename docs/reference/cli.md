@@ -495,8 +495,8 @@ options:
 ## `coperceive eval run`
 
 ```text
-usage: coperceive eval run [-h] --root ROOT [--predictions PREDICTIONS] [--config CONFIG] [--scenes
-       SCENES] run_id
+usage: coperceive eval run [-h] --root ROOT [--predictions PREDICTIONS] [--config CONFIG]
+       [--protocol {default,legacy}] [--scenes SCENES] run_id
 
 positional arguments:
   run_id
@@ -507,6 +507,10 @@ options:
   --predictions PREDICTIONS
                         Predictions root. Default: ROOT/predictions.
   --config CONFIG  Evaluation config YAML. Default: the spec.
+  --protocol {default,legacy}
+                        default: per-frame ranking, connected-union ground truth (70 m). legacy:
+                        the v0.1.1 rules, pooled ranking and each agent's own ground truth. Same
+                        as the config key protocol.
   --scenes SCENES  Comma-separated scene ids. Default: all.
 ```
 
