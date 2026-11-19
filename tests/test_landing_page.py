@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import functools
 import http.server
+import json
 import os
 import socket
 import threading
@@ -15,7 +16,14 @@ from typing import NoReturn, cast
 import pytest
 
 try:
-    from playwright.sync_api import Browser, ConsoleMessage, Page, Playwright, sync_playwright
+    from playwright.sync_api import (
+        Browser,
+        ConsoleMessage,
+        Page,
+        Playwright,
+        Route,
+        sync_playwright,
+    )
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 except ImportError:
     if os.environ.get("COPERCEIVE_E2E_REQUIRED", "") not in {"", "0"}:
@@ -139,6 +147,30 @@ def _hash(page: Page, selector: str) -> int:
 
 
 REPO = "https://github.com/adarsh-nl/coperceive"
+LATEST_RELEASE_URL = "https://api.github.com/repos/adarsh-nl/coperceive/releases/latest"
+_STUB_LATEST_RELEASE = {
+    "tag_name": "v0.1.1",
+    "assets": [
+        {
+            "name": "Coperceive_0.1.1_aarch64.dmg",
+            "browser_download_url": "https://example.test/Coperceive_0.1.1_aarch64.dmg",
+        }
+    ],
+}
+
+
+def _stub_latest_release(page: Page) -> None:
+    def _fulfill(route: Route) -> None:
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            headers={"access-control-allow-origin": "*"},
+            body=json.dumps(_STUB_LATEST_RELEASE),
+        )
+
+    page.route(LATEST_RELEASE_URL, _fulfill)
+
+
 INSTALL = (
     '$ pip install -e ".[app,griffin]"\n'
     "$ coperceive convert griffin --subset 25m --raw-root ./griffin-release --out ./scenes\n"
@@ -290,6 +322,7 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
     with sync_playwright() as playwright:
         browser = _launch(playwright)
         page = browser.new_page(viewport={"width": 1440, "height": 900})
+        _stub_latest_release(page)
         errors: list[str] = []
         requests: list[str] = []
 
@@ -309,7 +342,7 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
         # Fonts and scripts are self-hosted. The one off-origin request is the
         # latest-release lookup, so a published release replaces the build-time copy.
         origin = site_server.split("/coperceive/")[0]
-        latest = "https://api.github.com/repos/adarsh-nl/coperceive/releases/latest"
+        latest = LATEST_RELEASE_URL
         deadline = time.monotonic() + 5
         while latest not in requests and time.monotonic() < deadline:
             page.wait_for_timeout(100)
@@ -441,6 +474,7 @@ def test_reduced_motion_holds_still(site_server: str):
     with sync_playwright() as playwright:
         browser = _launch(playwright)
         page = browser.new_page(viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
+        _stub_latest_release(page)
         page.goto(site_server, wait_until="networkidle")
         page.wait_for_selector("canvas[data-bev=hero]", timeout=15000)
         _wait_canvas_drawn(page, "canvas[data-bev=hero]")
