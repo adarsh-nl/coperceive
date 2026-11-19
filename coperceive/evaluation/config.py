@@ -26,7 +26,13 @@ from coperceive.errors import CoperceiveError
 CRITERIA = ("iou_bev", "centre")
 RANKING_SCOPES = ("per_frame", "pooled")
 GT_SCOPES = ("connected_union", "ego_only")
+# ``protocol`` is a preset of ranking_scope and gt_scope (docs/eval-spec.md A.2). ``legacy``
+# is the rule set of v0.1.1 and earlier: one pooled sort, each output against its own
+# agent's boxes. It is expanded here and not recorded: metrics.json keeps the two keys.
+PROTOCOLS = ("default", "legacy")
+LEGACY_PROTOCOL = {"ranking_scope": "pooled", "gt_scope": "ego_only"}
 KEYS = (
+    "protocol",
     "criterion",
     "thresholds",
     "display_threshold",
@@ -74,25 +80,45 @@ DEFAULT_CONFIG = EvalConfig(
 )
 
 
-def load_config(path: Path | None) -> EvalConfig:
-    """Read a YAML config; ``None`` is the default config. An empty file is too."""
+def load_config(path: Path | None, protocol: str | None = None) -> EvalConfig:
+    """Read a YAML config; ``None`` is the default config. An empty file is too.
+
+    ``protocol`` is the command line's ``--protocol``; it sets the config's ``protocol``
+    key, and a file that names another protocol is an error.
+    """
     if path is None:
-        return DEFAULT_CONFIG
+        return DEFAULT_CONFIG if protocol is None else parse_config({}, protocol=protocol)
     import yaml
 
     try:
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise ConfigError(f"{path}: {exc}") from None
-    return parse_config(payload)
+    return parse_config(payload, protocol=protocol)
 
 
-def parse_config(payload: object) -> EvalConfig:
+def parse_config(payload: object, protocol: str | None = None) -> EvalConfig:
     """Validate a decoded YAML or JSON object. Absent keys take the spec defaults."""
-    node = _mapping("", payload)
+    node = dict(_mapping("", payload))
     unknown = sorted(set(node) - set(KEYS))
     if unknown:
         raise ConfigError(f"unknown key {unknown[0]!r}")
+    if protocol is not None:
+        _choice("--protocol", protocol, PROTOCOLS)
+        if "protocol" in node and node["protocol"] != protocol:
+            raise ConfigError(
+                f"protocol: the config says {node['protocol']!r} and --protocol says {protocol!r}"
+            )
+        node["protocol"] = protocol
+    preset = _choice("protocol", node.pop("protocol", "default"), PROTOCOLS)
+    if preset == "legacy":
+        for key, value in LEGACY_PROTOCOL.items():
+            if key in node and node[key] != value:
+                raise ConfigError(
+                    f"{key}: protocol legacy sets {key} {value!r}; the config also says "
+                    f"{node[key]!r}"
+                )
+            node[key] = value
     criterion = _choice("criterion", node.get("criterion", DEFAULT_CONFIG.criterion), CRITERIA)
     if "thresholds" in node:
         thresholds = _thresholds("thresholds", node["thresholds"], criterion, count=None)

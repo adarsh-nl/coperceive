@@ -119,6 +119,16 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     run.add_argument("run_id")
     _root_arguments(run)
     run.add_argument("--config", default=None, help="Evaluation config YAML. Default: the spec.")
+    run.add_argument(
+        "--protocol",
+        choices=("default", "legacy"),
+        default=None,
+        help=(
+            "default: per-frame ranking, connected-union ground truth (70 m). legacy: the "
+            "v0.1.1 rules, pooled ranking and each agent's own ground truth. Same as the "
+            "config key protocol."
+        ),
+    )
     run.add_argument("--scenes", default=None, help="Comma-separated scene ids. Default: all.")
     run.set_defaults(func=run_command)
 
@@ -340,7 +350,8 @@ def _run(args: argparse.Namespace) -> None:
     root = _scenes_root(args)
     predictions = _existing_predictions_root(args)
     config_path = args.config
-    config = load_config(Path(config_path) if isinstance(config_path, str) else None)
+    protocol = args.protocol if isinstance(args.protocol, str) else None
+    config = load_config(Path(config_path) if isinstance(config_path, str) else None, protocol)
     report = evaluate_run(
         root,
         predictions,

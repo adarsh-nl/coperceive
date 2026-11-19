@@ -308,12 +308,16 @@ LEGACY_LABEL = "legacy (pooled, ego-only)"
 def config_protocol_label(config: Mapping[str, object] | None) -> str:
     """The protocol line of one ``metrics.json`` ``config`` object (spec A.2, A.12).
 
-    A config without ``ranking_scope`` or ``gt_scope`` predates them: legacy.
+    A config without ``ranking_scope`` or ``gt_scope`` predates them: legacy. So is one
+    that records pooled and ego_only (``protocol: legacy``): the same rules, one label, so
+    ``eval compare`` sets a v0.1.1 run beside a run scored again under the old rules.
     """
     if config is None or "ranking_scope" not in config or "gt_scope" not in config:
         return LEGACY_LABEL
     ranking = str(config["ranking_scope"])
     gt_scope = str(config["gt_scope"])
+    if (ranking, gt_scope) == (LEGACY_RANKING_SCOPE, LEGACY_GT_SCOPE):
+        return LEGACY_LABEL
     text = f"ranking {ranking}, ground truth {gt_scope}"
     if gt_scope == "connected_union":
         comm = _float(config.get("comm_range_m"))

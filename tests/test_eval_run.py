@@ -1088,7 +1088,7 @@ def test_headline_ap_pools_every_detection_across_scenes(tmp_path: Path) -> None
 
     text = render_report(collected, DEFAULT_CONFIG.thresholds)
     # spec A.12: the protocol the run was scored under heads every report.
-    assert text.splitlines()[0] == "protocol: ranking pooled, ground truth ego_only"
+    assert text.splitlines()[0] == "protocol: legacy (pooled, ego-only)"
     main, per_class_table = _tables(text)
     header = main[0]
     ap_column = header.index("mAP@0.5 (BEV) all")

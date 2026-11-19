@@ -98,7 +98,8 @@ def test_metrics_caption_names_the_protocol_and_ap_columns_say_bev() -> None:
     ego = _with_config(criterion="iou_bev", ranking_scope="pooled", gt_scope="ego_only")
     both = metrics_tex([current, {**ego, "scene_id": "synth_002"}], _OPTIONS)
     assert "protocols differ between scenes: ranking per\\_frame" in both
-    assert "; ranking pooled, ground truth ego\\_only." in both
+    # Pooled with ego-only ground truth is the v0.1.1 rule set: it carries the legacy label.
+    assert "; legacy (pooled, ego-only)." in both
 
 
 def test_a_centre_distance_run_is_not_labelled_bev() -> None:
