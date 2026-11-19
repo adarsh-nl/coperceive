@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * The v0.1.1 page pattern (docs/design/v0.1.1/App Pages.dc.html): a main list
+ * The v0.1.1 page pattern (v0.1.1 layout): a main list
  * or table and a right inspector for the selected row, under a one-line header
  * the shell draws from what the page publishes.
  *

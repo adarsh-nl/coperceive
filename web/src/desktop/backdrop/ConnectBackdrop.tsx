@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Looping animated BEV backdrop for the Coperceive desktop Connect window.
-// Ported and adapted from "Viewer Directions.dc.html" (1b "Ledger") and "viewer-engine.js".
+// Ported and adapted from the Coperceive UI design specification (1b "Ledger").
 
 import { useEffect, useMemo, useRef } from "react";
 import { createBackdropScene, crossfadeWeights } from "./scene";

@@ -1,6 +1,6 @@
 # App pages: mock vs app
 
-Each image is three panels: the Claude Design mock (`App Pages.dc.html`), the
+Each image is three panels: the Claude Design mock (v0.1.1 App Pages), the
 app with synthetic fixtures (populated), and the app with nothing configured
 (empty). The app runs as the browser build with seeded fixtures; no cluster,
 dataset frames or real paths are used.

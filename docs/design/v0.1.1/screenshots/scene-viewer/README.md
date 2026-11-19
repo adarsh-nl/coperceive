@@ -1,6 +1,6 @@
 # Scene viewer: mock vs app
 
-Each image has three panels: the Claude Design mock (`Scene Viewer.dc.html`),
+Each image has three panels: the Claude Design mock (v0.1.1 Scene Viewer),
 the app with a synthetic scene, and the app with an empty scenes root. The app
 runs as the browser build. The scene is made up for these pictures: four
 agents at a crossing for 10.6 s, 18 invented vehicles, random lidar points with

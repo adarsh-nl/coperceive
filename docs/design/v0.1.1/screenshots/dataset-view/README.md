@@ -1,7 +1,7 @@
 # Dataset view v2: mock vs app
 
 Each image has three panels. The first is always the Claude Design mock
-(`HPC Dataset View v2.dc.html`); the app runs as the browser build with
+(v0.1.1 Dataset View v2); the app runs as the browser build with
 synthetic fixtures (made-up 2024 recording times, invented counts).
 
 - `flat-<size>-<theme>.jpg`: mock, the app with no grouping (the default, a
