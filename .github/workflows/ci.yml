@@ -41,6 +41,40 @@ jobs:
               # re-renders the app scripts against these files.
               - 'coperceive/models/**'
               - 'tests/fixtures/plan_parity/**'
+              # Bundled Python entrypoints, demo generator, evaluation, datasets,
+              # scene/bundle/repro/hdmap/validation, and fixtures exercised by desktop smoke/E2E.
+              - 'coperceive/__init__.py'
+              - 'coperceive/__main__.py'
+              - 'coperceive/cli.py'
+              - 'coperceive/demo/**'
+              - 'coperceive/evaluation/**'
+              - 'coperceive/evalview.py'
+              - 'coperceive/adapters/**'
+              - 'coperceive/cluster_datasets.py'
+              - 'coperceive/remote/**'
+              - 'coperceive/remote_view/**'
+              - 'coperceive/scene/**'
+              - 'coperceive/catalog/**'
+              - 'coperceive/repro/**'
+              - 'coperceive/hpc/profile.py'
+              - 'coperceive/hdmap/**'
+              - 'coperceive/bundle/**'
+              - 'coperceive/validate.py'
+              - 'coperceive/model.py'
+              - 'coperceive/store.py'
+              - 'coperceive/viewdata.py'
+              - 'coperceive/se3.py'
+              - 'coperceive/transform.py'
+              - 'coperceive/errors.py'
+              - 'coperceive/images.py'
+              - 'coperceive/camera_images.py'
+              - 'coperceive/seen_by.py'
+              - 'coperceive/plot.py'
+              - 'coperceive/plot_style.py'
+              - 'coperceive/paper_export.py'
+              - 'coperceive/rerun_export.py'
+              - 'coperceive/sequence_export.py'
+              - 'tests/fixtures/synthetic_scene/**'
               - 'pyproject.toml'
               - '**/*lock*'
               - '.github/workflows/**'
@@ -64,7 +98,7 @@ jobs:
             echo "::error title=FilterGuard::BASE_SHA ${BASE_SHA} not found in git history"
             exit 1
           fi
-          CHANGED_CRITICAL=$(git diff --name-only "${BASE_SHA}"...HEAD | grep -E '^(src-tauri/|web/|coperceive/app/|coperceive/models/|tests/fixtures/plan_parity/|scripts/desktop/|pyproject\.toml|\.github/workflows/|.*lock.*)' || true)
+          CHANGED_CRITICAL=$(git diff --name-only "${BASE_SHA}"...HEAD | grep -E '^(src-tauri/|web/|coperceive/(app|models|demo|evaluation|adapters|remote|remote_view|scene|catalog|repro|hdmap|bundle)/|coperceive/(__init__|__main__|cli|evalview|cluster_datasets|hpc/profile|validate|model|store|viewdata|se3|transform|errors|images|camera_images|seen_by|plot|plot_style|paper_export|rerun_export|sequence_export)\.py$|tests/fixtures/(plan_parity|synthetic_scene)/|scripts/desktop/|pyproject\.toml|\.github/workflows/|.*lock.*)' || true)
           if [ -n "${CHANGED_CRITICAL}" ] && [ "${DESKTOP_FILTER}" != "true" ]; then
             echo "::error title=FilterGuard::Critical desktop paths changed but filter reported skip!"
             echo "Changed critical files:"
