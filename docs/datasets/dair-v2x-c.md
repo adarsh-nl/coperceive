@@ -65,12 +65,12 @@ coperceive eval run RUN_ID --root /data/dair-v2x-c-scenes
 
 ## Known issues and conventions
 
-- Pairing the two sides by equal file stem, and the complemented-annotation tree: the draft marks that tree **unverified**. See [DAIR-1](../geometry/conventions.md#dair-1) (draft, PR #166).
-- World handedness and units: **unverified**. See [DAIR-2](../geometry/conventions.md#dair-2) (draft, PR #166).
-- Calibration JSON nesting: **unverified**. See [DAIR-5](../geometry/conventions.md#dair-5) (draft, PR #166).
-- Point-cloud encoding: **unverified**. `binary_compressed` is refused and intensity is dropped. See [DAIR-8](../geometry/conventions.md#dair-8) (draft, PR #166).
-- Corner order: the draft's finding is that length and width are swapped and the heading is turned. See [DAIR-10](../geometry/conventions.md#dair-10) (draft, PR #166).
-- Cameras are not ingested. In-plane camera axes and `cam_D`: **unverified**. See [DAIR-13](../geometry/conventions.md#dair-13) (draft, PR #166).
+- Pairing the two sides by equal file stem, and the complemented-annotation tree: the conventions page marks that tree **unverified**. See [DAIR-1](../geometry/conventions.md#dair-1).
+- World handedness and units: **unverified**. See [DAIR-2](../geometry/conventions.md#dair-2).
+- Calibration JSON nesting: **unverified**. See [DAIR-5](../geometry/conventions.md#dair-5).
+- Point-cloud encoding: **unverified**. `binary_compressed` is refused and intensity is dropped. See [DAIR-8](../geometry/conventions.md#dair-8).
+- Corner order: the finding is that length and width are swapped and the heading is turned. See [DAIR-10](../geometry/conventions.md#dair-10).
+- Cameras are not ingested. In-plane camera axes and `cam_D`: **unverified**. See [DAIR-13](../geometry/conventions.md#dair-13).
 
 ## Citation
 
