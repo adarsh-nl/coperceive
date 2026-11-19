@@ -1,13 +1,14 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-outlined.svg">
-    <img alt="Coperceive" src="assets/brand/wordmark-light-outlined.svg" width="320">
+    <img alt="Coperceive" src="assets/brand/wordmark-light-outlined.svg" width="260">
   </picture>
 </p>
 
 A fast, native desktop application and multi-agent perception data library for collaborative autonomous driving research.
 
-![Coperceive Dataset View](docs/design/screenshots/dataset_view_dark_1600x1000.png)
+![Coperceive dark-mode 3D viewer streaming Griffin scene Town03-000 from an HPC cluster, showing Vehicle 1's orange LiDAR point cloud, Drone 1 at 27.0 m altitude with translucent projected camera frustums, 50 3D bounding boxes with Bus 145 selected in the inspector, live vehicle telemetry, and the synchronized vehicle and drone camera strip.](docs/media/viewer-griffin-town03.png)
+<sub>A Griffin scene (CARLA Town03, vehicle and drone) streamed from a Slurm cluster. Griffin is MIT-licensed: github.com/wang-jh18-SVM/Griffin.</sub>
 
 ---
 
