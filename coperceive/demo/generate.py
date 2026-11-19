@@ -429,6 +429,16 @@ def _corners_for(
     return rotated + np.array(center)
 
 
+def _box_corners(
+    center: tuple[float, float, float], size: tuple[float, float, float], yaw: float
+) -> list[tuple[float, float, float]]:
+    """List form kept for the capture-only scripts/site/tour/rich_demo.py patch."""
+    corners: list[tuple[float, float, float]] = []
+    for corner in _corners_for(center, size, yaw):
+        corners.append((float(corner[0]), float(corner[1]), float(corner[2])))
+    return corners
+
+
 def _render_parts(
     boxes: list[tuple[tuple[float, float, float], tuple[float, float, float], float, str]],
 ) -> tuple[np.ndarray, list[tuple[int, int, int]]]:
