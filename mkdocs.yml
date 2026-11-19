@@ -117,6 +117,7 @@ nav:
           - Evaluation: adr/0010-eval-predictions.md
           - Model plugin: adr/0011-live-model-plugin.md
           - Left-handed sources: adr/0012-left-handed-sources.md
+          - Geometry conformance: adr/0017-geometry-conformance.md
           - Desktop app: adr/0014-desktop-app.md
           - Cluster profiles: adr/0015-cluster-profiles-scheduler-adapter.md
           - Plan parity: adr/0018-plan-parity.md
