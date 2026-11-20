@@ -103,6 +103,7 @@ nav:
       - Geometry conventions: geometry/conventions.md
       - Add a dataset: datasets/add-a-dataset.md
       - Contributing: notes/contributing.md
+      - Rust checks on a headless Linux host: contributing/hpc-dev.md
       - Design decisions: notes/decisions.md
       - "OpenCOOD's AP, read by room A": notes/opencood-ap-behaviour.md
       - Security review: security/review-2026-11.md

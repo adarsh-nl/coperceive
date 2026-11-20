@@ -17,4 +17,5 @@ That file says Python 3.11 through 3.13. A new dataset layout is a manifest unde
 ## More detail
 
 - [Design decisions](decisions.md)
+- [Rust checks on a headless Linux host](../contributing/hpc-dev.md)
 - [Code of conduct](https://github.com/adarsh-nl/coperceive/blob/release/v0.1.2/CODE_OF_CONDUCT.md)
