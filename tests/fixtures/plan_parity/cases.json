@@ -391,7 +391,7 @@
       "coperceive_root": "/opt/coperceive",
       "samples": 1490,
       "plugin_python": "/opt/envs/opencood-official/bin/python",
-      "follow_up": "App side, laptop agent after PR agent/claude-plugin-interpreter-override: the app's model-run plan takes the override and its job script passes --plugin-python; then this case moves to `cases` with an app render from src-tauri/tests/plan_parity.rs."
+      "follow_up": "App side, laptop agent after PR #213: the app's model-run plan takes the override and its job script passes --plugin-python; then this case moves to `cases` with an app render from src-tauri/tests/plan_parity.rs."
     }
   ]
 }
