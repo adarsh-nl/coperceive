@@ -2,7 +2,8 @@
 
 Proposed on 2026-11-20 for v0.1.3. The PM reviewed it and Adarsh decided the open points
 on 2026-11-20 (marked **DECIDED**). The P0 fixes ship in v0.1.2; the UI waits for v0.1.3.
-Anything the code does not settle is marked **unverified**.
+Anything the code does not settle is marked **unverified**. Decision 7 (the login-node rule)
+is recorded in `docs/contributing/hpc-dev.md` (#218).
 
 ## Today, and corrections to the brief
 
@@ -35,18 +36,24 @@ Anything the code does not settle is marked **unverified**.
 4. **Two cache-path computations (latent):** Python hashes `realpath(raw_root)`, while
    Rust's `cache_slug` hashes the string as passed. They agree for detected datasets.
 
-## P0 fixes, before the UI (v0.1.2)
+## P0 fixes in v0.1.2 (#219, #220, #221)
 
-- **Raw check:**
+- **Raw check (#219):**
   - A truncated digest never marks a scene stale. Status says "raw check incomplete".
-  - The check runs once per open, in the background, and not while a job is running.
   - **DECIDED (Adarsh, 2026-11-20):** a truncated fingerprint never marks a scene stale.
     A per-scene fingerprint recorded at prepare time is listed under *Later*.
-- **One cache path:** Rust uses the index's `cache.relative_path`.
-- **Exit code:** `dataset prepare` exits 2 only for its own failed scenes. Today it does so
-  for any failed scene in the cache (`cli.py` › `_dataset_prepare`).
-- **Job name:** one name per dataset, `coperceive-dataset-<hash>-<split>`. Today every
-  `test` split shares a name, which weakens `job_watch.rs` › `check_owner`.
+- **Prepare remaining (#220):** resolved at preview time to the not_prepared, failed and
+  stale scenes, minus live claims (§3).
+- **One cache path (#221):** status and viewing use the index's `cache.relative_path`.
+- **Exit code (#221):** `dataset prepare` exits 2 only for its own failed scenes. Before,
+  it did so for any failed scene in the cache (`cli.py` › `_dataset_prepare`).
+- **Job name (#221):** one name per dataset, `coperceive-dataset-<hash>-<split>`. Before,
+  every `test` split shared a name, which weakened `job_watch.rs` › `check_owner`.
+
+## Before the UI (v0.1.3)
+
+- **Raw check once per open:** in the background, and not while a job is running. Today
+  status walks the raw split on every poll.
 - **Open without an index:**
   - The conversion job writes `index.json` into the cache.
   - A converted split opens from that file plus `dataset status`.
