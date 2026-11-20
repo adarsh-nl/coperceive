@@ -32,7 +32,7 @@ export PYTHONPATH=/opt/coperceive  # the coperceive the run's python imports, as
 echo "Starting run for plan plan-1790000000-aabbccddeeff on $(hostname)"
 # The run's exit status is kept: its logs and artefacts come home below either way.
 set +e
-/opt/venv/bin/python -m coperceive model run --manifest /opt/coperceive/plugins/griffin/coperceive_griffin_model/model.yaml --scenes /data/griffin/scenes --out /home/tester/results/runs/plan-1790000000-aabbccddeeff --run-id plan-1790000000-aabbccddeeff --model vehicle-side --raw-root /data/griffin/raw --work "$SCRATCH_DIR/work"
+/opt/venv/bin/python -m coperceive model run --manifest /opt/coperceive/plugins/griffin/coperceive_griffin_model/model.yaml --scenes /data/griffin/scenes --out /home/tester/results/runs/plan-1790000000-aabbccddeeff --run-id plan-1790000000-aabbccddeeff --model vehicle-side --raw-root /data/griffin/raw --option ckpt_root=/data/griffin/ckpts --work "$SCRATCH_DIR/work"
 RC=$?
 set -e
 echo "model run exit $RC"
