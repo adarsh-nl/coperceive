@@ -3491,16 +3491,10 @@ async fn dataset_prepare(
         // "Prepare remaining": the scenes not prepared, failed or stale, minus the
         // ones a running job still holds, read from the cache now.
         let scenes = if remaining {
-            let cache = coperceive_desktop::dataset_jobs::cache_absolute(
-                &entry.profile,
-                &adapter,
-                &raw_root,
-                split.as_deref(),
-            )?;
             let ids = coperceive_desktop::cluster_datasets::remaining_scenes(
                 &runner,
                 &entry.profile,
-                &cache,
+                &cache_relative,
                 &index,
             )
             .map_err(|error| {
