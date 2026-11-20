@@ -1118,13 +1118,9 @@ CAPABILITIES = (
 
 
 def _capabilities(_args: argparse.Namespace) -> None:
-    import importlib.metadata
     import json
 
-    try:
-        version = importlib.metadata.version("coperceive")
-    except importlib.metadata.PackageNotFoundError:
-        version = __version__
+    version = __version__
     document = {
         "schema": "coperceive-capabilities-1",
         "version": version,
