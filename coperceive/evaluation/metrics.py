@@ -13,7 +13,8 @@ Absent values are ``None`` so that ``metrics.json`` carries ``null`` and never
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import math
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from statistics import fmean, median
 
@@ -22,20 +23,36 @@ from coperceive.evaluation.matching import FP, IGNORED, MISS, TP, MatchResult, P
 Size = tuple[float, float, float]
 
 
-def average_precision(records: Sequence[tuple[float, str]], n_gt: int) -> float | None:
+def mean_ap(values: Iterable[float]) -> float | None:
+    """The mean of APs (mAP), ``None`` for none.
+
+    The sum is ``math.fsum``, correctly rounded, so the mean depends neither on the
+    order of the classes nor on the Python version: the built-in ``sum`` adds floats
+    left to right before Python 3.12 and with a compensated algorithm from 3.12, and
+    the two can differ in the last bit.
+    """
+    kept = list(values)
+    return math.fsum(kept) / len(kept) if kept else None
+
+
+def average_precision(
+    records: Sequence[tuple[float, str]], n_gt: int, *, presorted: bool = False
+) -> float | None:
     """AP of one category at one threshold, steps 1–5 of §Metrics.
 
     ``records`` are ``(score, status)`` of every prediction of the category in
     file order, with the status of the AP pass (``score_threshold`` ignored).
     They are sorted by score descending with a stable sort, so equal scores keep
-    file order. Ignored predictions are skipped; ``tp`` and ``fp`` accumulate.
+    file order (``ranking_scope: pooled``). With ``presorted`` they are walked in
+    the order given: the caller has put them in the per-frame order of
+    ``docs/eval-spec.md`` A.5. Ignored predictions are skipped; ``tp`` and ``fp`` accumulate.
     The precision envelope is made monotone from the right and AP is the area
     under the recall/envelope steps. ``None`` when the category has no ground
     truth; ``0.0`` when it has ground truth and no prediction.
     """
     if n_gt <= 0:
         return None
-    ordered = sorted(records, key=lambda record: -record[0])
+    ordered = list(records) if presorted else sorted(records, key=lambda record: -record[0])
     recalls: list[float] = []
     precisions: list[float] = []
     tp = 0
@@ -146,15 +163,22 @@ class GtCooperative:
     seen_by_other_gt: bool | None
     other_kind: str | None
     other_agent_tp: bool | None
+    # The agent that added this box to the fused ground-truth set (spec A.4), or None
+    # for the agent's own box. For an added box ``status_single`` is absent.
+    added_by: str | None = None
 
 
-def cooperative_counts(rows: Sequence[GtCooperative]) -> dict[str, object]:
-    """The §Cooperative views counts and ``recovery_rate`` of one agent.
+def cooperative_counts(
+    rows: Sequence[GtCooperative], *, both_outputs: bool = True
+) -> dict[str, object]:
+    """The cooperative counts and ``recovery_rate`` of one agent (``docs/eval-spec.md`` A.9).
 
-    Only boxes with both a ``status_single`` and a ``status_fused`` enter, as the
-    spec says; an agent with a single output alone gets zeros and a ``null``
-    rate. ``recovery_rate`` is ``recovered / (recovered + miss under both)``,
-    ``None`` when that denominator is 0.
+    The rows are the boxes of the fused ground-truth set. They count only when the
+    agent has both a ``single`` and a ``fused`` output (``both_outputs``); an own box
+    also needs both statuses, and a box ignored under either output counts nowhere.
+    "Not found alone" is ``status_single`` being ``miss``, or absent because another
+    agent added the box. ``recovery_rate`` is
+    ``recovered / (recovered + double_miss)``, ``None`` when that denominator is 0.
     """
     recovered = 0
     lost_by_fusion = 0
@@ -163,15 +187,21 @@ def cooperative_counts(rows: Sequence[GtCooperative]) -> dict[str, object]:
     double_miss = 0
     for row in rows:
         single, fused = row.status_single, row.status_fused
-        if single is None or fused is None:
+        added = row.added_by is not None
+        if not both_outputs or fused is None or (single is None and not added):
             continue
-        if single == MISS and fused == TP:
+        # A box ignored under either output falls in none of the counts. For an added
+        # box the single status is absent, so only the fused one can say so.
+        if IGNORED in (single, fused):
+            continue
+        missed_alone = single == MISS or added
+        if missed_alone and fused == TP:
             recovered += 1
         elif single == TP and fused == MISS:
             lost_by_fusion += 1
-        if single == MISS and row.other_agent_tp is True:
+        if missed_alone and row.other_agent_tp is True:
             only_other_agent += 1
-        if single == MISS and fused == MISS:
+        if missed_alone and fused == MISS:
             double_miss += 1
             if row.other_agent_tp is not True:
                 nobody += 1

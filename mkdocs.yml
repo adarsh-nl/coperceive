@@ -78,6 +78,7 @@ nav:
           - Viewer: viewer.md
           - Validate: validate.md
           - Evaluate: eval.md
+          - What the evaluator computes: eval-spec.md
           - Robustness: robustness.md
           - Run a model: models.md
           - OpenCOOD plugin: models/opencood.md
@@ -102,6 +103,7 @@ nav:
       - Add a dataset: datasets/add-a-dataset.md
       - Contributing: notes/contributing.md
       - Design decisions: notes/decisions.md
+      - "OpenCOOD's AP, read by room A": notes/opencood-ap-behaviour.md
       - Security review: security/review-2026-11.md
       - Updates: desktop/updates.md
       - Decisions:
@@ -115,6 +117,7 @@ nav:
           - Shared HD map: adr/0008-hd-map.md
           - Dataset adapters: adr/0009-dataset-adapters.md
           - Evaluation: adr/0010-eval-predictions.md
+          - Evaluator verification: adr/0016-evaluator-verification.md
           - Model plugin: adr/0011-live-model-plugin.md
           - Left-handed sources: adr/0012-left-handed-sources.md
           - Geometry conformance: adr/0017-geometry-conformance.md

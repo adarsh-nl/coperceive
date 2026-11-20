@@ -1,0 +1,2252 @@
+{
+ "about": "Two runs as v0.1.1 scored them, written by the code at tag v0.1.1 (commit 5abeaab). demo: `coperceive demo create <dir>` (seed 0), its metrics.json for scene demo-junction, and the text of `coperceive eval report demo --root <dir>/scenes --predictions <dir>/predictions`. cooperative: the metrics.json of tests/cooperative.py's scene with the predictions of tests/eval_fixture.py, imported with `predictions import --score-note constant` and scored with `eval run` (neither module changed since v0.1.1). created_utc and coperceive_version are left out. Both inputs are synthetic. tests/test_eval_legacy_protocol.py checks that `eval run --protocol legacy` reproduces them.",
+ "cooperative": {
+  "metrics": {
+   "config": {
+    "class_thresholds": {},
+    "criterion": "iou_bev",
+    "display_threshold": 0.5,
+    "gt_class_map": {},
+    "ignore_gt_visibility_below": null,
+    "max_range_m": null,
+    "score_threshold": 0.3,
+    "thresholds": [
+     0.5,
+     0.7
+    ]
+   },
+   "format": "coperceive-eval",
+   "format_version": 1,
+   "outputs": [
+    {
+     "agent_id": "vehicle",
+     "ap": {
+      "0.5": {
+       "car": 0.6666666666666666,
+       "cone": 0.0,
+       "mean": 0.2222222222222222,
+       "mean_model": 0.2222222222222222,
+       "pedestrian": 0.0,
+       "sign": null,
+       "truck": null
+      },
+      "0.7": {
+       "car": 0.6666666666666666,
+       "cone": 0.0,
+       "mean": 0.2222222222222222,
+       "mean_model": 0.2222222222222222,
+       "pedestrian": 0.0,
+       "sign": null,
+       "truck": null
+      }
+     },
+     "cooperative": {
+      "lost_by_fusion": 0,
+      "nobody": 2,
+      "only_other_agent": 0,
+      "recovered": 1,
+      "recovery_rate": 0.3333333333333333
+     },
+     "samples": [
+      {
+       "fp": 1,
+       "ignored_gt": 0,
+       "miss": 0,
+       "precision": 0.0,
+       "recall": null,
+       "time_us": 0,
+       "tp": 0
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.3333333333333333,
+       "recall": 0.3333333333333333,
+       "time_us": 100000,
+       "tp": 1
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 1,
+       "precision": 0.3333333333333333,
+       "recall": 0.5,
+       "time_us": 200000,
+       "tp": 1
+      },
+      {
+       "fp": 1,
+       "ignored_gt": 0,
+       "miss": 0,
+       "precision": 0.0,
+       "recall": null,
+       "time_us": 300000,
+       "tp": 0
+      }
+     ],
+     "source": "single",
+     "totals": {
+      "fp": 6,
+      "gt": 5,
+      "ignored_gt": 0,
+      "miss": 3,
+      "precision": 0.25,
+      "predictions": 8,
+      "recall": 0.4,
+      "tp": 2
+     },
+     "tp_errors": {
+      "centre_m": {
+       "mean": 0.10000000000000142,
+       "median": 0.10000000000000142
+      },
+      "iou_bev": {
+       "mean": 0.9512195121951212
+      },
+      "size_m": {
+       "height": 0.0,
+       "length": 0.0,
+       "width": 0.0
+      },
+      "yaw_deg": {
+       "mean_abs": 0.0
+      }
+     }
+    },
+    {
+     "agent_id": "uav",
+     "ap": {
+      "0.5": {
+       "car": 1.0,
+       "cone": null,
+       "mean": 0.6666666666666666,
+       "mean_model": 0.6666666666666666,
+       "pedestrian": null,
+       "sign": 0.0,
+       "truck": 1.0
+      },
+      "0.7": {
+       "car": 1.0,
+       "cone": null,
+       "mean": 0.6666666666666666,
+       "mean_model": 0.6666666666666666,
+       "pedestrian": null,
+       "sign": 0.0,
+       "truck": 1.0
+      }
+     },
+     "cooperative": {
+      "lost_by_fusion": 0,
+      "nobody": 0,
+      "only_other_agent": 0,
+      "recovered": 0,
+      "recovery_rate": null
+     },
+     "samples": [
+      {
+       "fp": 0,
+       "ignored_gt": 0,
+       "miss": 0,
+       "precision": null,
+       "recall": null,
+       "time_us": 50000,
+       "tp": 0
+      },
+      {
+       "fp": 1,
+       "ignored_gt": 0,
+       "miss": 1,
+       "precision": 0.6666666666666666,
+       "recall": 0.6666666666666666,
+       "time_us": 100000,
+       "tp": 2
+      },
+      {
+       "fp": 0,
+       "ignored_gt": 0,
+       "miss": 0,
+       "precision": null,
+       "recall": null,
+       "time_us": 160000,
+       "tp": 0
+      },
+      {
+       "fp": 0,
+       "ignored_gt": 0,
+       "miss": 0,
+       "precision": null,
+       "recall": null,
+       "time_us": 200000,
+       "tp": 0
+      }
+     ],
+     "source": "single",
+     "totals": {
+      "fp": 1,
+      "gt": 3,
+      "ignored_gt": 0,
+      "miss": 1,
+      "precision": 0.6666666666666666,
+      "predictions": 3,
+      "recall": 0.6666666666666666,
+      "tp": 2
+     },
+     "tp_errors": {
+      "centre_m": {
+       "mean": 0.10000000000000053,
+       "median": 0.10000000000000053
+      },
+      "iou_bev": {
+       "mean": 0.9592163134746098
+      },
+      "size_m": {
+       "height": 0.0,
+       "length": 0.0,
+       "width": 0.0
+      },
+      "yaw_deg": {
+       "mean_abs": 0.0
+      }
+     }
+    },
+    {
+     "agent_id": "vehicle",
+     "ap": {
+      "0.5": {
+       "car": 0.6666666666666666,
+       "cone": 0.0,
+       "mean": 0.5555555555555555,
+       "mean_model": 0.5555555555555555,
+       "pedestrian": 1.0,
+       "sign": null,
+       "truck": null
+      },
+      "0.7": {
+       "car": 0.6666666666666666,
+       "cone": 0.0,
+       "mean": 0.5555555555555555,
+       "mean_model": 0.5555555555555555,
+       "pedestrian": 1.0,
+       "sign": null,
+       "truck": null
+      }
+     },
+     "cooperative": {
+      "lost_by_fusion": 0,
+      "nobody": 2,
+      "only_other_agent": 0,
+      "recovered": 1,
+      "recovery_rate": 0.3333333333333333
+     },
+     "samples": [
+      {
+       "fp": 0,
+       "ignored_gt": 0,
+       "miss": 0,
+       "precision": null,
+       "recall": null,
+       "time_us": 0,
+       "tp": 0
+      },
+      {
+       "fp": 1,
+       "ignored_gt": 0,
+       "miss": 1,
+       "precision": 0.6666666666666666,
+       "recall": 0.6666666666666666,
+       "time_us": 100000,
+       "tp": 2
+      },
+      {
+       "fp": 1,
+       "ignored_gt": 0,
+       "miss": 1,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 200000,
+       "tp": 1
+      },
+      {
+       "fp": 0,
+       "ignored_gt": 0,
+       "miss": 0,
+       "precision": null,
+       "recall": null,
+       "time_us": 300000,
+       "tp": 0
+      }
+     ],
+     "source": "fused",
+     "totals": {
+      "fp": 2,
+      "gt": 5,
+      "ignored_gt": 0,
+      "miss": 2,
+      "precision": 0.6,
+      "predictions": 5,
+      "recall": 0.6,
+      "tp": 3
+     },
+     "tp_errors": {
+      "centre_m": {
+       "mean": 0.10000000000000082,
+       "median": 0.10000000000000142
+      },
+      "iou_bev": {
+       "mean": 0.8722415795586529
+      },
+      "size_m": {
+       "height": 0.0,
+       "length": 0.0,
+       "width": 0.0
+      },
+      "yaw_deg": {
+       "mean_abs": 0.0
+      }
+     }
+    }
+   ],
+   "run_id": "synthetic",
+   "run_status": "complete",
+   "scene_id": "coop"
+  }
+ },
+ "demo": {
+  "metrics": {
+   "config": {
+    "class_thresholds": {},
+    "criterion": "iou_bev",
+    "display_threshold": 0.5,
+    "gt_class_map": {},
+    "ignore_gt_visibility_below": null,
+    "max_range_m": null,
+    "score_threshold": 0.3,
+    "thresholds": [
+     0.5,
+     0.7
+    ]
+   },
+   "format": "coperceive-eval",
+   "format_version": 1,
+   "outputs": [
+    {
+     "agent_id": "cav-a",
+     "ap": {
+      "0.5": {
+       "car": 1.0,
+       "cyclist": 0.4262465788687013,
+       "mean": 0.5164604786824164,
+       "mean_model": 0.5164604786824164,
+       "pedestrian": 0.1231348571785479
+      },
+      "0.7": {
+       "car": 0.708519192106964,
+       "cyclist": 0.12013241250528368,
+       "mean": 0.28244706524405067,
+       "mean_model": 0.28244706524405067,
+       "pedestrian": 0.01868959111990422
+      }
+     },
+     "cooperative": {
+      "lost_by_fusion": 0,
+      "nobody": 0,
+      "only_other_agent": 0,
+      "recovered": 0,
+      "recovery_rate": null
+     },
+     "samples": [
+      {
+       "fp": 6,
+       "ignored_gt": 0,
+       "miss": 6,
+       "precision": 0.4,
+       "recall": 0.4,
+       "time_us": 0,
+       "tp": 4
+      },
+      {
+       "fp": 1,
+       "ignored_gt": 0,
+       "miss": 1,
+       "precision": 0.9,
+       "recall": 0.9,
+       "time_us": 100000,
+       "tp": 9
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 200000,
+       "tp": 7
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 300000,
+       "tp": 6
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 400000,
+       "tp": 5
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7777777777777778,
+       "recall": 0.7,
+       "time_us": 500000,
+       "tp": 7
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 600000,
+       "tp": 7
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6666666666666666,
+       "recall": 0.6,
+       "time_us": 700000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 800000,
+       "tp": 6
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 900000,
+       "tp": 8
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 1000000,
+       "tp": 8
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 1100000,
+       "tp": 8
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 1200000,
+       "tp": 7
+      },
+      {
+       "fp": 6,
+       "ignored_gt": 0,
+       "miss": 6,
+       "precision": 0.4,
+       "recall": 0.4,
+       "time_us": 1300000,
+       "tp": 4
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 1400000,
+       "tp": 7
+      },
+      {
+       "fp": 6,
+       "ignored_gt": 0,
+       "miss": 6,
+       "precision": 0.4,
+       "recall": 0.4,
+       "time_us": 1500000,
+       "tp": 4
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 1600000,
+       "tp": 7
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 1700000,
+       "tp": 8
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 1800000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 1900000,
+       "tp": 7
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7777777777777778,
+       "recall": 0.7,
+       "time_us": 2000000,
+       "tp": 7
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 2100000,
+       "tp": 8
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 2200000,
+       "tp": 7
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 2300000,
+       "tp": 8
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 2400000,
+       "tp": 8
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 2500000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 2600000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 2700000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 2800000,
+       "tp": 7
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 2900000,
+       "tp": 7
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 3000000,
+       "tp": 5
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 3100000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 3200000,
+       "tp": 7
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 3300000,
+       "tp": 7
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 3400000,
+       "tp": 8
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 3500000,
+       "tp": 7
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 3600000,
+       "tp": 7
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 3700000,
+       "tp": 8
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 3800000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 3900000,
+       "tp": 6
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 4000000,
+       "tp": 5
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 4100000,
+       "tp": 7
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 4200000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 4300000,
+       "tp": 7
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 4400000,
+       "tp": 5
+      },
+      {
+       "fp": 1,
+       "ignored_gt": 0,
+       "miss": 1,
+       "precision": 0.9,
+       "recall": 0.9,
+       "time_us": 4500000,
+       "tp": 9
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 4600000,
+       "tp": 6
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 4700000,
+       "tp": 5
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 4800000,
+       "tp": 6
+      },
+      {
+       "fp": 6,
+       "ignored_gt": 0,
+       "miss": 6,
+       "precision": 0.4,
+       "recall": 0.4,
+       "time_us": 4900000,
+       "tp": 4
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 5000000,
+       "tp": 6
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 5100000,
+       "tp": 8
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 5200000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 5300000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 5400000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 5500000,
+       "tp": 7
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 5600000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 5700000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 5800000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 5900000,
+       "tp": 7
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 6000000,
+       "tp": 6
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 6100000,
+       "tp": 5
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 6,
+       "precision": 0.4444444444444444,
+       "recall": 0.4,
+       "time_us": 6200000,
+       "tp": 4
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 6300000,
+       "tp": 8
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 6400000,
+       "tp": 7
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 6500000,
+       "tp": 5
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 6600000,
+       "tp": 5
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 6700000,
+       "tp": 5
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 6800000,
+       "tp": 5
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 6900000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 7000000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 7100000,
+       "tp": 6
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 7200000,
+       "tp": 5
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 7300000,
+       "tp": 6
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 7400000,
+       "tp": 5
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 7500000,
+       "tp": 5
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 7600000,
+       "tp": 5
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 7700000,
+       "tp": 7
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 7800000,
+       "tp": 8
+      },
+      {
+       "fp": 6,
+       "ignored_gt": 0,
+       "miss": 6,
+       "precision": 0.4,
+       "recall": 0.4,
+       "time_us": 7900000,
+       "tp": 4
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 8000000,
+       "tp": 7
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 8100000,
+       "tp": 8
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 8200000,
+       "tp": 7
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 8300000,
+       "tp": 7
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 8400000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 8500000,
+       "tp": 7
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 8600000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 8700000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 8800000,
+       "tp": 6
+      },
+      {
+       "fp": 6,
+       "ignored_gt": 0,
+       "miss": 6,
+       "precision": 0.4,
+       "recall": 0.4,
+       "time_us": 8900000,
+       "tp": 4
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 9000000,
+       "tp": 6
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 9100000,
+       "tp": 8
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6666666666666666,
+       "recall": 0.6,
+       "time_us": 9200000,
+       "tp": 6
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 9300000,
+       "tp": 5
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 9400000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 9500000,
+       "tp": 7
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 9600000,
+       "tp": 8
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 9700000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 9800000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 9900000,
+       "tp": 6
+      }
+     ],
+     "source": "noisy",
+     "totals": {
+      "fp": 362,
+      "gt": 1000,
+      "ignored_gt": 0,
+      "miss": 367,
+      "precision": 0.6361809045226131,
+      "predictions": 995,
+      "recall": 0.633,
+      "tp": 633
+     },
+     "tp_errors": {
+      "centre_m": {
+       "mean": 0.18585832383370876,
+       "median": 0.15432377567352168
+      },
+      "iou_bev": {
+       "mean": 0.7614867825954248
+      },
+      "size_m": {
+       "height": 0.0,
+       "length": 0.0,
+       "width": 0.0
+      },
+      "yaw_deg": {
+       "mean_abs": 0.0
+      }
+     }
+    },
+    {
+     "agent_id": "cav-b",
+     "ap": {
+      "0.5": {
+       "car": 0.9903375000000032,
+       "cyclist": 0.5696521448354193,
+       "mean": 0.566629774664841,
+       "mean_model": 0.566629774664841,
+       "pedestrian": 0.13989967915910048
+      },
+      "0.7": {
+       "car": 0.7257914132759593,
+       "cyclist": 0.10448979591836731,
+       "mean": 0.2820391495785646,
+       "mean_model": 0.2820391495785646,
+       "pedestrian": 0.015836239541367078
+      }
+     },
+     "cooperative": {
+      "lost_by_fusion": 0,
+      "nobody": 0,
+      "only_other_agent": 0,
+      "recovered": 0,
+      "recovery_rate": null
+     },
+     "samples": [
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 0,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6666666666666666,
+       "recall": 0.6,
+       "time_us": 100000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 200000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 300000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 400000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 500000,
+       "tp": 6
+      },
+      {
+       "fp": 6,
+       "ignored_gt": 0,
+       "miss": 6,
+       "precision": 0.4,
+       "recall": 0.4,
+       "time_us": 600000,
+       "tp": 4
+      },
+      {
+       "fp": 1,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8888888888888888,
+       "recall": 0.8,
+       "time_us": 700000,
+       "tp": 8
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 800000,
+       "tp": 7
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 900000,
+       "tp": 5
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 1000000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 1100000,
+       "tp": 7
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 1200000,
+       "tp": 5
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 6,
+       "precision": 0.4444444444444444,
+       "recall": 0.4,
+       "time_us": 1300000,
+       "tp": 4
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6666666666666666,
+       "recall": 0.6,
+       "time_us": 1400000,
+       "tp": 6
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 1500000,
+       "tp": 5
+      },
+      {
+       "fp": 1,
+       "ignored_gt": 0,
+       "miss": 1,
+       "precision": 0.9,
+       "recall": 0.9,
+       "time_us": 1600000,
+       "tp": 9
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 1700000,
+       "tp": 7
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 1800000,
+       "tp": 8
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6666666666666666,
+       "recall": 0.6,
+       "time_us": 1900000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 2000000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 2100000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 2200000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 2300000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6666666666666666,
+       "recall": 0.6,
+       "time_us": 2400000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 2500000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5555555555555556,
+       "recall": 0.5,
+       "time_us": 2600000,
+       "tp": 5
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 2700000,
+       "tp": 5
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 2800000,
+       "tp": 7
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 2900000,
+       "tp": 8
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 3000000,
+       "tp": 8
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 3100000,
+       "tp": 6
+      },
+      {
+       "fp": 1,
+       "ignored_gt": 0,
+       "miss": 1,
+       "precision": 0.9,
+       "recall": 0.9,
+       "time_us": 3200000,
+       "tp": 9
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7777777777777778,
+       "recall": 0.7,
+       "time_us": 3300000,
+       "tp": 7
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 3400000,
+       "tp": 6
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 3500000,
+       "tp": 5
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 3600000,
+       "tp": 8
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 3700000,
+       "tp": 7
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 3800000,
+       "tp": 6
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 3900000,
+       "tp": 5
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6666666666666666,
+       "recall": 0.6,
+       "time_us": 4000000,
+       "tp": 6
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 4100000,
+       "tp": 5
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 4200000,
+       "tp": 5
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 4300000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6666666666666666,
+       "recall": 0.6,
+       "time_us": 4400000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 4500000,
+       "tp": 7
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 4600000,
+       "tp": 8
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 4700000,
+       "tp": 5
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 4800000,
+       "tp": 6
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 4900000,
+       "tp": 8
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 5000000,
+       "tp": 6
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 5100000,
+       "tp": 8
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 6,
+       "precision": 0.4444444444444444,
+       "recall": 0.4,
+       "time_us": 5200000,
+       "tp": 4
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 5300000,
+       "tp": 7
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 5400000,
+       "tp": 6
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 5500000,
+       "tp": 8
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 5600000,
+       "tp": 5
+      },
+      {
+       "fp": 1,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8888888888888888,
+       "recall": 0.8,
+       "time_us": 5700000,
+       "tp": 8
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 5800000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 5900000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 6000000,
+       "tp": 7
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 6100000,
+       "tp": 5
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 6200000,
+       "tp": 8
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 6300000,
+       "tp": 7
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 6400000,
+       "tp": 5
+      },
+      {
+       "fp": 1,
+       "ignored_gt": 0,
+       "miss": 1,
+       "precision": 0.9,
+       "recall": 0.9,
+       "time_us": 6500000,
+       "tp": 9
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 6600000,
+       "tp": 6
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 6700000,
+       "tp": 8
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 6800000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 6900000,
+       "tp": 7
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 7000000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 7100000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 7200000,
+       "tp": 6
+      },
+      {
+       "fp": 7,
+       "ignored_gt": 0,
+       "miss": 7,
+       "precision": 0.3,
+       "recall": 0.3,
+       "time_us": 7300000,
+       "tp": 3
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 7400000,
+       "tp": 6
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 7500000,
+       "tp": 8
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 7600000,
+       "tp": 6
+      },
+      {
+       "fp": 5,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5,
+       "recall": 0.5,
+       "time_us": 7700000,
+       "tp": 5
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 7800000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 7900000,
+       "tp": 6
+      },
+      {
+       "fp": 0,
+       "ignored_gt": 0,
+       "miss": 0,
+       "precision": 1.0,
+       "recall": 1.0,
+       "time_us": 8000000,
+       "tp": 10
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 8100000,
+       "tp": 8
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 8200000,
+       "tp": 6
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 8300000,
+       "tp": 8
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 8400000,
+       "tp": 8
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 8500000,
+       "tp": 7
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 8600000,
+       "tp": 8
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 8700000,
+       "tp": 7
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 8800000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6666666666666666,
+       "recall": 0.6,
+       "time_us": 8900000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 9000000,
+       "tp": 7
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 9100000,
+       "tp": 6
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 5,
+       "precision": 0.5555555555555556,
+       "recall": 0.5,
+       "time_us": 9200000,
+       "tp": 5
+      },
+      {
+       "fp": 1,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8888888888888888,
+       "recall": 0.8,
+       "time_us": 9300000,
+       "tp": 8
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 9400000,
+       "tp": 7
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 9500000,
+       "tp": 8
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 9600000,
+       "tp": 8
+      },
+      {
+       "fp": 2,
+       "ignored_gt": 0,
+       "miss": 2,
+       "precision": 0.8,
+       "recall": 0.8,
+       "time_us": 9700000,
+       "tp": 8
+      },
+      {
+       "fp": 4,
+       "ignored_gt": 0,
+       "miss": 4,
+       "precision": 0.6,
+       "recall": 0.6,
+       "time_us": 9800000,
+       "tp": 6
+      },
+      {
+       "fp": 3,
+       "ignored_gt": 0,
+       "miss": 3,
+       "precision": 0.7,
+       "recall": 0.7,
+       "time_us": 9900000,
+       "tp": 7
+      }
+     ],
+     "source": "noisy",
+     "totals": {
+      "fp": 338,
+      "gt": 1000,
+      "ignored_gt": 0,
+      "miss": 353,
+      "precision": 0.6568527918781726,
+      "predictions": 985,
+      "recall": 0.647,
+      "tp": 647
+     },
+     "tp_errors": {
+      "centre_m": {
+       "mean": 0.18761852988983532,
+       "median": 0.1612939816236374
+      },
+      "iou_bev": {
+       "mean": 0.7554762234275306
+      },
+      "size_m": {
+       "height": 0.0,
+       "length": 0.0,
+       "width": 0.0
+      },
+      "yaw_deg": {
+       "mean_abs": 0.0
+      }
+     }
+    }
+   ],
+   "run_id": "demo",
+   "run_status": "complete",
+   "scene_id": "demo-junction"
+  },
+  "report": "| scene | agent | source | gt | predictions | tp | fp | miss | precision | recall | mAP@0.5 all | mAP@0.5 model | mAP@0.7 all | mAP@0.7 model | recovered | lost_by_fusion |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| demo-junction | cav-a | noisy | 1000 | 995 | 633 | 362 | 367 | 0.636 | 0.633 | 0.516 | 0.516 | 0.282 | 0.282 | 0 | 0 |\n| demo-junction | cav-b | noisy | 1000 | 985 | 647 | 338 | 353 | 0.657 | 0.647 | 0.567 | 0.567 | 0.282 | 0.282 | 0 | 0 |\n| all | cav-a | noisy | 1000 | 995 | 633 | 362 | 367 | 0.636 | 0.633 | 0.516 | 0.516 | 0.282 | 0.282 | 0 | 0 |\n| all | cav-b | noisy | 1000 | 985 | 647 | 338 | 353 | 0.657 | 0.647 | 0.567 | 0.567 | 0.282 | 0.282 | 0 | 0 |\n| all |  |  | 2000 | 1980 | 1280 | 700 | 720 | 0.646 | 0.640 | 0.537 | 0.537 | 0.279 | 0.279 | 0 | 0 |\n\n| agent | source | class | AP@0.5 | AP@0.7 |\n| --- | --- | --- | --- | --- |\n| cav-a | noisy | car | 1.000 | 0.709 |\n| cav-a | noisy | cyclist | 0.426 | 0.120 |\n| cav-a | noisy | pedestrian | 0.123 | 0.019 |\n| cav-b | noisy | car | 0.990 | 0.726 |\n| cav-b | noisy | cyclist | 0.570 | 0.104 |\n| cav-b | noisy | pedestrian | 0.140 | 0.016 |\n| all |  | car | 0.995 | 0.714 |\n| all |  | cyclist | 0.487 | 0.105 |\n| all |  | pedestrian | 0.129 | 0.017 |\n"
+ }
+}

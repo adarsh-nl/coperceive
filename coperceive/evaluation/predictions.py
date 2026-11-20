@@ -317,6 +317,7 @@ def write_run(
     rows: Iterable[PredictionBox],
     *,
     force: bool = False,
+    scene_ids: Iterable[str] = (),
 ) -> tuple[str, ...]:
     """Write ``run.json`` and one ``boxes.parquet`` per scene; return the scene ids.
 
@@ -325,6 +326,13 @@ def write_run(
     the scene itself (agent, pose time) are :func:`validate_boxes`, run by the
     caller before this. A scene that already has ``boxes.parquet`` is refused
     unless ``force``; nothing is written before every row and target passed.
+
+    ``scene_ids`` names scenes the run covers whether or not they have a row: a
+    model that found nothing in a scene still processed it. Each gets a
+    ``boxes.parquet``, empty when it has no row, so ``eval run`` counts its ground
+    truth as missed instead of skipping the scene (``docs/eval-spec.md`` A.0).
+    The returned ids are the scenes with rows in order of first row, then the
+    other ``scene_ids`` in the order given.
     """
     check_run_id(run_id)
     if meta.run_id != run_id:
@@ -342,6 +350,9 @@ def write_run(
         if box.category == "":
             raise PredictionError(f"row {i}: category must be non-empty")
         by_scene.setdefault(box.scene_id, []).append(_row_from_box(box))
+    for scene_id in scene_ids:
+        check_scene_id(scene_id)
+        by_scene.setdefault(scene_id, [])
     run_dir = _run_path(root, run_id, ".")
     targets: dict[str, Path] = {}
     for scene_id in by_scene:

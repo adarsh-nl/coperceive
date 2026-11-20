@@ -14,6 +14,8 @@ either run, ``n/a`` where a run lacks the row, and a footer with the counts.
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +26,7 @@ from coperceive.evaluation.evaluate import (
     KIND_GT,
     KIND_PREDICTION,
     METRICS_FILE,
+    EvaluationError,
     read_matches,
     read_metrics,
     scene_output_dir,
@@ -31,7 +34,7 @@ from coperceive.evaluation.evaluate import (
     threshold_count,
 )
 from coperceive.evaluation.matching import IGNORED
-from coperceive.evaluation.metrics import average_precision
+from coperceive.evaluation.metrics import average_precision, mean_ap
 from coperceive.evaluation.predictions import check_run_id, read_run_meta
 from coperceive.viewdata import scene_directories
 
@@ -39,9 +42,13 @@ AGGREGATE_LABEL = "all"
 MISSING = "n/a"
 COUNT_KEYS = ("gt", "predictions", "tp", "fp", "miss")
 COOPERATIVE_KEYS = ("recovered", "lost_by_fusion")
-POOL_COLUMNS = ("kind", "agent_id", "source", "category", "row", "score", "status")
+POOL_COLUMNS = ("kind", "agent_id", "source", "time_us", "category", "row", "score", "status")
+# Rules a stored metrics.json was made under when its config predates the protocol keys.
+LEGACY_RANKING_SCOPE = "pooled"
+LEGACY_GT_SCOPE = "ego_only"
 
-Record = tuple[float, str]
+# (score, AP-pass status, sample time) of one prediction.
+Record = tuple[float, str, int]
 OutputKey = tuple[str, str]
 
 
@@ -59,6 +66,8 @@ class ApPool:
     categories: tuple[str, ...]
     n_gt: Mapping[str, int]
     records: Mapping[int, Mapping[str, tuple[Record, ...]]]
+    # The ranking scope of the scene's evaluation (docs/eval-spec.md A.5); legacy is pooled.
+    ranking_scope: str = LEGACY_RANKING_SCOPE
 
 
 @dataclass(frozen=True)
@@ -80,6 +89,7 @@ class Row:
     run_id: str = ""
     pool: ApPool | None = None
     model_categories: tuple[str, ...] = ()
+    config: Mapping[str, object] | None = None
 
     @property
     def key(self) -> tuple[str, str, str]:
@@ -106,16 +116,31 @@ def class_ap_column(threshold: float) -> str:
 
 
 def collect(scenes_root: Path, predictions_root: Path, run_id: str) -> tuple[Row, ...]:
-    """Rows of every scene under ``scenes_root`` that ``run_id`` has evaluated, in name order."""
+    """Rows of every scene under ``scenes_root`` that ``run_id`` has evaluated, in name order.
+
+    Every evaluated scene must carry the same ``config`` in its ``metrics.json``;
+    a run that mixes configs raises :class:`EvaluationError` and is not pooled.
+    """
     check_run_id(run_id)
     model_categories = tuple(read_run_meta(predictions_root, run_id).categories)
     rows: list[Row] = []
+    first_config: tuple[str, dict[str, object]] | None = None
     for scene_dir in scene_directories(scenes_root):
         directory = scene_output_dir(predictions_root, run_id, scene_dir.name)
         if not (directory / METRICS_FILE).is_file():
             continue
         metrics = read_metrics(directory)
         config = _dict(metrics.get("config"))
+        # One headline needs one rule set: `eval run --scenes ... --config ...` can leave
+        # a run whose scenes were judged under different criteria, ranges or thresholds.
+        if first_config is None:
+            first_config = (scene_dir.name, config)
+        elif config != first_config[1]:
+            raise EvaluationError(
+                f"run {run_id!r}: scenes {first_config[0]!r} and {scene_dir.name!r} were "
+                "evaluated with different configs, so their results cannot be pooled; run "
+                "`coperceive eval run` again over every scene with one config"
+            )
         thresholds = tuple(
             float(cast(float, t)) for t in cast(Sequence[object], config.get("thresholds", ()))
         )
@@ -145,6 +170,7 @@ def collect(scenes_root: Path, predictions_root: Path, run_id: str) -> tuple[Row
                     sorted(key for key in first if key not in {"mean", "mean_model"})
                 )
                 pool = ApPool(
+                    ranking_scope=str(config.get("ranking_scope", LEGACY_RANKING_SCOPE)),
                     categories=categories,
                     n_gt=partial.n_gt,
                     records={
@@ -163,6 +189,7 @@ def collect(scenes_root: Path, predictions_root: Path, run_id: str) -> tuple[Row
                     run_id=run_id,
                     pool=pool,
                     model_categories=model_categories,
+                    config=config,
                 )
             )
     return tuple(rows)
@@ -194,7 +221,11 @@ def _pools(directory: Path, n_thresholds: int) -> dict[OutputKey, _PartialPool]:
         elif item["kind"] == KIND_PREDICTION:
             for index, column in enumerate(status_columns):
                 pool.records.setdefault(index, {}).setdefault(category, []).append(
-                    (float(cast(float, item["score"])), str(item[column]))
+                    (
+                        float(cast(float, item["score"])),
+                        str(item[column]),
+                        int(cast(int, item["time_us"])),
+                    )
                 )
     return pools
 
@@ -249,6 +280,97 @@ def partial_note(predictions_root: Path, rows: Sequence[Row]) -> str | None:
     return f"partial: {evaluated} of {evaluated + count} scenes"
 
 
+def _row_config(rows: Sequence[Row]) -> Mapping[str, object]:
+    """The evaluation config of a run's rows (one per run, :func:`collect`); empty when unknown."""
+    if not rows or rows[0].config is None:
+        return {}
+    return rows[0].config
+
+
+def is_legacy(rows: Sequence[Row]) -> bool:
+    """True when the run was scored under the v0.1.1 rules (spec A.2, A.12).
+
+    That is a metrics.json that predates the protocol keys, or one that records pooled
+    ranking with ego-only ground truth (``protocol: legacy``): the label says the same.
+    """
+    return protocol_label(rows) == LEGACY_LABEL
+
+
+def protocol_of(rows: Sequence[Row]) -> tuple[str, str]:
+    """``(ranking_scope, gt_scope)`` the run was evaluated under; legacy is pooled, ego-only."""
+    config = _row_config(rows)
+    return (
+        str(config.get("ranking_scope", LEGACY_RANKING_SCOPE)),
+        str(config.get("gt_scope", LEGACY_GT_SCOPE)),
+    )
+
+
+LEGACY_LABEL = "legacy (pooled, ego-only)"
+
+
+def config_protocol_label(config: Mapping[str, object] | None) -> str:
+    """The protocol line of one ``metrics.json`` ``config`` object (spec A.2, A.12).
+
+    A config without ``ranking_scope`` or ``gt_scope`` predates them: legacy. So is one
+    that records pooled and ego_only (``protocol: legacy``): the same rules, one label, so
+    ``eval compare`` sets a v0.1.1 run beside a run scored again under the old rules.
+    """
+    if config is None or "ranking_scope" not in config or "gt_scope" not in config:
+        return LEGACY_LABEL
+    ranking = str(config["ranking_scope"])
+    gt_scope = str(config["gt_scope"])
+    if (ranking, gt_scope) == (LEGACY_RANKING_SCOPE, LEGACY_GT_SCOPE):
+        return LEGACY_LABEL
+    text = f"ranking {ranking}, ground truth {gt_scope}"
+    if gt_scope == "connected_union":
+        comm = _float(config.get("comm_range_m"))
+        text += f" ({comm:g} m)" if comm is not None else ""
+    return text
+
+
+def protocol_label(rows: Sequence[Row]) -> str:
+    """The protocol line printed with every report (spec A.2, A.12)."""
+    return config_protocol_label(_row_config(rows))
+
+
+def protocol_block(rows: Sequence[Row]) -> dict[str, object]:
+    """The ``protocol`` object of ``compare.json``: how the compared runs were scored."""
+    config = _row_config(rows)
+    ranking, gt_scope = protocol_of(rows)
+    criterion = config.get("criterion", "iou_bev")
+    return {
+        "label": protocol_label(rows),
+        "legacy": is_legacy(rows),
+        "criterion": criterion,
+        "iou": "bev" if criterion == "iou_bev" else None,
+        "ranking_scope": ranking,
+        "gt_scope": gt_scope,
+        "comm_range_m": config.get("comm_range_m"),
+    }
+
+
+def config_note(a_id: str, a: Sequence[Row], b_id: str, b: Sequence[Row]) -> str | None:
+    """One line naming the config keys on which two evaluated runs differ, or ``None``.
+
+    A delta between two runs is a model difference only when both were judged by
+    the same rules. :func:`collect` guarantees one config per run, so the first row
+    of each speaks for it. Values are printed as JSON (``null``, ``50.0``).
+    """
+    left = a[0].config if a else None
+    right = b[0].config if b else None
+    if left is None or right is None or left == right:
+        return None
+    differences = [
+        f"{key}: {json.dumps(left.get(key))} vs {json.dumps(right.get(key))}"
+        for key in sorted(set(left) | set(right))
+        if left.get(key) != right.get(key)
+    ]
+    return (
+        f"note: runs {a_id!r} and {b_id!r} were evaluated with different configs "
+        f"({'; '.join(differences)}); the differences below include the effect of that"
+    )
+
+
 def outputs_of(rows: Sequence[Row]) -> list[OutputKey]:
     """The ``(agent_id, source)`` outputs of ``rows`` in first-appearance order."""
     return list(dict.fromkeys(row.output for row in rows))
@@ -264,19 +386,39 @@ def pooled_ap(
     ``boxes.parquet`` order) and ``n_gt`` is summed; one
     :func:`~coperceive.evaluation.metrics.average_precision` walk gives the value,
     ``None`` when the pooled ``n_gt`` is 0. Rows without a pool add nothing.
+
+    The walk visits the records in one documented order, which no file order can
+    change across outputs (spec A.8). Under ``per_frame``: scene, then time, then
+    score (highest first), then ``agent_id``, then ``source``, then ``boxes.parquet``
+    row order. Under ``pooled``: score (highest first), then scene, ``agent_id``,
+    ``source`` and row order. For one output this is the order of A.5.
     """
-    pools = [row.pool for row in rows if row.pool is not None]
+    pooled_rows = [row for row in rows if row.pool is not None]
+    pools = [row.pool for row in pooled_rows if row.pool is not None]
+    per_frame = bool(pools) and pools[0].ranking_scope == "per_frame"
     categories = sorted({category for pool in pools for category in pool.categories})
     table: dict[str, dict[str, float | None]] = {}
     for index, threshold in enumerate(thresholds):
         per_category: dict[str, float | None] = {}
         for category in categories:
-            records: list[Record] = []
+            keyed: list[tuple[tuple[object, ...], float, str]] = []
             n_gt = 0
-            for pool in pools:
-                records.extend(pool.records.get(index, {}).get(category, ()))
+            for row in pooled_rows:
+                pool = row.pool
+                assert pool is not None
+                records = pool.records.get(index, {}).get(category, ())
+                for k, (score, status, time_us) in enumerate(records):
+                    output = (row.scene_id, row.agent_id, row.source)
+                    key = (
+                        (output[0], time_us, -score, output[1], output[2], k)
+                        if per_frame
+                        else (-score, *output, k)
+                    )
+                    keyed.append((key, score, status))
                 n_gt += pool.n_gt.get(category, 0)
-            per_category[category] = average_precision(records, n_gt)
+            keyed.sort(key=lambda item: item[0])
+            walk = [(score, status) for _key, score, status in keyed]
+            per_category[category] = average_precision(walk, n_gt, presorted=True)
         table[threshold_key(threshold)] = per_category
     return table
 
@@ -285,11 +427,22 @@ def aggregate(rows: Sequence[Row], thresholds: Sequence[float]) -> dict[str, obj
     """Sums of the counts, precision and recall from the sums, and the pooled ``AP@<t>``.
 
     Each ``AP@<t>`` is the mean of :func:`pooled_ap` over the categories that have
-    a value, ``None`` when none has. A count a row lacks adds 0.
+    a value, ``None`` when none has. A count a row lacks adds 0. ``gt``,
+    ``predictions``, ``tp``, ``fp`` and ``miss`` are summed over every row;
+    ``recovered`` and ``lost_by_fusion`` once per scene and agent.
     """
     out: dict[str, object] = {}
-    for column in (*COUNT_KEYS, *COOPERATIVE_KEYS):
+    for column in COUNT_KEYS:
         out[column] = sum(_int(row.values.get(column)) for row in rows)
+    # ``recovered`` and ``lost_by_fusion`` compare an agent's ``single`` and ``fused``
+    # outputs box by box and are stored on every output of that agent (§Cooperative
+    # views). They are taken once per scene and agent: summing them per output would
+    # count each box as many times as the agent has outputs.
+    once_per_agent: dict[tuple[str, str, str], Row] = {}
+    for row in rows:
+        once_per_agent.setdefault((row.run_id, row.scene_id, row.agent_id), row)
+    for column in COOPERATIVE_KEYS:
+        out[column] = sum(_int(row.values.get(column)) for row in once_per_agent.values())
     tp, fp, gt = _int(out["tp"]), _int(out["fp"]), _int(out["gt"])
     out["precision"] = None if tp + fp == 0 else tp / (tp + fp)
     out["recall"] = None if gt == 0 else tp / gt
@@ -298,9 +451,9 @@ def aggregate(rows: Sequence[Row], thresholds: Sequence[float]) -> dict[str, obj
     for threshold in thresholds:
         per_category = pooled[threshold_key(threshold)]
         values = [v for v in per_category.values() if v is not None]
-        out[ap_column(threshold)] = sum(values) / len(values) if values else None
+        out[ap_column(threshold)] = mean_ap(values)
         model = [v for c, v in per_category.items() if c in model_categories and v is not None]
-        out[model_ap_column(threshold)] = sum(model) / len(model) if model else None
+        out[model_ap_column(threshold)] = mean_ap(model)
     return out
 
 
@@ -355,13 +508,37 @@ def render_report(rows: Sequence[Row], thresholds: Sequence[float]) -> str:
         lines.append([AGGREGATE_LABEL, *output] + [_cell(c, total.get(c)) for c in columns])
     total = aggregate(rows, thresholds)
     lines.append([AGGREGATE_LABEL, "", ""] + [_cell(c, total.get(c)) for c in columns])
-    main = _table(["scene", "agent", "source", *columns], lines)
+    criterion = criterion_of(rows)
+    main = _table(labelled(["scene", "agent", "source", *columns], criterion), lines)
 
     class_lines: list[list[str]] = []
     for output in outputs_of(rows):
         class_lines.extend(_class_lines(list(output), _of_output(rows, output), thresholds))
     class_lines.extend(_class_lines([AGGREGATE_LABEL, ""], rows, thresholds))
-    return main + "\n" + _table(_class_header(thresholds), class_lines)
+    protocol = f"protocol: {protocol_label(rows)}\n\n"
+    return (
+        protocol + main + "\n" + _table(labelled(_class_header(thresholds), criterion), class_lines)
+    )
+
+
+def overlap_tag(criterion: object) -> str:
+    """The label of spec A.12: every AP of ``iou_bev`` is a bird's-eye-view AP."""
+    return "(BEV)" if criterion in (None, "iou_bev") else "m (centre)"
+
+
+def labelled(header: Sequence[str], criterion: object) -> list[str]:
+    """``mAP@0.5 all`` → ``mAP@0.5 (BEV) all``, ``AP@0.5`` → ``AP@0.5 (BEV)`` (spec A.12)."""
+    tag = overlap_tag(criterion)
+    out: list[str] = []
+    for cell in header:
+        match = re.match(r"^(m?AP@[0-9.]+)( .*)?$", cell)
+        out.append(f"{match.group(1)} {tag}{match.group(2) or ''}" if match else cell)
+    return out
+
+
+def criterion_of(rows: Sequence[Row]) -> object:
+    """The criterion the rows were evaluated with (``iou_bev`` when unknown)."""
+    return _row_config(rows).get("criterion", "iou_bev")
 
 
 def _class_header(thresholds: Sequence[float]) -> list[str]:
@@ -456,7 +633,8 @@ def render_compare(
         [AGGREGATE_LABEL, "", ""]
         + [_delta_cell(c, total_a.get(c), total_b.get(c)) for c in columns]
     )
-    main = _table(["scene", "agent", "source", *columns], lines)
+    criterion = criterion_of(rows_a or rows_b)
+    main = _table(labelled(["scene", "agent", "source", *columns], criterion), lines)
     footer = (
         f"rows: {len(shared_a)} shared, {len(rows_a) - len(shared_a)} only in "
         f"{_run_label(rows_a, 'a')}, {len(only_b)} only in {_run_label(rows_b, 'b')}\n"
@@ -473,7 +651,9 @@ def render_compare(
             )
         )
     class_lines.extend(_class_delta_lines([AGGREGATE_LABEL, ""], shared_a, shared_b, thresholds))
-    return main + footer + "\n" + _table(_class_header(thresholds), class_lines)
+    protocol = f"protocol: {protocol_label(rows_a or rows_b)}\n\n"
+    class_table = _table(labelled(_class_header(thresholds), criterion), class_lines)
+    return protocol + main + footer + "\n" + class_table
 
 
 def _run_label(rows: Sequence[Row], fallback: str) -> str:

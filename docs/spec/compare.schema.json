@@ -52,6 +52,21 @@
         "reference_agent": {"type": "string"}
       }
     },
+    "protocol": {
+      "description": "How the compared runs were scored (docs/eval-spec.md A.2, A.12). Optional: files written before it have none.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ranking_scope"],
+      "properties": {
+        "label": {"type": "string"},
+        "legacy": {"type": "boolean"},
+        "criterion": {"type": "string", "enum": ["iou_bev", "centre"]},
+        "iou": {"type": ["string", "null"], "enum": ["bev", null]},
+        "ranking_scope": {"type": "string", "enum": ["per_frame", "pooled"]},
+        "gt_scope": {"type": "string", "enum": ["connected_union", "ego_only"]},
+        "comm_range_m": {"type": ["number", "null"]}
+      }
+    },
     "outputs": {"type": "array", "items": {"$ref": "#/$defs/output"}},
     "objects": {"type": "array", "items": {"$ref": "#/$defs/object"}}
   },

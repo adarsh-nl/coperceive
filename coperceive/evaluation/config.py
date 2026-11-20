@@ -24,7 +24,15 @@ from typing import cast
 from coperceive.errors import CoperceiveError
 
 CRITERIA = ("iou_bev", "centre")
+RANKING_SCOPES = ("per_frame", "pooled")
+GT_SCOPES = ("connected_union", "ego_only")
+# ``protocol`` is a preset of ranking_scope and gt_scope (docs/eval-spec.md A.2). ``legacy``
+# is the rule set of v0.1.1 and earlier: one pooled sort, each output against its own
+# agent's boxes. It is expanded here and not recorded: metrics.json keeps the two keys.
+PROTOCOLS = ("default", "legacy")
+LEGACY_PROTOCOL = {"ranking_scope": "pooled", "gt_scope": "ego_only"}
 KEYS = (
+    "protocol",
     "criterion",
     "thresholds",
     "display_threshold",
@@ -33,6 +41,9 @@ KEYS = (
     "max_range_m",
     "score_threshold",
     "gt_class_map",
+    "ranking_scope",
+    "gt_scope",
+    "comm_range_m",
 )
 
 
@@ -52,6 +63,10 @@ class EvalConfig:
     # GT class -> class, before matching. A default_factory: Python 3.11 refuses an
     # unhashable default such as a mappingproxy on a dataclass field.
     gt_class_map: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    # The protocol (docs/eval-spec.md A.2): the OPV2V/V2X-ViT defaults.
+    ranking_scope: str = "per_frame"  # per_frame | pooled: the order of the AP walk (A.5)
+    gt_scope: str = "connected_union"  # connected_union | ego_only: fused ground truth (A.4)
+    comm_range_m: float = 70.0  # communication range of connected_union
 
 
 DEFAULT_CONFIG = EvalConfig(
@@ -65,28 +80,56 @@ DEFAULT_CONFIG = EvalConfig(
 )
 
 
-def load_config(path: Path | None) -> EvalConfig:
-    """Read a YAML config; ``None`` is the default config. An empty file is too."""
+def load_config(path: Path | None, protocol: str | None = None) -> EvalConfig:
+    """Read a YAML config; ``None`` is the default config. An empty file is too.
+
+    ``protocol`` is the command line's ``--protocol``; it sets the config's ``protocol``
+    key, and a file that names another protocol is an error.
+    """
     if path is None:
-        return DEFAULT_CONFIG
+        return DEFAULT_CONFIG if protocol is None else parse_config({}, protocol=protocol)
     import yaml
 
     try:
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise ConfigError(f"{path}: {exc}") from None
-    return parse_config(payload)
+    return parse_config(payload, protocol=protocol)
 
 
-def parse_config(payload: object) -> EvalConfig:
+def parse_config(payload: object, protocol: str | None = None) -> EvalConfig:
     """Validate a decoded YAML or JSON object. Absent keys take the spec defaults."""
-    node = _mapping("", payload)
+    node = dict(_mapping("", payload))
     unknown = sorted(set(node) - set(KEYS))
     if unknown:
         raise ConfigError(f"unknown key {unknown[0]!r}")
+    if protocol is not None:
+        _choice("--protocol", protocol, PROTOCOLS)
+        if "protocol" in node and node["protocol"] != protocol:
+            raise ConfigError(
+                f"protocol: the config says {node['protocol']!r} and --protocol says {protocol!r}"
+            )
+        node["protocol"] = protocol
+    preset = _choice("protocol", node.pop("protocol", "default"), PROTOCOLS)
+    if preset == "legacy":
+        for key, value in LEGACY_PROTOCOL.items():
+            if key in node and node[key] != value:
+                raise ConfigError(
+                    f"{key}: protocol legacy sets {key} {value!r}; the config also says "
+                    f"{node[key]!r}"
+                )
+            node[key] = value
     criterion = _choice("criterion", node.get("criterion", DEFAULT_CONFIG.criterion), CRITERIA)
     if "thresholds" in node:
         thresholds = _thresholds("thresholds", node["thresholds"], criterion, count=None)
+    elif criterion != DEFAULT_CONFIG.criterion:
+        # The default thresholds are IoU values. Read as metres they are an increasing
+        # list, which the centre rule forbids, and a table headed mAP@0.5 would be a
+        # centre-distance AP at half a metre.
+        raise ConfigError(
+            f"thresholds: required with criterion {criterion}; the default "
+            f"{list(DEFAULT_CONFIG.thresholds)} are IoU values"
+        )
     else:
         thresholds = DEFAULT_CONFIG.thresholds
     display = _number(
@@ -112,6 +155,13 @@ def parse_config(payload: object) -> EvalConfig:
         if not isinstance(value, str) or not value:
             raise ConfigError(f"gt_class_map.{name}: expected a class name, got {value!r}")
         class_map[name] = value
+    ranking = _choice(
+        "ranking_scope", node.get("ranking_scope", DEFAULT_CONFIG.ranking_scope), RANKING_SCOPES
+    )
+    gt_scope = _choice("gt_scope", node.get("gt_scope", DEFAULT_CONFIG.gt_scope), GT_SCOPES)
+    comm_range = _number("comm_range_m", node.get("comm_range_m", DEFAULT_CONFIG.comm_range_m))
+    if comm_range <= 0:
+        raise ConfigError(f"comm_range_m: expected a positive number of metres, got {comm_range!r}")
     return EvalConfig(
         criterion=criterion,
         thresholds=thresholds,
@@ -121,6 +171,9 @@ def parse_config(payload: object) -> EvalConfig:
         max_range_m=max_range,
         score_threshold=score,
         gt_class_map=MappingProxyType(class_map),
+        ranking_scope=ranking,
+        gt_scope=gt_scope,
+        comm_range_m=comm_range,
     )
 
 
@@ -137,6 +190,9 @@ def config_json(config: EvalConfig) -> dict[str, object]:
         "max_range_m": config.max_range_m,
         "score_threshold": float(config.score_threshold),
         "gt_class_map": dict(config.gt_class_map),
+        "ranking_scope": config.ranking_scope,
+        "gt_scope": config.gt_scope,
+        "comm_range_m": float(config.comm_range_m),
     }
 
 

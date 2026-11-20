@@ -70,16 +70,22 @@ Validation (`coperceive predictions import`, `coperceive eval run`, and `write_r
 
 ```yaml
 criterion: iou_bev                   # iou_bev | centre
-thresholds: [0.5, 0.7]               # IoU for iou_bev, metres for centre; strictly increasing for iou_bev, strictly decreasing for centre
+thresholds: [0.5, 0.7]               # IoU for iou_bev, metres for centre; strictly increasing for iou_bev, strictly decreasing for centre; required with centre
 display_threshold: 0.5               # must be one of thresholds; statuses in matches.parquet use it
 class_thresholds: {}                 # class -> list, same length as thresholds, e.g. {pedestrian: [0.25, 0.5]}
 ignore_gt_visibility_below: null     # null, or a number: GT with visibility below it is ignored; GT with null visibility is kept
-max_range_m: null                    # null, or metres from the agent body origin at that time; GT and predictions farther are ignored
+max_range_m: null                    # null, or metres from the agent body origin at that time, measured horizontally; GT and predictions farther are ignored
 score_threshold: 0.3                 # operating point for statuses and per-sample counts
 gt_class_map: {}                     # optional: ground-truth class -> class, applied before matching, e.g. {truck: car, bus: car, motorcycle: bicycle}
+ranking_scope: per_frame             # per_frame | pooled: the order of the AP walk
+gt_scope: connected_union            # connected_union | ego_only: the ground truth of a fused output
+comm_range_m: 70.0                   # metres, horizontal: the range of connected_union
+protocol: default                    # default | legacy: a preset of ranking_scope and gt_scope; not copied into metrics.json
 ```
 
-Unknown keys are errors. `display_threshold` not in `thresholds` is an error.
+`protocol: legacy` sets `ranking_scope: pooled` and `gt_scope: ego_only`, the rules of v0.1.1 and earlier; `eval run --protocol legacy` does the same. A config that also sets either key to another value is an error, and so is a `--protocol` that differs from the file's `protocol`. `metrics.json` records the two keys it set, not `protocol`.
+
+Unknown keys are errors. `display_threshold` not in `thresholds` is an error. `criterion: centre` without `thresholds` is an error: the default thresholds are IoU values.
 
 ## Geometry
 
@@ -93,7 +99,7 @@ All matching is in the scene world frame. A `body` box is placed with the agent 
 
 **Horizontal centre distance** is `hypot(cx_a - cx_b, cy_a - cy_b)` in the world frame.
 
-**Yaw error** of a pair is the absolute difference of the two yaws wrapped into `[0, π]`, in degrees.
+**Yaw error** of a pair is the absolute difference of the two yaws wrapped into `[0, 180]` degrees.
 
 Normative values, all in metres:
 
@@ -111,7 +117,7 @@ Normative values, all in metres:
 Done per scene, per `(agent_id, source)` pair that appears in `boxes.parquet` (an **output**), per `time_us`, per `category`. Ground truth is the agent's own `annotations` at that time.
 
 0. Ground-truth categories are renamed through `gt_class_map` (a class not in the map keeps its name). Predictions are never renamed: a model that emits `car` for trucks is evaluated against ground truth that says `car` only when the map says so. For Griffin, the Griffin toolkit does this in code: `tools/griffin_data_converter/trans_kitti2nuscenes.py`, `obj_type_mapping` (`"truck": "car"`, `"bus": "car"`, `"motorcycle": "bicycle"`), and `projects/mmdet3d_plugin/datasets/griffin_dataset.py`, `class_names_nuscenes_mappings` (`'Truck': 'car'`, `'Bus': 'car'`), commit `9c02ba4a`.
-1. Ground-truth boxes are **ignored** when `ignore_gt_visibility_below` is a number and the box's visibility is a number below it, or when `max_range_m` is a number and the box centre is farther than that from the agent body origin at that time. Predictions farther than `max_range_m` are ignored before matching.
+1. Ground-truth boxes are **ignored** when `ignore_gt_visibility_below` is a number and the box's visibility is a number below it, or when `max_range_m` is a number and the box centre is farther than that from the agent body origin at that time. The distance is horizontal: `hypot` of the x and y differences in the world frame. A box exactly at `max_range_m` is kept. Predictions farther than `max_range_m` are ignored before matching.
 2. Predictions are sorted by `score` descending; equal scores keep file order.
 3. Each prediction in turn considers the ground-truth boxes of its category that are not yet matched, ignored ones included, and takes the best one under the criterion: the largest BEV IoU, or the smallest centre distance. The pair's threshold is the class's entry in `class_thresholds` or else the global `thresholds` entry, at the index of `display_threshold`.
    - If the best box is not ignored and passes the threshold (IoU `>=`, distance `<=`): **tp**, and the box is matched.
@@ -127,7 +133,7 @@ Normative cases, one agent, one sample, criterion `centre`, thresholds `[2.0, 1.
 - One GT car at `(0, 0)`, one prediction car at `(1.5, 0)` score 0.9: at 2.0 `tp`; at 1.0 `fp` and the GT is a `miss`.
 - One GT car, two predictions on it (0.9 at 0.2 m, 0.8 at 0.4 m): one `tp` (the 0.9) and one `fp`.
 - One GT car, one prediction `truck` on top of it: `fp` and `miss`.
-- One GT car with visibility 0.1, `ignore_gt_visibility_below: 0.5`, one prediction car on it: prediction `ignored`, GT `ignored`, counts all zero.
+- One GT car with visibility 0.1, `ignore_gt_visibility_below: 0.5`, one prediction car on it: prediction `ignored`, GT `ignored`; `tp`, `fp` and `miss` are 0 and `ignored_gt` is 1.
 - One GT car, one prediction car at 0.1 m with score 0.2: prediction `below_threshold`, GT `miss` at the operating point; AP at 2.0 is still `1.0`.
 
 ## Metrics
@@ -137,7 +143,7 @@ For one output (an `(agent_id, source)` pair):
 - **Per sample** (`samples[]`, one row per pose time of the agent, in time order): `time_us`, `tp`, `fp`, `miss`, `ignored_gt`, `precision = tp / (tp + fp)` (null when the denominator is 0), `recall = tp / (tp + miss)` (null when 0).
 - **Totals**: the sums over samples, plus `gt` (non-ignored ground-truth boxes) and `predictions` (all rows of the output), and the same `precision` and `recall` from the sums.
 - **AP** per threshold per category, with two means: `mean` over every category that has an AP (the union of `run.json` `categories`, the agent's ground-truth categories after `gt_class_map`, and the predicted categories), and `mean_model` over the `run.json` `categories` that have an AP. A category with ground truth and no prediction is `0.0` in both; a category with no ground truth is `null` and enters neither.
-  1. Take every prediction of that category in the scene with its status at that threshold (steps 2–4 above, ignoring `score_threshold`), sorted by score descending, ties in file order.
+  1. Take every prediction of that category in the scene with its status at that threshold (steps 2–4 above, ignoring `score_threshold`), in the order of `config.ranking_scope`: `per_frame` (the default) by time, earliest first, then by score descending within one time; `pooled` by score descending. Ties are in file order (`docs/eval-spec.md` A.5).
   2. Walk the list accumulating `tp_i` and `fp_i`; `recall_i = tp_i / n_gt`, `precision_i = tp_i / (tp_i + fp_i)`; ignored predictions are skipped.
   3. Make the precision envelope monotone from the right: `p'_i = max(precision_j for j >= i)`.
   4. `AP = Σ_i (recall_i − recall_{i−1}) · p'_i` with `recall_0 = 0`.
@@ -155,12 +161,13 @@ Normative AP values:
 
 ### Pooled AP
 
-The AP in `metrics.json` is per scene and is a diagnostic. The headline AP of a run, per output `(agent_id, source)` and per class, pools every detection across scenes the way OpenCOOD and KITTI do: one precision/recall curve per class over the predictions of every evaluated scene of that output, with `n_gt` summed over the scenes.
+The AP in `metrics.json` is per scene and is a diagnostic. The headline AP of a run, per output `(agent_id, source)` and per class, pools every detection across scenes into one curve. Under `ranking_scope: per_frame` (the default) the detections are not sorted over the whole list, following OpenCOOD's default, which sorts them only locally ([OpenCOOD README](https://github.com/DerrickXuNu/OpenCOOD), "Test the model"); under `pooled` they are sorted once, as KITTI does over its split ([Simonelli et al. 2019](https://arxiv.org/abs/1905.12365), Sec. 1). See `docs/eval-spec.md` A.5 and A.8. The pooled AP is: one precision/recall curve per class over the predictions of every evaluated scene of that output, with `n_gt` summed over the scenes.
 
 1. Take, for every evaluated scene in scene-id order, the prediction rows of the output and the category from `matches.parquet` with their `status_at_<i>` (below) for the threshold, in `boxes.parquet` row order; concatenate them. `n_gt` is the sum over those scenes of the output's non-ignored ground-truth boxes of the category (`gt` rows with a status other than `ignored`).
-2. Run steps 2–5 of **AP** once over that list: sort by score descending with a stable sort (ties keep scene order, then file order), walk, envelope, area. A class whose pooled `n_gt` is 0 has no pooled AP (`null`, rendered `n/a`); a class with ground truth and no prediction has `0.0`.
+2. Order the list: under `pooled`, sort by score descending with a stable sort (ties keep scene order, then file order); under `per_frame`, order each scene's part by time, then by score descending within one time, and keep the scenes in scene order with no sort over the whole list. Then walk, envelope and area as in steps 2–4 of **AP**. A class whose pooled `n_gt` is 0 has no pooled AP (`null`, rendered `n/a`); a class with ground truth and no prediction has `0.0`.
 3. The pooled **mAP** at a threshold is the mean over the classes that have a pooled AP. The classes are the union, over the pooled scenes, of the categories of their `ap` tables.
-4. Pooling over several outputs (the `all` row of `eval report`) is the same rule over the rows of every output: `n_gt` and the records are summed over outputs too.
+4. Pooling over several outputs (the `all` row of `eval report`) is the same rule over the rows of every output: `n_gt` and the records are summed over outputs too. `recovered` and `lost_by_fusion` are the exception: they belong to an agent and are the same on each of its outputs (§Cooperative views), so that row takes them once per scene and agent.
+5. Every pooled scene must have been evaluated with the same config. A run whose `metrics.json` files carry different `config` objects is refused by `eval report`, `eval compare` and the robustness sweep.
 
 Normative case: two scenes, each with one ground-truth car. Scene A has one `tp` at score 0.9; scene B one `fp` at 0.8 and one `tp` at 0.7. Pooled, `n_gt = 2` and the walk is tp, fp, tp: precisions 1, 1/2, 2/3 at recalls 1/2, 1/2, 1; the envelope is 1 at recall 1/2 and 2/3 at recall 1; AP `= 1/2 · 1 + 1/2 · 2/3 = 5/6 ≈ 0.833`. The mean of the per-scene APs (1.0 and 0.5) would be 0.75; that number is not reported anywhere.
 
@@ -205,6 +212,7 @@ One row per prediction and one per ground-truth box of every evaluated output, i
 | `status_single`, `status_fused`, `other_kind` | string | yes | GT only. |
 | `seen_by_other_gt`, `other_agent_tp` | bool | yes | GT only. |
 | `status_at_<i>` | string | yes | Predictions only, one column per entry of `config.thresholds` (`i` is its index: `status_at_0`, `status_at_1`, …): the prediction's status in the AP pass at `thresholds[i]` (§Matching step 7, `score_threshold` ignored): `tp`, `fp` or `ignored`. Null on GT rows. These let a reader build the pooled curve from the files without re-matching. |
+| `gt_row_at_<i>` | int64 | yes | Predictions only, one column per entry of `config.thresholds`: the `annotations.parquet` row of the ground-truth box the prediction was paired with in the AP pass at `thresholds[i]`, null when it was not a `tp` there. Null on GT rows. A breakdown bins a true positive by this box (`docs/eval-spec.md` A.11). |
 
 The spec columns above `status_at_<i>` come first and are the same for every config; a reader that asks for them alone (the viewer) sees the same table whatever `thresholds` is.
 
@@ -242,7 +250,7 @@ The spec columns above `status_at_<i>` come first and are the same for every con
 
 Threshold keys are the shortest `repr` of the float (`"0.5"`, `"2.0"`). Numbers are plain JSON numbers; absent values are `null`, never `NaN`.
 
-`coperceive eval report <run_id>` prints, for a scenes root, a main table with one row per scene and output (`scene`, `agent`, `source`, `gt`, `predictions`, `tp`, `fp`, `miss`, `precision`, `recall`, then per threshold `mAP@<t> all` — the pooled mean over every class with ground truth — and `mAP@<t> model` — the pooled mean over `run.json` `categories` — then `recovered`, `lost_by_fusion`), one `all` row per output pooling its scenes, and an `all` row over everything; then, after a blank line, a per-class table (`agent`, `source`, `class`, `AP@<t>` per threshold) with the pooled AP per class per output and for `all`. The pooled values are §Metrics "Pooled AP". `coperceive eval compare <a> <b>` prints the same tables with `b − a` deltas over the rows both runs share, `n/a` where a row is missing on one side, and a footer `rows: N shared, N only in <a>, N only in <b>`.
+`coperceive eval report <run_id>` prints, for a scenes root, a `protocol:` line (`docs/eval-spec.md` A.12), then a main table with one row per scene and output (`scene`, `agent`, `source`, `gt`, `predictions`, `tp`, `fp`, `miss`, `precision`, `recall`, then per threshold `mAP@<t> (BEV) all` — the pooled mean over every class with ground truth — and `mAP@<t> (BEV) model` — the pooled mean over `run.json` `categories` — then `recovered`, `lost_by_fusion`), one `all` row per output pooling its scenes, and an `all` row over everything; then, after a blank line, a per-class table (`agent`, `source`, `class`, `AP@<t> (BEV)` per threshold) with the pooled AP per class per output and for `all`. The pooled values are §Metrics "Pooled AP". `coperceive eval compare <a> <b>` prints the same tables with `b − a` deltas over the rows both runs share, `n/a` where a row is missing on one side, and a footer `rows: N shared, N only in <a>, N only in <b>`.
 
 ## HTTP
 

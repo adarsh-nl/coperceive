@@ -452,9 +452,12 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "shapely" },
     { name = "types-pyyaml" },
+    { name = "types-shapely" },
 ]
 docs = [
+    { name = "mkdocs" },
     { name = "mkdocs-material" },
 ]
 griffin = [
@@ -481,7 +484,8 @@ requires-dist = [
     { name = "matplotlib", marker = "extra == 'app'", specifier = ">=3.8" },
     { name = "matplotlib", marker = "extra == 'dev'", specifier = ">=3.8" },
     { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.8" },
-    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
+    { name = "mkdocs", marker = "extra == 'docs'", specifier = "==1.6.1" },
+    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = "==9.7.7" },
     { name = "numpy", specifier = ">=1.26.4" },
     { name = "pillow", specifier = ">=10.4" },
     { name = "playwright", marker = "extra == 'dev'", specifier = ">=1.49" },
@@ -493,8 +497,10 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6" },
     { name = "rerun-sdk", marker = "extra == 'viewer'", specifier = "==0.22.1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
+    { name = "shapely", marker = "extra == 'dev'", specifier = ">=2.0" },
     { name = "torch", marker = "extra == 'torch'" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6" },
+    { name = "types-shapely", marker = "extra == 'dev'", specifier = ">=2.0" },
     { name = "uvicorn", marker = "extra == 'app'", specifier = ">=0.30" },
     { name = "viser", marker = "extra == 'viewer'", specifier = "==0.2.23" },
 ]
@@ -3790,6 +3796,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/90/6e/abec85b9013db5b934b0280a6dd104904d84f7bcbaab2e2f3def87ac7463/types_pyyaml-6.0.12.20260906.tar.gz", hash = "sha256:f59c1cc05010b833d2d72287bbaa72610106b28d42d89a907313117faba85212", size = 18649, upload-time = "2026-09-06T06:35:35.362Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/15/c0/fc0644b7ddcfb969e95845837143cb5173ddd6e06ee4ba5fc493cd9329b7/types_pyyaml-6.0.12.20260906-py3-none-any.whl", hash = "sha256:bca893ff0d51df5c9053137d5d0e6ccd36e939a196356f1d5c16372422f5137b", size = 21282, upload-time = "2026-09-06T06:35:34.372Z" },
+]
+
+[[package]]
+name = "types-shapely"
+version = "2.1.0.20261030"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d1/fb/c94c0e74109e5778cd619c36ea1f9ad21bb5f3b60c6a4287022c55433e86/types_shapely-2.1.0.20261030.tar.gz", hash = "sha256:2299ee7c5e671ea1f76c190236e1d7895dfd1a32672ff1f4c163da830cd96230", size = 27888, upload-time = "2026-10-30T07:50:33.391Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2b/2e/5d2b8b9a9e6f79749b1817a2a31f36982b2d8ea5873a80eba9daab8fcdee/types_shapely-2.1.0.20261030-py3-none-any.whl", hash = "sha256:73b477a4a4e0e400ddc5324c7f556b9e4aea74bf0e4bcaafe49f66975a27b05f", size = 38616, upload-time = "2026-10-30T07:50:32.313Z" },
 ]
 
 [[package]]
