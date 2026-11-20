@@ -24,6 +24,7 @@ import {
   initialArgumentForm,
   planIsSaveable,
   artifactFingerprintText,
+  builtinPlanInputProblem,
   pipelineNeedsCheckpoint,
   pipelineNeedsSplit,
   planSummary,
@@ -188,6 +189,18 @@ test("a built-in model needs a checkpoint only when its manifest declares the op
   assert.strictEqual(pipelineNeedsCheckpoint(bare, ""), false);
   assert.strictEqual(pipelineNeedsSplit(bare), false);
   assert.strictEqual(pipelineNeedsCheckpoint(null, ""), false);
+});
+
+test("a built-in plan requires the model and raw root but not a media root", () => {
+  const base = { model: "vehicle-side", rawRoot: "/data/griffin-release", mediaRoot: "" };
+  // An empty media root is a valid plan: the CLI's --media-root is optional, and the job
+  // script then contains no --media-root at all.
+  assert.strictEqual(builtinPlanInputProblem(base), null);
+  assert.strictEqual(builtinPlanInputProblem({ ...base, mediaRoot: "/data/griffin-release" }), null);
+  // The model key and the raw root are still required.
+  const message = "Choose the model key and raw root for this built-in model.";
+  assert.strictEqual(builtinPlanInputProblem({ ...base, model: "  " }), message);
+  assert.strictEqual(builtinPlanInputProblem({ ...base, rawRoot: " " }), message);
 });
 
 test("a Griffin plan with no checkpoint and a fingerprinted scenes folder can be saved", () => {

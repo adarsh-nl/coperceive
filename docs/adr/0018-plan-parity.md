@@ -31,13 +31,15 @@ Accepted cases:
 | `venv_script_command` | A venv profile running the console script `<venv>/bin/coperceive`. |
 | `proxy_jump_modules` | A modules profile reached through a jump host on port 2222, on a CPU partition, data and results under `/data`, with `--option min_score=0.05`. |
 | `spaces_and_quotes` | Scenes, raw root and media root under `te st/it's "q"`, and a code root with a space. |
+| `no_media_root` | The base case with no media root. The CLI's `--media-root` is optional, so the app accepts it too and both scripts leave the flag out entirely. |
 
 Refusals (`refusals` in `cases.json`) are inputs the app refuses. Each carries the exact message, a reason and a citation:
 
 | Refusal | The app says | The CLI |
 | --- | --- | --- |
 | `results_root_with_space` | `#170`'s message: a results folder with a space, a `#` or a quote is refused. | Takes it. The CLI writes no results folder into an `#SBATCH` line, and refuses a `--slurm-logs` folder with a space for the same reason. |
-| `no_media_root` | "Choose the media root on the cluster before checking the plan." | Takes it: `--media-root` is optional. Not decided (see below). |
+
+The PM decided on 2026-11-20 that the CLI is the reference here too: a built-in plan needs the model and the raw root, and the media root is optional. The app's "predates this schema" check therefore uses `work_dir`, which was added in the same commit as the model/raw/media fields (`9b4d9a0`) and is recorded by every built-in plan saved since then; an empty media root is a valid new plan and no longer identifies an old one.
 
 **`src-tauri/tests/plan_parity.rs`** renders the app's side:
 
@@ -98,5 +100,4 @@ No test, fixture or script in this work calls `sbatch`, `scancel`, `squeue` or `
 
 ## Not decided here
 
-1. **No media root.** The app refuses a built-in plan with no media root. The CLI's `--media-root` is optional. ADR 0021 covers the script for inputs both sides accept, so it does not decide whether the app should accept an empty media root. The `no_media_root` refusal pins the current message, so a change in either direction is seen. This is for the PM.
-2. **A single quote in the code root.** The app writes `PYTHONPATH` with `shell_quote` (`'\''`), while `plan_sbatch` uses `shlex.quote` (`'"'"'`). The value in the shell is the same, but the bytes differ, and ADR 0021 lists `PYTHONPATH` as identical. The fix belongs in `job_submit.rs`, which the HPC owner owns (AGENTS.md §3), so it is routed. Until it is fixed, `spaces_and_quotes` puts only a space in its code root.
+1. **A single quote in the code root.** The app writes `PYTHONPATH` with `shell_quote` (`'\''`), while `plan_sbatch` uses `shlex.quote` (`'"'"'`). The value in the shell is the same, but the bytes differ, and ADR 0021 lists `PYTHONPATH` as identical. The fix belongs in `job_submit.rs`, which the HPC owner owns (AGENTS.md §3), so it is routed. Until it is fixed, `spaces_and_quotes` puts only a space in its code root.

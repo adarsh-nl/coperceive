@@ -2150,16 +2150,16 @@ pub fn build_run_plan(
         None => default_eval_gres(entry),
     };
     if builtin {
-        for (path, label) in [
-            (request.raw_root.trim(), "raw root"),
-            (request.media_root.trim(), "media root"),
-        ] {
-            if path.is_empty() {
-                return Err(format!(
-                    "Choose the {label} on the cluster before checking the plan."
-                ));
-            }
-            validate_path_in_roots(profile, path, label)?;
+        let raw = request.raw_root.trim();
+        if raw.is_empty() {
+            return Err("Choose the raw root on the cluster before checking the plan.".to_string());
+        }
+        validate_path_in_roots(profile, raw, "raw root")?;
+        // The media root is optional, as the CLI's repeatable --media-root is: an empty
+        // one leaves the flag out of the job script instead of passing an empty path.
+        let media = request.media_root.trim();
+        if !media.is_empty() {
+            validate_path_in_roots(profile, media, "media root")?;
         }
     }
     validate_plan_destinations(profile)?;
@@ -3661,14 +3661,18 @@ pub fn save_run_plan(
         let model = request.model.trim();
         let raw = request.raw_root.trim();
         let media = request.media_root.trim();
-        if model.is_empty() || raw.is_empty() || media.is_empty() {
+        if model.is_empty() || raw.is_empty() {
             return Err(
-                "This plan predates the model/raw/media fields; rebuild this plan before saving."
+                "This plan predates the model/raw fields; rebuild this plan before saving."
                     .to_string(),
             );
         }
         validate_path_in_roots(profile, raw, "raw root")?;
-        validate_path_in_roots(profile, media, "media root")?;
+        // Optional, as the CLI's --media-root is; when empty build_builtin_argv writes no
+        // --media-root at all.
+        if !media.is_empty() {
+            validate_path_in_roots(profile, media, "media root")?;
+        }
         // `coperceive model run` takes --out/--run-id/--work and has no --output-dir.
         build_builtin_argv(
             profile,
@@ -6396,6 +6400,28 @@ mod tests {
         for item in ["--model", "vehicle-side", "--raw-root", "/data/code/raw", "--media-root", "/data/code/raw", "--work"] {
             assert!(plan.argv.iter().any(|value| value == item), "missing {item}: {:?}", plan.argv);
         }
+    }
+
+    #[test]
+    fn a_builtin_plan_without_a_media_root_is_accepted_and_has_no_flag() {
+        // The CLI's --media-root is optional (coperceive/cli.py); the media root is not
+        // what identifies a plan field. An empty one must be accepted and leave the flag
+        // out entirely, in both the built argv and the saved plan.
+        let mut req = griffin_request();
+        req.split = "/data/code/splits/test.txt".to_string();
+        req.raw_root = "/data/code/raw".to_string();
+        req.media_root = String::new();
+        let plan = build_run_plan(&checked_runner(), &entry(), &req).expect("build");
+        assert_eq!(plan.model, "vehicle-side");
+        assert_eq!(plan.raw_root.path, "/data/code/raw");
+        assert!(plan.media_root.path.is_empty());
+        assert!(!plan.argv.iter().any(|word| word == "--media-root"), "{:?}", plan.argv);
+
+        let mut echo = EchoRunner::new();
+        echo.model_list = Some(MODEL_LIST_JSON.to_string());
+        let saved = save_run_plan(&echo, &entry(), &plan, &req).expect("save");
+        assert!(saved.media_root.path.is_empty());
+        assert!(!saved.argv.iter().any(|word| word == "--media-root"), "{:?}", saved.argv);
     }
 
     #[test]

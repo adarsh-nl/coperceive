@@ -146,6 +146,7 @@
       "cite": "src-tauri/src/job_submit.rs render_run_script, job_scratch_dir; docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a",
       "cases": [
         "base",
+        "no_media_root",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -190,6 +191,7 @@
       "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'",
       "cases": [
         "base",
+        "no_media_root",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -236,6 +238,7 @@
       "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'",
       "cases": [
         "base",
+        "no_media_root",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -298,6 +301,7 @@
       "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
       "cases": [
         "base",
+        "no_media_root",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -326,6 +330,7 @@
       "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
       "cases": [
         "base",
+        "no_media_root",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -354,6 +359,7 @@
       "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
       "cases": [
         "base",
+        "no_media_root",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -392,6 +398,7 @@
       "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
       "cases": [
         "base",
+        "no_media_root",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -430,6 +437,7 @@
       "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
       "cases": [
         "base",
+        "no_media_root",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -468,6 +476,7 @@
       "cite": "coperceive/models/slurm.py work_copy_filter",
       "cases": [
         "base",
+        "no_media_root",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -512,6 +521,7 @@
       "cite": "tests/test_plan_parity.py",
       "cases": [
         "base",
+        "no_media_root",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
