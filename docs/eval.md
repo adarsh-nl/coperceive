@@ -69,7 +69,7 @@ protocol: legacy                     # ranking_scope: pooled, gt_scope: ego_only
 coperceive eval run <run_id> --root <scenes> --protocol legacy
 ```
 
-`eval report` then heads the tables with `protocol: legacy (pooled, ego-only)`, the label a run evaluated by v0.1.1 has, and `eval compare` sets the two side by side. On the demo run (`coperceive demo create`), every count, precision, recall and AP of `metrics.json` and of `eval report` equals v0.1.1's. `tests/test_eval_legacy_protocol.py` checks this against values written by the v0.1.1 code. It checks the same for the cooperative test scene, which has a `fused` output.
+`eval report` then heads the tables with `protocol: legacy (pooled, ego-only)`, the label a run evaluated by v0.1.1 has, and `eval compare` sets the two side by side. On the demo run (`coperceive demo create`), every count, precision, recall and AP of `metrics.json` and of `eval report` equals v0.1.1's on the same Python version. A class mean (`mean`, `mean_model`) can differ in the last bit between Python 3.11 and 3.12 or later, in v0.1.1 as in v0.1.2, because Python 3.12 changed how `sum` adds floats; the test recomputes each mean from v0.1.1's per-class APs with the running Python's `sum`. `tests/test_eval_legacy_protocol.py` checks this against values written by the v0.1.1 code. It checks the same for the cooperative test scene, which has a `fused` output.
 
 The switch restores the protocol, not the defects v0.1.2 fixed. These still differ from v0.1.1 under `protocol: legacy`:
 
