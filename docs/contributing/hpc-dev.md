@@ -27,7 +27,8 @@ Notes:
 
 ## 2. An environment file to source
 
-Put it outside the repository, for example `/home/alice/env/coperceive-rust.sh`:
+Put it in your clone, for example `~/src/coperceive/.hpc-env.sh`, and add it to
+`.git/info/exclude` so it is never committed:
 
 ```bash
 _tauri_env="$HOME/.conda/envs/coperceive-tauri-deps"
@@ -35,6 +36,7 @@ export PKG_CONFIG="$_tauri_env/bin/pkg-config"
 export PKG_CONFIG_PATH="$_tauri_env/lib/pkgconfig:$_tauri_env/share/pkgconfig"
 export CARGO_TARGET_DIR="$HOME/src/coperceive/.cargo-target"   # in your clone, not shared
 export CARGO_BUILD_JOBS=2                                      # be gentle on a shared node
+export PATH="/home/alice/node/bin:$PATH"                       # node, npm, npx
 unset _tauri_env
 ```
 
@@ -42,11 +44,16 @@ Do not export `LD_LIBRARY_PATH` in this file. The environment ships its own Open
 other libraries, so `git` and `ssh` in the same shell could load them. Set it only on the
 `cargo test` command line (step 4).
 
-Add `.cargo-target/` to `.git/info/exclude`.
+Add `.cargo-target/` to `.git/info/exclude` too.
 
-Source the file in the shell you push from. The hook calls plain `cargo check`, so it
-picks up these variables. Without them, the hook fails, or it rebuilds from scratch into
-`src-tauri/target` at full parallelism.
+Source the file in the shell you push from. The hook calls plain `cargo check` and
+`npx tsc -b`, so it picks up these variables.
+
+Without them:
+
+- `cargo check` fails, or rebuilds from scratch into `src-tauri/target` at full
+  parallelism.
+- The hook skips `tsc -b` with only a warning when `npx` is not on `PATH`.
 
 ## 3. The web bundle
 
@@ -62,7 +69,7 @@ This needs Node and npm on `PATH`.
 ## 4. Check
 
 ```bash
-source /home/alice/env/coperceive-rust.sh
+source ~/src/coperceive/.hpc-env.sh
 cd src-tauri && nice -n 19 cargo check --quiet
 LD_LIBRARY_PATH="$HOME/.conda/envs/coperceive-tauri-deps/lib" nice -n 19 cargo test --lib
 ```
