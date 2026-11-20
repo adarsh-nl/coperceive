@@ -1291,11 +1291,12 @@ options:
 ## `coperceive dataset status`
 
 ```text
-usage: coperceive dataset status [-h] --cache CACHE [--verbose]
+usage: coperceive dataset status [-h] --cache CACHE [--live-claims] [--verbose]
 
 options:
   -h, --help  show this help message and exit
   --cache CACHE
+  --live-claims  Also list the preparing scenes a queued or running job still holds (one squeue).
   --verbose  Print the full traceback on failure.
 ```
 

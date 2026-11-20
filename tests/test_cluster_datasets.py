@@ -7,10 +7,12 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import cast
 
 import pytest
+from coperceive import cluster_datasets
 from coperceive.cluster_datasets import (
     CACHE_DIR,
     DETECT_SCHEMA,
@@ -422,6 +424,94 @@ def test_status_marks_ready_scenes_stale_when_the_raw_files_change(tmp_path: Pat
     assert dataset_status_document(cache)["scenes"][0]["state"] == "ready"
 
 
+def _claim(cache: Path, scene_id: str, *, job_id: str | None, claimed_unix: float | None) -> None:
+    """Record a prepare claim on ``scene_id``, as a running array task does."""
+    path = cache / "dataset.json"
+    dataset = json.loads(path.read_text(encoding="utf-8"))
+    record = dataset["scenes"][scene_id]
+    record.update({"state": "preparing", "reason": None, "job_id": job_id})
+    if claimed_unix is None:
+        record.pop("claimed_unix", None)
+    else:
+        record["claimed_unix"] = claimed_unix
+    path.write_text(json.dumps(dataset), encoding="utf-8")
+
+
+def test_status_lists_live_claims_only_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--live-claims``: a preparing scene counts while its job is queued or running."""
+    raw = _opv2v(tmp_path / "opv2v")
+    cache = _cache(tmp_path, raw)
+    prepare_cluster_dataset("opv2v", raw / "test", cache, scenes=["scene_0001"])
+    now = time.time()
+    _claim(cache, "scene_0002", job_id="77_1", claimed_unix=now - 60)
+
+    assert "live_claims" not in dataset_status_document(cache)
+
+    monkeypatch.setattr(cluster_datasets, "_queued_jobs", lambda: {"77_1", "80"})
+    assert dataset_status_document(cache, with_live_claims=True)["live_claims"] == ["scene_0002"]
+    # The job ended: the claim is dead, so "Prepare remaining" takes the scene over.
+    monkeypatch.setattr(cluster_datasets, "_queued_jobs", lambda: {"80"})
+    assert dataset_status_document(cache, with_live_claims=True)["live_claims"] == []
+    # No squeue: a claim younger than the takeover age counts as live.
+    monkeypatch.setattr(cluster_datasets, "_queued_jobs", lambda: None)
+    assert dataset_status_document(cache, with_live_claims=True)["live_claims"] == ["scene_0002"]
+
+
+def test_live_claims_follow_the_takeover_rules() -> None:
+    now = 1_800_000_000.0
+    scenes = {
+        "a_ready": {"state": "ready"},
+        "b_young": {"state": "preparing", "job_id": "9_0", "claimed_unix": now - 10},
+        "c_old": {"state": "preparing", "job_id": "9_1", "claimed_unix": now - 4 * 3600},
+        "d_no_time": {"state": "preparing", "job_id": "9_2"},
+        "e_no_owner": {"state": "preparing", "job_id": None, "claimed_unix": now - 10},
+        "f_dead": {"state": "preparing", "job_id": "5_3", "claimed_unix": now - 10},
+    }
+    live = cluster_datasets.live_claims({"scenes": scenes}, now=now, queued={"9_0", "9_1"})
+    # An old claim is taken over even while its job still runs (CLAIM_TAKEOVER_S).
+    assert live == ["b_young", "d_no_time", "e_no_owner"]
+
+
+def test_queued_jobs_reads_one_squeue_with_array_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(
+            argv, 0, stdout="707868\n762169_2\n\n762169_3\n", stderr=""
+        )
+
+    monkeypatch.setattr(cluster_datasets.subprocess, "run", fake_run)
+    monkeypatch.setattr(cluster_datasets.getpass, "getuser", lambda: "alice")
+    assert cluster_datasets._queued_jobs() == {"707868", "762169_2", "762169_3"}
+    assert calls == [["squeue", "-h", "-r", "-u", "alice", "-o", "%i"]]
+
+    def missing(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError("squeue")
+
+    monkeypatch.setattr(cluster_datasets.subprocess, "run", missing)
+    assert cluster_datasets._queued_jobs() is None
+
+
+def test_dataset_status_cli_takes_live_claims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from coperceive import cli
+
+    raw = _opv2v(tmp_path / "opv2v")
+    cache = _cache(tmp_path, raw)
+    prepare_cluster_dataset("opv2v", raw / "test", cache, scenes=["scene_0001"])
+    capsys.readouterr()
+    monkeypatch.setattr(cluster_datasets, "_queued_jobs", lambda: set[str]())
+    cli.main(["dataset", "status", "--cache", str(cache), "--live-claims"])
+    document = json.loads(capsys.readouterr().out)
+    assert document["live_claims"] == []
+    cli.main(["dataset", "status", "--cache", str(cache)])
+    assert "live_claims" not in json.loads(capsys.readouterr().out)
+
+
 def test_cache_inside_the_raw_root_is_refused(tmp_path: Path) -> None:
     raw = _opv2v(tmp_path / "opv2v")
     with pytest.raises(DatasetError, match="must not be inside"):
@@ -595,4 +685,5 @@ def test_capabilities_lists_cluster_datasets(capsys: pytest.CaptureFixture[str])
     assert "cluster-datasets-2" in document["capabilities"]
     assert "cluster-datasets-3" in document["capabilities"]
     assert "cluster-datasets-5" in document["capabilities"]
+    assert "cluster-datasets-6" in document["capabilities"]
     assert document["version"]

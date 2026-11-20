@@ -11,6 +11,7 @@ point clouds. The schemas are frozen in ``docs/datasets/cluster-datasets.md``.
 from __future__ import annotations
 
 import fcntl
+import getpass
 import hashlib
 import json
 import os
@@ -409,6 +410,57 @@ def _job_alive(job_id: str) -> bool | None:
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
+# A claim at least this old is taken over by the next prepare, live job or not.
+CLAIM_TAKEOVER_S = 4 * 3600
+
+
+def _queued_jobs() -> set[str] | None:
+    """This user's queued and running job ids from one ``squeue``; ``None`` without squeue.
+
+    ``-r`` prints one line per array task, as ``<array>_<task>``: the form a
+    prepare claim records (``_slurm_job_id``).
+    """
+    try:
+        user = getpass.getuser()
+        result = subprocess.run(
+            ["squeue", "-h", "-r", "-u", user, "-o", "%i"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
+def live_claims(dataset: Mapping[str, Any], *, now: float, queued: set[str] | None) -> list[str]:
+    """The preparing scenes whose claim a queued or running job still holds.
+
+    The same rules as ``_claim_still_live``, with one ``squeue`` for the whole
+    split instead of one per scene. A claim with no time is live; one older
+    than ``CLAIM_TAKEOVER_S`` is not. Without squeue (``queued`` is ``None``)
+    every younger claim counts as live. A claim held by another user's job is
+    not in this user's queue, so it reads as dead here. A prepare task still
+    checks that claim itself and skips the scene while the job runs.
+    """
+    live: list[str] = []
+    for scene_id, record in sorted(dataset.get("scenes", {}).items()):
+        if record.get("state") != "preparing":
+            continue
+        claimed = record.get("claimed_unix")
+        if not isinstance(claimed, (int, float)):
+            live.append(scene_id)
+            continue
+        if now - float(claimed) >= CLAIM_TAKEOVER_S:
+            continue
+        owner = record.get("job_id")
+        if queued is None or not isinstance(owner, str) or not owner or owner in queued:
+            live.append(scene_id)
+    return live
+
+
 def _claim_still_live(record: Mapping[str, Any], current_job: str | None, now: float) -> bool:
     if record.get("state") != "preparing":
         return False
@@ -418,7 +470,7 @@ def _claim_still_live(record: Mapping[str, Any], current_job: str | None, now: f
     claimed = record.get("claimed_unix")
     if not isinstance(claimed, (int, float)):
         return True
-    if now - float(claimed) >= 4 * 3600:
+    if now - float(claimed) >= CLAIM_TAKEOVER_S:
         return False
     if isinstance(owner, str) and owner:
         alive = _job_alive(owner)
@@ -769,7 +821,14 @@ def prepare_cluster_dataset(
     return dataset_status_document(cache)
 
 
-def dataset_status_document(cache_dir: str | Path, *, refresh_stale: bool = True) -> dict[str, Any]:
+def dataset_status_document(
+    cache_dir: str | Path, *, refresh_stale: bool = True, with_live_claims: bool = False
+) -> dict[str, Any]:
+    """Per-scene states of a cache split.
+
+    ``with_live_claims`` adds ``live_claims``, the preparing scenes another job
+    still holds (see ``live_claims``), which "Prepare remaining" leaves out.
+    """
     cache = _real(cache_dir)
     dataset = _read_dataset(cache)
     fingerprint = dataset.get("raw_fingerprint", {})
@@ -795,7 +854,7 @@ def dataset_status_document(cache_dir: str | Path, *, refresh_stale: bool = True
         item = _status_record(cache, record)
         item["scene_id"] = scene_id
         records.append(item)
-    return {
+    document: dict[str, Any] = {
         "schema": SCENE_STATUS_SCHEMA,
         "cache_root": str(cache),
         "adapter": dataset.get("adapter"),
@@ -804,6 +863,9 @@ def dataset_status_document(cache_dir: str | Path, *, refresh_stale: bool = True
         "updated_unix": dataset.get("updated_unix"),
         "scenes": records,
     }
+    if with_live_claims:
+        document["live_claims"] = live_claims(dataset, now=time.time(), queued=_queued_jobs())
+    return document
 
 
 def _split_entries(

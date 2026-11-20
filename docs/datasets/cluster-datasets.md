@@ -307,6 +307,12 @@ the map key there. The UI polls this command; `state`/`reason` are the only
 fields it needs to render progress and failures, and `job_id` links a preparing
 scene to its Slurm job.
 
+`dataset status --cache C --live-claims` adds `live_claims`: the `preparing`
+scenes whose claim is younger than four hours and whose job is still in this
+user's queue (one `squeue -h -r -u <user>`). Without squeue every such claim
+counts as live. The app reads it only when it previews "Prepare remaining", not
+on every poll.
+
 ## Bounds and safety
 
 - Detection/index accept `--max-scenes` (default 5000), `--max-entries`
@@ -576,7 +582,7 @@ return JSON and use the saved server profile and `coperceive_command`.
 
 | Tauri command | arguments | returns |
 | --- | --- | --- |
-| `dataset_prepare` | `{ "profileId": string, "adapter": "griffin"\|"opv2v"\|"v2xset", "rawRoot": string, "split": string \| null, "scenes"?: string[] \| "all", "workers"?: number, "images"?: "originals"\|"previews" }` | **submission preview**: `{ "plan_id": string, "job_name": string, "partition": string, "walltime": string, "cpus_per_task": 1, "array_tasks": number, "throttle": number, "gres": null, "estimated_cache_bytes": number, "images": "originals"\|"previews", "estimated_preview_bytes": number, "cache_root": string, "script": string, "preview_hash": string }` |
+| `dataset_prepare` | `{ "profileId": string, "adapter": "griffin"\|"opv2v"\|"v2xset", "rawRoot": string, "split": string \| null, "scenes"?: string[] \| "all" \| "remaining", "workers"?: number, "images"?: "originals"\|"previews" }` | **submission preview**: `{ "plan_id": string, "job_name": string, "partition": string, "walltime": string, "cpus_per_task": 1, "array_tasks": number, "throttle": number, "gres": null, "estimated_cache_bytes": number, "images": "originals"\|"previews", "estimated_preview_bytes": number, "cache_root": string, "script": string, "preview_hash": string }` |
 | `dataset_prepare_submit` | `{ "profileId": string, "previewHash": string, "confirmed": boolean }` | `{ "job_id": string, "state": "pending"\|"running"\|"completed"\|"failed"\|"cancelled"\|"unknown", "queue_reason": string \| null, "plan_id": string }` |
 | `dataset_status` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null }` | `coperceive-cluster-scene-status-1` document |
 | `dataset_open` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null, "sceneId"?: string }` | `{ "origin": string, "token": string, "server_version": string, "data_root": string, "target_type": "remote" }` |
@@ -589,7 +595,7 @@ different `preview_hash`. `estimated_preview_bytes` is the extra disk the
 previews mode would use for the selected scenes, whichever mode is chosen, so
 the UI can show the cost next to that option.
 
-`scenes` omitted means all scenes, same as `"all"`. `workers` is the array throttle (scenes at once), optional: when omitted the backend uses `min(selected_scene_count, 8)`; it is clamped to 1–16 either way. The preview has `cpus_per_task: 1`, `array_tasks` (one per selected scene; "all" is every scene the index lists) and `throttle`; the script lists the scenes in a shell-quoted `SCENES=(…)` array, and each task runs `dataset prepare --workers 1 --scenes "${SCENES[$SLURM_ARRAY_TASK_ID]}"`. `cache_root` is the absolute cache split directory (`results_root` + `cache.relative_path`) so the UI never computes it. `split` is `null` only for
+`scenes` omitted means all scenes, same as `"all"`. `"remaining"` ("Prepare remaining") is resolved when the preview is made, from `dataset status --cache C --live-claims`: the indexed scenes the cache does not know, or knows as `not_prepared`, `failed` or `stale`. A `preparing` scene is left out while its claim is live: younger than four hours, and its job still in this user's `squeue`. Ready scenes are never submitted again. When nothing is left, the preview is refused with "Every scene is prepared or being prepared." An older coperceive without `--live-claims` (capability `cluster-datasets-6`) gets a plain `dataset status`, and every preparing scene counts as live. A prepare task still checks each claim itself, so a scene claimed by another user's live job is skipped, not prepared twice. `workers` is the array throttle (scenes at once), optional: when omitted the backend uses `min(selected_scene_count, 8)`; it is clamped to 1–16 either way. The preview has `cpus_per_task: 1`, `array_tasks` (one per selected scene; "all" is every scene the index lists) and `throttle`; the script lists the scenes in a shell-quoted `SCENES=(…)` array, and each task runs `dataset prepare --workers 1 --scenes "${SCENES[$SLURM_ARRAY_TASK_ID]}"`. `cache_root` is the absolute cache split directory (`results_root` + `cache.relative_path`) so the UI never computes it. `split` is `null` only for
 Griffin. `dataset_prepare` renders the full script but submits nothing.
 `dataset_prepare_submit` requires the exact `preview_hash`; a changed preview or
 an unconfirmed call submits nothing and returns a plain error. The preview is

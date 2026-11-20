@@ -22,6 +22,7 @@ import {
   formatStorageEstimate,
   prepareEstimateLine,
   recoverFromRefusedPrepareSubmit,
+  wholeDatasetScenes,
   type ClusterDetectDocument,
   type ClusterIndexDocument,
   type ClusterIndexScene,
@@ -716,7 +717,7 @@ export default function DatasetView({
           adapter: dataset.adapter || "opv2v",
           rawRoot: dataset.raw_root || dataset.path,
           split: dataset.split,
-          scenes: "all",
+          scenes: wholeDatasetScenes(statuses.size),
           images: preparePreview.images,
           workers: value,
         }),
@@ -739,7 +740,7 @@ export default function DatasetView({
           adapter: dataset.adapter || "opv2v",
           rawRoot: dataset.raw_root || dataset.path,
           split: dataset.split,
-          scenes: "all",
+          scenes: wholeDatasetScenes(statuses.size),
           images,
           workers: preparePreview.throttle,
         }),
@@ -762,7 +763,7 @@ export default function DatasetView({
         adapter: dataset.adapter || "opv2v",
         rawRoot: dataset.raw_root || dataset.path,
         split: dataset.split,
-        scenes: "all",
+        scenes: wholeDatasetScenes(statuses.size),
       });
       if (preview.cache_root) {
         setServerCacheRoot(preview.cache_root);
@@ -799,7 +800,7 @@ export default function DatasetView({
           adapter: dataset.adapter || "opv2v",
           rawRoot: dataset.raw_root || dataset.path,
           split: dataset.split,
-          scenes: "all",
+          scenes: wholeDatasetScenes(statuses.size),
           images: preparePreview.images,
           workers: preparePreview.throttle,
         },

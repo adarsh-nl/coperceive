@@ -676,13 +676,25 @@ export async function datasetStatus(
  * Generate preview script for preparing a dataset or single scene.
  * Invokes Tauri command `dataset_prepare({ profileId, adapter, rawRoot, split, scenes, workers })`.
  */
+/** What the whole-dataset button asks the cluster to prepare. */
+export type WholeDatasetScenes = "all" | "remaining";
+
+/**
+ * "remaining" once the cluster cache knows the split's scenes (a status was read): the app
+ * then resolves it, at preview time, to the scenes not prepared, failed or stale, minus the
+ * ones a running job still holds. "all" before the first prepare, when there is no cache.
+ */
+export function wholeDatasetScenes(knownStatuses: number): WholeDatasetScenes {
+  return knownStatuses > 0 ? "remaining" : "all";
+}
+
 export async function datasetPrepare(
   profileId: string,
   params: {
     adapter: string;
     rawRoot: string;
     split: string | null;
-    scenes?: string[] | "all";
+    scenes?: string[] | WholeDatasetScenes;
     workers?: number;
     /** Omitted: the user's setting for this server decides. */
     images?: CameraImagesMode;
@@ -952,7 +964,7 @@ export async function recoverFromRefusedPrepareSubmit(
     adapter: string;
     rawRoot: string;
     split: string | null;
-    scenes: "all" | string[];
+    scenes: WholeDatasetScenes | string[];
     workers?: number;
     images?: CameraImagesMode;
   },
