@@ -146,6 +146,7 @@
       "cite": "src-tauri/src/job_submit.rs render_run_script, job_scratch_dir; docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a",
       "cases": [
         "base",
+        "legacy_protocol",
         "no_media_root",
         "ckpt_root_custom",
         "mixed_partition",
@@ -192,6 +193,7 @@
       "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'",
       "cases": [
         "base",
+        "legacy_protocol",
         "no_media_root",
         "ckpt_root_custom",
         "mixed_partition",
@@ -240,6 +242,7 @@
       "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'",
       "cases": [
         "base",
+        "legacy_protocol",
         "no_media_root",
         "ckpt_root_custom",
         "mixed_partition",
@@ -304,6 +307,7 @@
       "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
       "cases": [
         "base",
+        "legacy_protocol",
         "no_media_root",
         "ckpt_root_custom",
         "mixed_partition",
@@ -334,6 +338,7 @@
       "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
       "cases": [
         "base",
+        "legacy_protocol",
         "no_media_root",
         "ckpt_root_custom",
         "mixed_partition",
@@ -364,6 +369,7 @@
       "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
       "cases": [
         "base",
+        "legacy_protocol",
         "no_media_root",
         "ckpt_root_custom",
         "mixed_partition",
@@ -404,6 +410,7 @@
       "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
       "cases": [
         "base",
+        "legacy_protocol",
         "no_media_root",
         "ckpt_root_custom",
         "mixed_partition",
@@ -444,6 +451,7 @@
       "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
       "cases": [
         "base",
+        "legacy_protocol",
         "no_media_root",
         "ckpt_root_custom",
         "mixed_partition",
@@ -484,6 +492,7 @@
       "cite": "coperceive/models/slurm.py work_copy_filter",
       "cases": [
         "base",
+        "legacy_protocol",
         "no_media_root",
         "ckpt_root_custom",
         "mixed_partition",
@@ -530,6 +539,7 @@
       "cite": "tests/test_plan_parity.py",
       "cases": [
         "base",
+        "legacy_protocol",
         "no_media_root",
         "ckpt_root_custom",
         "mixed_partition",

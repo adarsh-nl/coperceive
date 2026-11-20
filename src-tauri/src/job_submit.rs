@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::hpc::{EnvironmentKind, JobState, ServerProfile};
 use crate::run_plan::{
     environment_lines, model_run_output_checks, quoted_command_with, strip_output_dir,
-    validate_plan_id, verify_plan_inputs, RunPlan, WORK_IN_SCRATCH,
+    validate_plan_id, verify_plan_inputs, RunPlan, EVAL_PROTOCOLS, WORK_IN_SCRATCH,
 };
 use crate::slurm_adapter::{RemoteRunner, map_slurm_state};
 use crate::ssh::shell_quote;
@@ -191,6 +191,13 @@ pub fn render_run_script(
     // saved plan that records the model's option keys but no value is refused here, before
     // anything is submitted. A plan saved before model_options existed has none recorded;
     // its argv then lacks the option and `coperceive model run` refuses it by name.
+    if plan.pipeline.source == "builtin" && !EVAL_PROTOCOLS.contains(&plan.eval_protocol.trim())
+    {
+        return Err(
+            "This saved plan records an unknown AP protocol. Rebuild this plan before submitting."
+                .to_string(),
+        );
+    }
     if plan.pipeline.source == "builtin"
         && plan.model_options.iter().any(|option| option == "ckpt_root")
         && plan.ckpt_root.path.trim().is_empty()
@@ -1032,6 +1039,7 @@ mod tests {
             media_root: crate::run_plan::PlanArtifact::default(),
             ckpt_root: crate::run_plan::PlanArtifact::default(),
             model_options: Vec::new(),
+            eval_protocol: "default".to_string(),
             work_dir: String::new(),
             staging_seconds: None,
             checkpoint: crate::run_plan::PlanArtifact {
@@ -1303,6 +1311,19 @@ mod tests {
             .expect_err("missing ckpt_root");
         assert!(error.contains("ckpt_root"), "{error}");
         assert!(error.contains("Rebuild this plan"), "{error}");
+    }
+
+    #[test]
+    fn a_legacy_plan_renders_the_protocol_and_a_default_plan_does_not() {
+        let profile = profile("ps");
+        let mut plan = builtin_plan(&profile);
+        let plain = render_run_script(&profile, &plan, &SubmitOptions::default()).expect("default");
+        assert!(!plain.script.contains("--protocol"), "{}", plain.script);
+        plan.eval_protocol = "legacy".to_string();
+        plan.argv.push("--protocol".to_string());
+        plan.argv.push("legacy".to_string());
+        let legacy = render_run_script(&profile, &plan, &SubmitOptions::default()).expect("legacy");
+        assert!(legacy.script.contains("--protocol legacy"), "{}", legacy.script);
     }
 
     #[test]
