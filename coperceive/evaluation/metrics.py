@@ -13,13 +13,26 @@ Absent values are ``None`` so that ``metrics.json`` carries ``null`` and never
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import math
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from statistics import fmean, median
 
 from coperceive.evaluation.matching import FP, IGNORED, MISS, TP, MatchResult, Pairing
 
 Size = tuple[float, float, float]
+
+
+def mean_ap(values: Iterable[float]) -> float | None:
+    """The mean of APs (mAP), ``None`` for none.
+
+    The sum is ``math.fsum``, correctly rounded, so the mean depends neither on the
+    order of the classes nor on the Python version: the built-in ``sum`` adds floats
+    left to right before Python 3.12 and with a compensated algorithm from 3.12, and
+    the two can differ in the last bit.
+    """
+    kept = list(values)
+    return math.fsum(kept) / len(kept) if kept else None
 
 
 def average_precision(

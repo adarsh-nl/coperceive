@@ -20,7 +20,7 @@ from typing import cast
 
 from coperceive.evaluation.config import threshold_key
 from coperceive.evaluation.evaluate import KIND_GT, KIND_PREDICTION, EvaluationError
-from coperceive.evaluation.metrics import average_precision
+from coperceive.evaluation.metrics import average_precision, mean_ap
 from coperceive.evaluation.outcomes import (
     DEFAULT_DISTANCE_EDGES,
     DEFAULT_VISIBILITY_EDGES,
@@ -339,7 +339,7 @@ def _ap_cell(
         mean: float | None = None
         note = NO_OBJECTS
     else:
-        mean = _num(sum(values) / len(values)) if values else None
+        mean = _num(mean_ap(values))
         note = None
     return {"mean": mean, "n_objects": n_objects, "note": note, "by_class": by_class}
 

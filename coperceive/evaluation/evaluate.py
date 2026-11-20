@@ -48,6 +48,7 @@ from coperceive.evaluation.metrics import (
     average_precision,
     cooperative_counts,
     counts_of,
+    mean_ap,
     tp_errors,
 )
 from coperceive.evaluation.predictions import (
@@ -577,11 +578,11 @@ def _ap_table(
             per_category[category] = ap
             if ap is not None:
                 values.append(ap)
-        per_category["mean"] = sum(values) / len(values) if values else None
+        per_category["mean"] = mean_ap(values)
         model = [
             cast(float, per_category[c]) for c in meta.categories if per_category.get(c) is not None
         ]
-        per_category["mean_model"] = sum(model) / len(model) if model else None
+        per_category["mean_model"] = mean_ap(model)
         table[threshold_key(threshold)] = per_category
     return table
 

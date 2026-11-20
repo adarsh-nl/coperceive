@@ -34,7 +34,7 @@ from coperceive.evaluation.evaluate import (
     threshold_count,
 )
 from coperceive.evaluation.matching import IGNORED
-from coperceive.evaluation.metrics import average_precision
+from coperceive.evaluation.metrics import average_precision, mean_ap
 from coperceive.evaluation.predictions import check_run_id, read_run_meta
 from coperceive.viewdata import scene_directories
 
@@ -451,9 +451,9 @@ def aggregate(rows: Sequence[Row], thresholds: Sequence[float]) -> dict[str, obj
     for threshold in thresholds:
         per_category = pooled[threshold_key(threshold)]
         values = [v for v in per_category.values() if v is not None]
-        out[ap_column(threshold)] = sum(values) / len(values) if values else None
+        out[ap_column(threshold)] = mean_ap(values)
         model = [v for c, v in per_category.items() if c in model_categories and v is not None]
-        out[model_ap_column(threshold)] = sum(model) / len(model) if model else None
+        out[model_ap_column(threshold)] = mean_ap(model)
     return out
 
 

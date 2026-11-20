@@ -6,20 +6,12 @@ tag v0.1.1, not by this branch. Every count, precision, recall and AP must be eq
 One family of fields may differ, and the test says by how much: the BEV IoU of a
 true positive (``tp_errors.iou_bev``) is now computed about the midpoint of the pair
 (CHANGELOG, PR #165), which moves it in the last bits only.
-
-The class means of an ``ap`` table (``mean``, ``mean_model``) are float sums, and
-Python 3.12 changed how ``sum`` adds floats ("higher accuracy", built-in functions
-docs, ``sum``), so v0.1.1 itself gives a different last bit for a mean on 3.11 than
-on 3.12+. The golden was written on 3.13. Each mean is therefore checked, exactly,
-against the golden per-class APs summed here in the evaluator's order with this
-interpreter's ``sum``: what v0.1.1 gives on this interpreter.
 """
 
 from __future__ import annotations
 
 import io
 import json
-import re
 from contextlib import redirect_stdout
 from dataclasses import replace
 from pathlib import Path
@@ -46,50 +38,19 @@ ADDED = {
     "/iou": "bev",
 }
 SKIPPED = {"/created_utc", "/coperceive_version"}
-MEANS = ("mean", "mean_model")
-# An ``ap`` table: ``.../ap/<threshold key>``.
-AP_TABLE = re.compile(r"/ap/[^/]+$")
 
 
 def _golden() -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(GOLDEN.read_text(encoding="utf-8")))
 
 
-def _declared(run_dir: Path) -> tuple[str, ...]:
-    """The run's declared categories, in ``run.json`` order (the order of ``mean_model``)."""
-    run = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
-    return tuple(str(category) for category in run["categories"])
-
-
-def _mean(values: list[object]) -> float | None:
-    """A class mean as the evaluator takes it: the non-null values in the given order."""
-    kept = [cast(float, value) for value in values if value is not None]
-    return sum(kept) / len(kept) if kept else None
-
-
-def _assert_means(
-    old: dict[str, object], new: dict[str, object], path: str, declared: tuple[str, ...]
-) -> None:
-    """``mean`` (classes in sorted order) and ``mean_model`` (the run's declared order)."""
-    classes = sorted(key for key in old if key not in MEANS)
-    expected = {
-        "mean": _mean([old[c] for c in classes]),
-        "mean_model": _mean([old[c] for c in declared if c in old]),
-    }
-    for key in MEANS:
-        assert new[key] == expected[key], f"{path}/{key}: {expected[key]!r} -> {new[key]!r}"
-
-
-def _assert_same(old: object, new: object, declared: tuple[str, ...], path: str = "") -> None:
+def _assert_same(old: object, new: object, path: str = "") -> None:
     if isinstance(old, dict) and isinstance(new, dict):
         old_d = cast(dict[str, object], old)
         new_d = cast(dict[str, object], new)
-        ap_table = AP_TABLE.search(path) is not None
-        if ap_table:
-            _assert_means(old_d, new_d, path, declared)
         for key in sorted(set(old_d) | set(new_d)):
             child = f"{path}/{key}"
-            if child in SKIPPED or (ap_table and key in MEANS):
+            if child in SKIPPED:
                 continue
             if key not in old_d:
                 assert child in ADDED, f"{child}: not in v0.1.1"
@@ -97,14 +58,14 @@ def _assert_same(old: object, new: object, declared: tuple[str, ...], path: str 
             elif key not in new_d:
                 assert child in SKIPPED, f"{child}: missing"
             else:
-                _assert_same(old_d[key], new_d[key], declared, child)
+                _assert_same(old_d[key], new_d[key], child)
         return
     if isinstance(old, list) and isinstance(new, list):
         old_l = cast(list[object], old)
         new_l = cast(list[object], new)
         assert len(old_l) == len(new_l), path
         for index, (a, b) in enumerate(zip(old_l, new_l, strict=True)):
-            _assert_same(a, b, declared, f"{path}[{index}]")
+            _assert_same(a, b, f"{path}[{index}]")
         return
     if "/tp_errors/iou_bev/" in path and isinstance(old, float) and isinstance(new, float):
         assert abs(old - new) <= IOU_LAST_BITS, f"{path}: {old!r} -> {new!r}"
@@ -138,7 +99,7 @@ def test_legacy_protocol_on_the_demo_gives_v011_numbers(tmp_path: Path) -> None:
     metrics = json.loads(
         (demo.predictions / "demo" / "demo-junction" / "metrics.json").read_text(encoding="utf-8")
     )
-    _assert_same(golden["metrics"], metrics, _declared(demo.predictions / "demo"))
+    _assert_same(golden["metrics"], metrics)
     # The report prints the same numbers. Two labels are new in v0.1.2: the protocol line
     # that heads it, and "(BEV)" after every AP column name (spec A.12).
     expected = str(golden["report"]).replace("AP@0.5", "AP@0.5 (BEV)")
@@ -200,7 +161,7 @@ def test_legacy_protocol_on_a_fused_output_gives_v011_numbers(tmp_path: Path) ->
     metrics = json.loads(
         (root / "predictions" / "synthetic" / "coop" / "metrics.json").read_text(encoding="utf-8")
     )
-    _assert_same(golden["metrics"], metrics, _declared(root / "predictions" / "synthetic"))
+    _assert_same(golden["metrics"], metrics)
 
 
 def test_protocol_is_one_switch_in_the_config_and_on_the_command_line(tmp_path: Path) -> None:

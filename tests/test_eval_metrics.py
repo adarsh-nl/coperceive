@@ -4,6 +4,8 @@ AP values, counts and their ratios, true-positive errors and the cooperative cou
 
 from __future__ import annotations
 
+from itertools import permutations
+
 import pytest
 from coperceive.evaluation.matching import MatchResult, Pairing
 from coperceive.evaluation.metrics import (
@@ -12,6 +14,7 @@ from coperceive.evaluation.metrics import (
     average_precision,
     cooperative_counts,
     counts_of,
+    mean_ap,
     tp_errors,
 )
 
@@ -218,3 +221,31 @@ def test_cooperative_counts_skip_boxes_without_both_statuses() -> None:
         "nobody": 0,
         "recovery_rate": None,
     }
+
+
+# --- mean of APs: independent of class order and of the Python version ---
+
+
+def _left_to_right(values: tuple[float, ...]) -> float:
+    total = 0.0
+    for value in values:
+        total += value
+    return total
+
+
+def test_mean_ap_does_not_depend_on_the_order_of_the_classes() -> None:
+    # The demo's AP@0.7 per class (tests/fixtures/eval/v011_golden.json, outputs[1]).
+    # Added left to right, as Python 3.11's sum does, two orders of these three give
+    # means that differ in the last bit; the mean must be one value for every order.
+    aps = (0.7257914132759593, 0.10448979591836731, 0.015836239541367078)
+    naive = {_left_to_right(order) / 3 for order in permutations(aps)}
+    assert len(naive) > 1
+    assert {mean_ap(order) for order in permutations(aps)} == {0.2820391495785646}
+
+
+def test_mean_ap_is_the_correctly_rounded_sum_over_the_count() -> None:
+    # Ten APs of 0.1 add to 0.9999999999999999 left to right; the correctly rounded
+    # sum is 1.0, so the mean is 0.1 on every Python version.
+    assert _left_to_right((0.1,) * 10) != 1.0
+    assert mean_ap([0.1] * 10) == 0.1
+    assert mean_ap([]) is None
