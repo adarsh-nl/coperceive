@@ -6,5 +6,6 @@ Internal-facing notes that stay on the public site because they explain how to e
 - [Add a dataset](../datasets/add-a-dataset.md)
 - [Contributing](contributing.md)
 - [Design decisions](decisions.md)
+- [OpenCOOD's AP, read by room A](opencood-ap-behaviour.md) — how OpenCOOD ranks, matches and integrates, in prose (ADR 0016 two-room)
 - [Security review](../security/review-2026-11.md)
 - [Updates](../desktop/updates.md)
