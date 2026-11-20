@@ -1,7 +1,8 @@
 # Convert once: HPC datasets
 
-Proposed on 2026-11-20 for v0.1.3, for PM review and Adarsh's approval. No product code
-until it is approved. Anything the code does not settle is marked **unverified**.
+Proposed on 2026-11-20 for v0.1.3. The PM reviewed it and Adarsh decided the open points
+on 2026-11-20 (marked **DECIDED**). The P0 fixes ship in v0.1.2; the UI waits for v0.1.3.
+Anything the code does not settle is marked **unverified**.
 
 ## Today, and corrections to the brief
 
@@ -34,12 +35,13 @@ until it is approved. Anything the code does not settle is marked **unverified**
 4. **Two cache-path computations (latent):** Python hashes `realpath(raw_root)`, while
    Rust's `cache_slug` hashes the string as passed. They agree for detected datasets.
 
-## P0 fixes, before the UI
+## P0 fixes, before the UI (v0.1.2)
 
 - **Raw check:**
   - A truncated digest never marks a scene stale. Status says "raw check incomplete".
   - The check runs once per open, in the background, and not while a job is running.
-  - **DECISION (Adarsh):** this, or a per-scene fingerprint recorded at prepare time.
+  - **DECIDED (Adarsh, 2026-11-20):** a truncated fingerprint never marks a scene stale.
+    A per-scene fingerprint recorded at prepare time is listed under *Later*.
 - **One cache path:** Rust uses the index's `cache.relative_path`.
 - **Exit code:** `dataset prepare` exits 2 only for its own failed scenes. Today it does so
   for any failed scene in the cache (`cli.py` › `_dataset_prepare`).
@@ -49,7 +51,8 @@ until it is approved. Anything the code does not settle is marked **unverified**
   - The conversion job writes `index.json` into the cache.
   - A converted split opens from that file plus `dataset status`.
   - It re-indexes only when the raw check reports a change.
-  - **DECISION (Adarsh):** this, or keep the background re-index on every open.
+  - **DECIDED (Adarsh, 2026-11-20):** open from the saved `index.json` plus
+    `dataset status`, without re-indexing.
 
 ## 1. First-open flow
 
@@ -68,11 +71,11 @@ until it is approved. Anything the code does not settle is marked **unverified**
 
 - **During the run:** once the first scenes finish, the rest is projected from this run's
   own timings.
-- **DECISION (Adarsh):** does a rate from another split of the same adapter count, if it
-  is labelled with its source?
-- **DECISION (Adarsh):** the wall-time constants and the 150 MB-per-scene header fallback
-  (`formatStorageEstimate`) break "measured or unavailable". I recommend showing
-  "unavailable".
+- **DECIDED (Adarsh, 2026-11-20):** a rate from another split of the same adapter may be
+  used, labelled with its source.
+- **DECIDED (Adarsh, 2026-11-20):** the wall-time constants (`estimate_seconds`) and the
+  150 MB-per-scene header fallback (`formatStorageEstimate`) go. Each figure shows
+  "unavailable" until measured.
 
 ## 2. Job preview and confirmation
 
@@ -115,16 +118,14 @@ until it is approved. Anything the code does not settle is marked **unverified**
     - symlinks, `..` and paths inside the raw root;
     - a split with a live prepare job.
   - It first renames the split to `.removing-<split>-<unix>`.
-  - **DECISION (Adarsh):**
-    - delete in a confirmed one-CPU job (recommended: deletion can outlast the login-node
-      minute); or
-    - delete bounded on the login node and resume later.
+  - **DECIDED (Adarsh, 2026-11-20):** deletion runs in a confirmed one-CPU job, because
+    it can outlast the login-node minute.
 - **Never automatic:** nothing is deleted without confirmation.
 
 ## 6. Per-scene prepare
 
-- **Recommendation:** keep it as the one-scene fallback ("Prepare & open"), behind the card.
-- **DECISION (Adarsh):** keep it or remove it.
+- **DECIDED (Adarsh, 2026-11-20):** per-scene prepare stays as the one-scene fallback
+  ("Prepare & open"), behind the card.
 
 ## 7. Shared caches (described only, not built)
 
@@ -135,7 +136,13 @@ until it is approved. Anything the code does not settle is marked **unverified**
   - a read-only `shared_cache_roots` profile list;
   - trust in other users' scene files (security review, MISSED-1).
 
-## 8. Tests and acceptance
+## 8. Later
+
+- **Per-scene raw fingerprint:** record each scene's raw fingerprint at prepare time, so a
+  raw change marks only the scenes it touches stale, and a truncated split-wide walk no
+  longer matters.
+
+## 9. Tests and acceptance
 
 - **CI, unit tests:**
   - Python: remaining selection, truncated digest, exit code, `bytes_written`, remove guards.
