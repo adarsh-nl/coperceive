@@ -248,6 +248,23 @@ export function pipelineNeedsSplit(entry: PipelineEntry | null): boolean {
   return entry.spec.arguments.some((argument) => argument.role === "test_data");
 }
 
+/**
+ * Why a built-in model's plan inputs cannot be checked, or null. The model key and the raw
+ * root are required; the media root is optional, exactly as the CLI's repeatable
+ * `--media-root` is (the job script then leaves the flag out).
+ */
+export function builtinPlanInputProblem(input: {
+  model: string;
+  rawRoot: string;
+  mediaRoot: string;
+}): string | null {
+  if (!input.model.trim() || !input.rawRoot.trim()) {
+    return "Choose the model key and raw root for this built-in model.";
+  }
+  // input.mediaRoot is deliberately not checked: it is optional.
+  return null;
+}
+
 /** A file with its sha256, or a non-empty folder with its listing fingerprint (as Rust's
  * `PlanArtifact::is_fingerprinted`). */
 export function artifactIsFingerprinted(artifact: PlanArtifact): boolean {

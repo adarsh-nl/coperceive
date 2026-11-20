@@ -235,12 +235,10 @@
       "coperceive_root": "/opt/co perceive",
       "samples": 1490,
       "code_root": "/opt/co perceive"
-    }
-  ],
-  "refusals": [
+    },
     {
       "name": "no_media_root",
-      "about": "The base case with no media root, as `model run` allows (--media-root is optional).",
+      "about": "The base case with no media root: the CLI's --media-root is optional and the CLI is the reference, so the app accepts the plan too. Both job scripts must leave the flag out entirely, never write an empty one, and the app's plan must pass the same model/raw-root words.",
       "root": "/data/griffin",
       "model": "vehicle-side",
       "profile": {
@@ -266,11 +264,10 @@
       "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
       "coperceive_root": "/opt/coperceive",
       "samples": 1490,
-      "media_root": false,
-      "refused": "build_run_plan: Choose the media root on the cluster before checking the plan.",
-      "why": "The app's built-in model form requires a media root (run_plan.rs build_run_plan, since 9b4d9a0); `model run` treats --media-root as optional, and Griffin finds its camera images through it. ADR 0021 covers the job script for inputs both sides accept and does not decide whether the app should accept an empty media root: an open question for the PM (ADR 0018, \"Not decided here\"). Pinned so a change either way is seen.",
-      "cite": "src-tauri/src/run_plan.rs build_run_plan; docs/release/v0.1.1-eval-pipeline-test.md step 2.5; docs/adr/0018-plan-parity.md"
-    },
+      "media_root": false
+    }
+  ],
+  "refusals": [
     {
       "name": "results_root_with_space",
       "about": "The base case with a results root that holds a space (/home/te st/results).",

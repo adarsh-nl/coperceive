@@ -172,13 +172,18 @@ pub fn render_run_script(
     if !plan.nothing_submitted {
         return Err("This plan records a submission; it cannot be submitted again.".to_string());
     }
+    // A genuinely old plan is one saved before model/raw_root/media_root/work_dir were
+    // introduced (9b4d9a0): serde defaults leave all of them empty. work_dir is the marker
+    // for that schema version: every built-in plan saved since then records the job's work
+    // directory, so an empty one means the plan predates those fields. The media root is
+    // not the marker: it is optional now, and an empty one is a valid new plan.
     if plan.pipeline.source == "builtin"
         && (plan.model.trim().is_empty()
             || plan.raw_root.path.trim().is_empty()
-            || plan.media_root.path.trim().is_empty())
+            || plan.work_dir.trim().is_empty())
     {
         return Err(
-            "This saved plan predates the model/raw/media fields. Rebuild this plan before submitting."
+            "This saved plan predates the model/raw/work fields. Rebuild this plan before submitting."
                 .to_string(),
         );
     }
@@ -1226,15 +1231,44 @@ mod tests {
 
     #[test]
     fn an_old_builtin_plan_asks_for_a_rebuild_instead_of_submitting() {
+        // A plan saved before 9b4d9a0 has none of model/raw_root/media_root/work_dir; the
+        // work_dir marker alone must still refuse it, with or without a media root.
         let profile = profile("ps");
         let mut plan = plan(&profile);
         plan.pipeline.source = "builtin".to_string();
         plan.model = String::new();
         plan.raw_root = crate::run_plan::PlanArtifact::default();
         plan.media_root = crate::run_plan::PlanArtifact::default();
+        plan.work_dir = String::new();
         let error = render_run_script(&profile, &plan, &SubmitOptions::default())
             .expect_err("old plan");
         assert!(error.contains("Rebuild this plan"), "{error}");
+
+        // model and raw root are present, but the plan predates work_dir: still old.
+        let mut no_work = builtin_plan(&profile);
+        no_work.work_dir = String::new();
+        let error = render_run_script(&profile, &no_work, &SubmitOptions::default())
+            .expect_err("plan without work_dir");
+        assert!(error.contains("Rebuild this plan"), "{error}");
+    }
+
+    #[test]
+    fn a_new_builtin_plan_without_a_media_root_is_accepted_and_omits_the_flag() {
+        // The CLI's --media-root is optional; the app now accepts an empty one and the job
+        // script must contain no --media-root word at all (not an empty one).
+        let profile = profile("ps");
+        let mut plan = builtin_plan(&profile);
+        plan.media_root = crate::run_plan::PlanArtifact::default();
+        let at = plan
+            .argv
+            .iter()
+            .position(|word| word == "--media-root")
+            .expect("fixture passes --media-root");
+        plan.argv.drain(at..at + 2);
+        let preview =
+            render_run_script(&profile, &plan, &SubmitOptions::default()).expect("render");
+        assert!(!preview.script.contains("--media-root"), "{}", preview.script);
+        assert!(preview.script.contains("--raw-root /data/scenes/raw"), "{}", preview.script);
     }
 
     #[test]
