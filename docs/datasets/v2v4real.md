@@ -8,7 +8,7 @@ V2V4Real is a real-world vehicle-to-vehicle recording: the catalog calls the age
 
 **Citation.** Use the canonical source and single BibTeX block in [Citation](#citation) below.
 
-**Download.** [UCLA Box](https://ucla.app.box.com/v/UCLA-MobilityLab-V2V4REAL), linked from the [authors dataset page](https://mobility-lab.seas.ucla.edu/v2v4real/).
+**Download.** [UCLA Box](https://ucla.app.box.com/v/UCLA-MobilityLab-V2V4REAL), linked from the [authors' dataset page](https://mobility-lab.seas.ucla.edu/v2v4real/).
 
 ## Overview
 
