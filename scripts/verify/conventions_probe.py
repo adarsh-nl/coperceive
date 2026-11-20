@@ -56,7 +56,7 @@ from coperceive.adapters.readers.numpy_yaml import load_dataset_yaml  # noqa: E4
 Array = npt.NDArray[np.float64]
 Mask = npt.NDArray[np.bool_]
 
-PROBE_VERSION = "1"
+PROBE_VERSION = "2"
 # A sweep is cut to this many points (fixed seed) so one frame takes seconds.
 MAX_POINTS = 100_000
 SEED = 0
@@ -357,15 +357,15 @@ def rot_z(angle: float) -> Array:
     return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
 
 
-# OPV-6: ``source`` is OpenCOOD's x_to_world / CARLA's GetMatrix, Rz(yaw) Ry(-pitch)
-# Rx(-roll); ``adapter`` is the manifest builder's Rz(yaw) Ry(pitch) Rx(roll) on the raw
-# numbers. The probe prints ``adapter`` and ``flipped`` (= ``source``).
-EULER_READINGS = ("adapter", "flipped")
+# OPV-6: ``flipped`` is OpenCOOD's x_to_world / CARLA's GetMatrix, Rz(yaw) Ry(-pitch)
+# Rx(-roll); ``as_written`` is Rz(yaw) Ry(pitch) Rx(roll) on the raw numbers. Which of the
+# two the adapter implements is read from its manifest (``adapter_readings``).
+EULER_READINGS = ("as_written", "flipped")
 
 
 def euler_rotation(roll_deg: float, pitch_deg: float, yaw_deg: float, reading: str) -> Array:
     roll, pitch, yaw = math.radians(roll_deg), math.radians(pitch_deg), math.radians(yaw_deg)
-    if reading == "adapter":
+    if reading == "as_written":
         return rot_z(yaw) @ rot_y(pitch) @ rot_x(roll)
     return rot_z(yaw) @ rot_y(-pitch) @ rot_x(-roll)
 
@@ -390,6 +390,82 @@ def invert(matrix: Array) -> Array:
 
 def apply(matrix: Array, points: Array) -> Array:
     return points @ matrix[:3, :3].T + matrix[:3, 3]
+
+
+# --- the adapter's own readings --------------------------------------------------------------
+
+# Angles (degrees, about x, y, z) and a transform with no symmetry, to tell readings apart.
+_PROBE_ANGLES = (11.0, 23.0, 37.0)
+
+
+def _se3_matrix(transform: Any) -> Array:
+    """A ``coperceive.se3.SE3`` as a 4 x 4, from the images of the origin and the axes."""
+    origin = np.array(transform.apply((0.0, 0.0, 0.0)), dtype=np.float64)
+    columns = [np.array(transform.apply(axis), dtype=np.float64) - origin for axis in np.eye(3)]
+    return homogeneous(np.stack(columns, axis=1), origin)
+
+
+def adapter_readings(manifest: Any) -> dict[str, str | None]:
+    """The reading of each row that a parsed adapter manifest implements.
+
+    Each value goes through the builder's own code (``euler_spec_to_se3``, ``oriented``),
+    so a reading here is what ``coperceive prepare`` does with the same numbers, not a copy
+    of it. ``None``: the manifest matches none of the probe's readings (or, for the Euler
+    signs, the pose and the boxes disagree).
+    """
+    from coperceive.adapters.build import euler_spec_to_se3, oriented
+    from coperceive.se3 import SE3
+
+    streams = manifest.streams
+    found: set[str | None] = set()
+    rotations = [streams.poses.rotation]
+    if streams.boxes is not None:
+        rotations.append(streams.boxes.rotation)
+    for rotation in rotations:
+        if rotation.euler is None:
+            found.add(None)
+            continue
+        built = _se3_matrix(euler_spec_to_se3(rotation.euler, _PROBE_ANGLES, degrees=True))[:3, :3]
+        roll, pitch, yaw = _PROBE_ANGLES
+        same = [
+            r
+            for r in EULER_READINGS
+            if np.allclose(built, euler_rotation(roll, pitch, yaw, r), atol=1e-9)
+        ]
+        found.add(same[0] if len(same) == 1 else None)
+    out: dict[str, str | None] = {"euler": found.pop() if len(found) == 1 else None}
+
+    sample = SE3.from_rpy_deg(5.0, 10.0, 20.0).translation(1.0, 2.0, 3.0)
+    written = _se3_matrix(sample)
+    body_from_sensor = _se3_matrix(oriented(sample, streams.sensors.extrinsic.direction))
+    if np.allclose(body_from_sensor, written, atol=1e-9):
+        out["camera_extrinsic"] = "camera_to_lidar"
+    elif np.allclose(body_from_sensor, invert(written), atol=1e-9):
+        out["camera_extrinsic"] = "lidar_to_camera"
+    else:
+        out["camera_extrinsic"] = None
+
+    # The pose stream of every OpenCOOD-layout manifest is lidar_pose, so the body frame
+    # is the LiDAR frame.
+    frame = streams.boxes.frame if streams.boxes is not None else None
+    out["box_frame"] = {"world": "world", "body": "lidar", "sensor:lidar": "lidar"}.get(str(frame))
+    return out
+
+
+def builtin_readings(dataset: str) -> dict[str, str | None]:
+    """``adapter_readings`` of the built-in manifest of ``dataset``."""
+    from coperceive.adapters.build import ManifestAdapter
+    from coperceive.adapters.registry import resolve_adapter
+
+    adapter = resolve_adapter(dataset)
+    if not isinstance(adapter, ManifestAdapter):
+        raise ProbeError(f"the {dataset} adapter is not manifest-driven")
+    return adapter_readings(adapter.spec)
+
+
+def _adapter_line(dataset: str, readings: Mapping[str, str | None]) -> str:
+    shown = ", ".join(f"{k} {v or 'none of these'}" for k, v in readings.items())
+    return f"adapter: the built-in {dataset} manifest through the builder reads {shown}"
 
 
 @dataclass(frozen=True)
@@ -507,8 +583,12 @@ class Score:
     support: int
 
 
-def verdict(row: str, question: str, scores: Sequence[Score]) -> str:
-    """``verdict ROW QUESTION: BEST margin M`` or ``... undecided (reason)``."""
+def verdict(row: str, question: str, scores: Sequence[Score], adapter: str | None = None) -> str:
+    """``verdict ROW QUESTION: BEST margin M`` or ``... undecided (reason)``.
+
+    BEST is printed as ``adapter`` when it is the reading the adapter implements
+    (``adapter``), and every line then says which reading that is.
+    """
     ranked = sorted(
         (s for s in scores if not math.isnan(s.value)), key=lambda s: s.value, reverse=True
     )
@@ -519,9 +599,14 @@ def verdict(row: str, question: str, scores: Sequence[Score]) -> str:
     margin = best.value - second.value
     if best.support < MIN_POINTS:
         return f"{head} undecided (only {best.support} points) margin {margin:.3f}"
+    reads = f"; adapter reads {adapter}" if adapter is not None else ""
     if margin < MIN_MARGIN:
-        return f"{head} undecided (best {best.reading} by {margin:.3f} only) margin {margin:.3f}"
-    return f"{head} {best.reading} margin {margin:.3f} (next {second.reading} {second.value:.3f})"
+        return (
+            f"{head} undecided (best {best.reading} by {margin:.3f} only) margin {margin:.3f}"
+            + (f" ({reads[2:]})" if reads else "")
+        )
+    name = "adapter" if adapter is not None and best.reading == adapter else best.reading
+    return f"{head} {name} margin {margin:.3f} (next {second.reading} {second.value:.3f}{reads})"
 
 
 def _fmt(value: float) -> str:
@@ -552,11 +637,13 @@ def probe_opencood(dataset: str, scenario: Path, agent: str, frame: str) -> list
     points, total = _sweep(folder / f"{frame}.pcd", "the agent point cloud")
     lidar_six = _numbers(document.get("lidar_pose"), (6,), "lidar_pose")
     vehicles = _mapping(document.get("vehicles", {}) or {}, "vehicles")
+    ours = builtin_readings(dataset)
     lines = [
         f"conventions_probe {PROBE_VERSION}",
         f"dataset: {dataset}",
         f"frame: {frame}",
         f"points: {total} read, {points.shape[0]} used; boxes: {len(vehicles)}",
+        _adapter_line(dataset, {k: ours[k] for k in ("euler", "camera_extrinsic")}),
         "",
     ]
 
@@ -583,10 +670,13 @@ def probe_opencood(dataset: str, scenario: Path, agent: str, frame: str) -> list
         lines.append(
             f"  every roll and pitch is below {TILT_EVIDENCE_DEG} deg: this frame cannot tell"
         )
-        lines.append("verdict OPV-6 euler: undecided (all roll and pitch near zero)")
+        lines.append(
+            "verdict OPV-6 euler: undecided (all roll and pitch near zero) "
+            f"(adapter reads {ours['euler']})"
+        )
         chosen = "flipped"
     else:
-        lines.append(verdict("OPV-6", "euler", euler_scores))
+        lines.append(verdict("OPV-6", "euler", euler_scores, ours["euler"]))
         chosen = max(euler_scores, key=lambda s: -1.0 if math.isnan(s.value) else s.value).reading
     lines.append("")
 
@@ -610,7 +700,10 @@ def probe_opencood(dataset: str, scenario: Path, agent: str, frame: str) -> list
     )
     if not cameras:
         lines.append("  the YAML has no camera blocks")
-        lines.append("verdict OPV-7 camera_extrinsic: undecided (no camera)")
+        lines.append(
+            "verdict OPV-7 camera_extrinsic: undecided (no camera) "
+            f"(adapter reads {ours['camera_extrinsic']})"
+        )
         return lines
     combos = [
         (direction, axes)
@@ -688,7 +781,9 @@ def probe_opencood(dataset: str, scenario: Path, agent: str, frame: str) -> list
         "  (axes: the camera side of the extrinsic, CARLA sensor axes or optical axes; "
         "each direction is scored with its better axes)"
     )
-    lines.append(verdict("OPV-7", "camera_extrinsic", list(scores.values())))
+    lines.append(
+        verdict("OPV-7", "camera_extrinsic", list(scores.values()), ours["camera_extrinsic"])
+    )
     return lines
 
 
@@ -748,6 +843,18 @@ def _v2v4real_boxes(vehicles: Mapping[str, Any]) -> list[tuple[Box, float]]:
     return out
 
 
+def _v2v4real_offsets(vehicles: Mapping[str, Any]) -> tuple[float, float]:
+    """The largest ``center`` offset (m) and the largest box roll or pitch (degrees)."""
+    offset = tilt = 0.0
+    for key, entry in vehicles.items():
+        item = _mapping(entry, f"vehicle {key}")
+        roll, _yaw, pitch = _numbers(item.get("angle"), (3,), "a vehicle angle")
+        center = _numbers(item.get("center", [0.0, 0.0, 0.0]), (3,), "a vehicle center")
+        offset = max(offset, float(np.linalg.norm(center)))
+        tilt = max(tilt, abs(float(roll)), abs(float(pitch)))
+    return offset, tilt
+
+
 def _mirror_box(box: Box) -> Box:
     return Box(MIRROR_Y @ box.centre, MIRROR_Y @ box.rotation @ MIRROR_Y, box.half)
 
@@ -761,12 +868,19 @@ def probe_v2v4real(scenario: Path, agent: str, frame: str) -> list[str]:
     lidar_world, pose_form = _v2v4real_pose(document["lidar_pose"])
     vehicles = _mapping(document.get("vehicles", {}) or {}, "vehicles")
     written = _v2v4real_boxes(vehicles)
+    ours = builtin_readings("v2v4real")
+    offset, tilt = _v2v4real_offsets(vehicles)
     lines = [
         f"conventions_probe {PROBE_VERSION}",
         "dataset: v2v4real",
         f"frame: {frame}",
         f"points: {total} read, {points.shape[0]} used; boxes: {len(written)}; "
         f"lidar_pose: {pose_form}",
+        _adapter_line("v2v4real", {k: ours[k] for k in ("box_frame", "euler")}),
+        # The probe adds ``center`` unrotated and uses the flipped Euler signs, as the
+        # loader does; the adapter rotates ``center`` and keeps the signs (V4R-6). Both are
+        # no-ops when every center is zero and no box is tilted.
+        f"boxes: largest |center| {offset:.3f} m, largest |roll| or |pitch| {tilt:.2f} deg",
         "",
         "V4R-7 box frame x V4R-1 handedness: box containment of the LiDAR points",
     ]
@@ -801,7 +915,7 @@ def probe_v2v4real(scenario: Path, agent: str, frame: str) -> list[str]:
         )
         for f in ("lidar", "world")
     ]
-    lines.append(verdict("V4R-7", "box_frame", frame_scores))
+    lines.append(verdict("V4R-7", "box_frame", frame_scores, ours["box_frame"]))
     best_frame = max(frame_scores, key=lambda s: -1.0 if math.isnan(s.value) else s.value).reading
     right, left = result[f"{best_frame}/right"], result[f"{best_frame}/left"]
     lines.append(

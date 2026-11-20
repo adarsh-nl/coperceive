@@ -76,11 +76,9 @@ class Case:
 # Readings the adapters implement where they differ from the reading the sources support
 # best. Each such case passes; its source-reading twin carries the difference as a known
 # failure. See docs/geometry/conventions.md for every row named below.
-_OPENCOOD_ADAPTER = {"euler": "rzryrx", "camera_extrinsic": "camera_to_lidar"}
 _V2V4REAL_ADAPTER = {
     "pose_encoding": "six",
     "handedness": "left",
-    "box_frame": "world",
     "euler": "rzryrx",
 }
 # Layout, not geometry: each value is a valid release the adapter can read.
@@ -107,9 +105,7 @@ CASES: dict[str, Case] = {
     # (ADR 0012) to poses, extrinsics, points and boxes".
     "generic-left": Case(export_generic.export, {"tilted_boxes": "omit", "handedness": "left"}),
     "opv2v": Case(export_opv2v.export, lidar="lidar"),
-    "opv2v-adapter-readings": Case(export_opv2v.export, _OPENCOOD_ADAPTER, lidar="lidar"),
     "v2xset": Case(export_v2xset.export, lidar="lidar"),
-    "v2xset-adapter-readings": Case(export_v2xset.export, _OPENCOOD_ADAPTER, lidar="lidar"),
     "v2v4real": Case(export_v2v4real.export, lidar="lidar"),
     "v2v4real-flat-pose": Case(export_v2v4real.export, {"pose_encoding": "six"}, lidar="lidar"),
     # The adapter names every object "vehicle" (conventions V4R-10, a known failure of
@@ -134,17 +130,6 @@ CASES: dict[str, Case] = {
 }
 
 _ROUTED = "Routed to the adapter owner in PR #166."
-_OPENCOOD_EULER = (
-    "The adapter composes [roll, yaw, pitch] as Rz(yaw) Ry(pitch) Rx(roll) before the "
-    "y-reflection; CARLA's GetMatrix and OpenCOOD's x_to_world (code, cite-checked) give "
-    "Rz(yaw) Ry(-pitch) Rx(-roll), so roll and pitch come out mirrored: a tilted agent or "
-    "box is off by twice its tilt (conventions OPV-6, OPV-13). Unverified in prose. "
-)
-_OPENCOOD_EXTRINSIC = (
-    "Camera extrinsics are read camera-to-LiDAR, as the OpenCOOD docs label them; the "
-    "docs' own example numbers and the OpenCDA dumper make them LiDAR-to-camera "
-    "(conventions OPV-7), so every camera sits metres off. "
-)
 _V2V4REAL_POSE = (
     "lidar_pose written as the 4 x 4 matrix of the one published file excerpt (issue #5, "
     "partly supported) is refused; the adapter reads a flat [x, y, z, roll, yaw, pitch] "
@@ -153,8 +138,7 @@ _V2V4REAL_POSE = (
 _V2V4REAL_FLAT = (
     "With the flat pose: the adapter mirrors every pose, box and point in y, assuming "
     "CARLA's left-handed frame, where no source gives V2V4Real's handedness (V4R-1, "
-    "unverified); it reads boxes as world coordinates, where the paper and the loader put "
-    "them in each vehicle's own LiDAR frame (V4R-7); it has the roll/pitch sign of "
+    "unverified); it has the roll/pitch sign of "
     "OPV-6 (V4R-6); and it names every object 'vehicle', ignoring obj_type (V4R-10). "
 )
 
@@ -170,17 +154,6 @@ KNOWN_FAILURES: dict[tuple[str, str], str] = {
         "Same cause as generic-left points: the centroid of an object's returns is "
         "built from unreflected points, so two agents place it metres apart. " + _ROUTED
     ),
-    **{
-        (case, check): reason + _ROUTED
-        for case in ("opv2v", "v2xset")
-        for check, reason in (
-            ("sensor-pose", _OPENCOOD_EULER + _OPENCOOD_EXTRINSIC),
-            ("boxes", _OPENCOOD_EULER),
-            ("points", _OPENCOOD_EULER),
-            ("registration", _OPENCOOD_EULER),
-            ("cameras", _OPENCOOD_EULER + _OPENCOOD_EXTRINSIC),
-        )
-    },
     **{("v2v4real", check): _V2V4REAL_POSE + _ROUTED for check in CHECKS},
     **{
         ("v2v4real-flat-pose", check): _V2V4REAL_FLAT + _ROUTED
