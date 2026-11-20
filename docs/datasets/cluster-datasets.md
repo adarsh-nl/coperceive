@@ -578,8 +578,21 @@ return JSON and use the saved server profile and `coperceive_command`.
 | --- | --- | --- |
 | `dataset_prepare` | `{ "profileId": string, "adapter": "griffin"\|"opv2v"\|"v2xset", "rawRoot": string, "split": string \| null, "scenes"?: string[] \| "all", "workers"?: number, "images"?: "originals"\|"previews" }` | **submission preview**: `{ "plan_id": string, "job_name": string, "partition": string, "walltime": string, "cpus_per_task": 1, "array_tasks": number, "throttle": number, "gres": null, "estimated_cache_bytes": number, "images": "originals"\|"previews", "estimated_preview_bytes": number, "cache_root": string, "script": string, "preview_hash": string }` |
 | `dataset_prepare_submit` | `{ "profileId": string, "previewHash": string, "confirmed": boolean }` | `{ "job_id": string, "state": "pending"\|"running"\|"completed"\|"failed"\|"cancelled"\|"unknown", "queue_reason": string \| null, "plan_id": string }` |
-| `dataset_status` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null }` | `coperceive-cluster-scene-status-1` document |
-| `dataset_open` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null, "sceneId"?: string }` | `{ "origin": string, "token": string, "server_version": string, "data_root": string, "target_type": "remote" }` |
+| `dataset_status` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null, "cacheRelative": string }` | `coperceive-cluster-scene-status-1` document |
+| `dataset_open` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null, "cacheRelative": string, "sceneId"?: string }` | `{ "origin": string, "token": string, "server_version": string, "data_root": string, "target_type": "remote" }` |
+
+`cacheRelative` is the index's `cache.relative_path`. `dataset_status` and
+`dataset_open` read `<results_root>/<cacheRelative>`, the split the index named
+and the prepare job writes. The app never computes the path from `rawRoot`,
+because the hash is taken from the raw root's real path on the server. The path
+must be `coperceive-cache/<adapter>/<12 hex>/<split>` (`all` without a split),
+or the command is refused. The dataset view reads status only once it has an
+index, cached or fresh.
+
+The prepare job is named `coperceive-dataset-<hash>-<split>` after that path,
+so jobs for two datasets that each have a `test` split never share a name. Each
+array task runs `dataset prepare --scenes <one scene>`, which exits 2 when that
+scene failed, and not when another scene in the cache did.
 
 `images` omitted means the user's default for this server profile (Settings →
 Cluster datasets → "Camera images when preparing"; else the app-wide default;

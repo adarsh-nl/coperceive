@@ -278,6 +278,8 @@ def test_each_row_action_calls_its_backend_command(visual_browser: Browser, app_
             "() => window.__INVOKES__.find((c) => c.cmd === 'dataset_open').args"
         )
         assert opened["sceneId"] == "2024_03_05_09_00_00"
+        # The cache split the index named, never one the app computed from the raw root.
+        assert opened["cacheRelative"] == "coperceive-cache/v2xset/d/train"
 
         for scene_id, label in [
             ("2024_03_05_11_17_29", "Retry"),
