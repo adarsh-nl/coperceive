@@ -263,11 +263,17 @@ Written inside every cache split directory. Atomically replaced (temp + rename).
 | `preparing` | a prepare job is running (or was started) for it. |
 | `ready` | complete schema-1 scene is in the cache. |
 | `failed` | preparation failed; `reason` is the plain error. |
-| `stale` | raw fingerprint changed since `ready`; it must be re-prepared. |
+| `stale` | the raw fingerprint or the adapter manifest changed since `ready`; it must be re-prepared. |
 
 A scene is `ready` only when the cache directory contains both `manifest.json`
 and `COMPLETE.json`. A scene whose `raw_fingerprint` no longer matches the
-dataset's current fingerprint is `stale` even if it was ready. `job_id` is the
+dataset's current fingerprint is `stale` even if it was ready (`reason`:
+`raw dataset fingerprint changed`). So is a scene whose `COMPLETE.json` records
+another `manifest_sha256` than the adapter's current manifest (`reason`:
+`adapter manifest changed`): Coperceive's conversion rules for the dataset changed,
+as for scenes prepared with v0.1.1 before the v0.1.2 adapter fixes. A prepare
+builds a stale scene again; local `coperceive ingest` does the same instead of
+skipping it. `job_id` is the
 Slurm id that last prepared it; `null` otherwise.
 
 ## Per-scene status — `coperceive-cluster-scene-status-1`

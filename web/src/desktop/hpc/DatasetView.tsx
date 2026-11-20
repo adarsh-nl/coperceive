@@ -53,6 +53,7 @@ import {
   STATE_LABEL,
   groupScenes,
   recordingTime,
+  staleExplanation,
   type DatasetGrouping,
   type RecordingTime,
   type SceneRowState,
@@ -134,7 +135,7 @@ function stateExplanation(row: SceneRow, server: string): string {
     case "queued":
       return row.jobId ? `Waiting for prepare job ${row.jobId} to reach this scene.` : "Waiting for its prepare job to reach this scene.";
     case "stale":
-      return `The raw files changed since this scene was prepared (${row.reason ?? "fingerprint changed"}). Re-prepare it to view the data as it is now.`;
+      return staleExplanation(row.reason);
     case "failed":
       return row.reason ?? "The prepare step failed.";
     default:

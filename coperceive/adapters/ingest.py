@@ -2,8 +2,9 @@
 """The one ingest driver every adapter shares.
 
 Scenes run in parallel. A scene is skipped when ``COMPLETE.json`` matches its
-sample list. A partial directory is removed and rebuilt, unless it already has a
-matching marker, in which case it is renamed into place. One scene's failure
+sample list and records the digest of the adapter manifest in use; a scene prepared
+under another manifest is built again. A partial directory is removed and rebuilt,
+unless it already has a matching marker, in which case it is renamed into place. One scene's failure
 leaves the scenes that finished. ``COMPLETE.json`` is not part of schema 1.
 """
 
@@ -29,6 +30,8 @@ from coperceive.model import SCHEMA_VERSION, Scene
 from coperceive.store import write_scene
 
 COMPLETE = "COMPLETE.json"
+# The key of COMPLETE.json that records the digest of the adapter manifest used.
+MANIFEST_SHA256 = "manifest_sha256"
 
 
 class Adapter(Protocol):
@@ -193,13 +196,14 @@ def ingest_one(job: _Job) -> _Result:
         raise ScenePathError(f"unsafe scene path: {partial_root} is a symlink")
     partial = scene_path(partial_root, job.ref.scene_id)
     expected = _expected(job.ref)
-    if _is_complete(final, expected):
+    current = dict(job.provenance).get(MANIFEST_SHA256)
+    if _is_complete(final, expected) and not manifest_changed(final, current):
         return _Result(job.ref.scene_id, "skipped", len(job.ref.samples), _stored_variants(final))
     if final.exists():
         if final.is_symlink():
             raise ScenePathError(f"unsafe scene path: {final} is a symlink")
         shutil.rmtree(final)
-    if _is_complete(partial, expected):
+    if _is_complete(partial, expected) and not manifest_changed(partial, current):
         partial.rename(final)
         return _Result(job.ref.scene_id, "resumed", len(job.ref.samples), _stored_variants(final))
     if partial.exists():
@@ -250,6 +254,33 @@ def format_report(report: IngestReport) -> str:
     return "\n".join(lines)
 
 
+def recorded_manifest_sha256(directory: Path) -> str | None:
+    """The ``manifest_sha256`` a prepared scene's ``COMPLETE.json`` records, if any."""
+    try:
+        payload = json.loads((directory / COMPLETE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    value = cast(dict[str, object], payload).get(MANIFEST_SHA256)
+    return value if isinstance(value, str) else None
+
+
+def manifest_changed(directory: Path, current: str | None) -> bool:
+    """True when the scene was prepared under another adapter manifest than ``current``.
+
+    ``current`` is the digest of the adapter's manifest now (``manifest_sha256``). An
+    adapter without a manifest file (``None``) never makes a scene stale. Every release
+    since v0.1.0 records the digest, so a scene prepared by v0.1.1 compares its own. A
+    marker from before provenance records none and is kept, as it always was: there is
+    nothing to compare it with.
+    """
+    if current is None:
+        return False
+    recorded = recorded_manifest_sha256(directory)
+    return recorded is not None and recorded != current
+
+
 def manifest_sha256(adapter: Adapter) -> str | None:
     source = getattr(getattr(adapter, "spec", None), "source", None)
     if not isinstance(source, str):
@@ -271,7 +302,7 @@ def _provenance(adapter: Adapter) -> tuple[tuple[str, str], ...]:
     rows = [("adapter", adapter.name), ("coperceive_version", coperceive_version())]
     digest = manifest_sha256(adapter)
     if digest is not None:
-        rows.append(("manifest_sha256", digest))
+        rows.append((MANIFEST_SHA256, digest))
     return tuple(rows)
 
 

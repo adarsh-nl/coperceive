@@ -36,6 +36,21 @@ export const STATE_LABEL: Record<SceneRowState, string> = {
   not_prepared: "Not prepared",
 };
 
+/** The reason the cluster cache gives a scene that went stale because the adapter changed. */
+export const MANIFEST_CHANGED = "adapter manifest changed";
+
+/**
+ * Why a stale scene is stale, in the scene inspector. The cluster cache says either that
+ * the raw files changed or that the adapter's manifest, Coperceive's conversion rules for
+ * the dataset, changed since the scene was prepared (a scene prepared by an older version).
+ */
+export function staleExplanation(reason: string | null): string {
+  if (reason === MANIFEST_CHANGED) {
+    return "Coperceive now converts this dataset differently than when this scene was prepared (adapter manifest changed). Re-prepare it to view it with the current conversion.";
+  }
+  return `The raw files changed since this scene was prepared (${reason ?? "fingerprint changed"}). Re-prepare it to view the data as it is now.`;
+}
+
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
