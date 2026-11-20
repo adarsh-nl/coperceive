@@ -51,6 +51,21 @@ export function staleExplanation(reason: string | null): string {
   return `The raw files changed since this scene was prepared (${reason ?? "fingerprint changed"}). Re-prepare it to view the data as it is now.`;
 }
 
+/** The reason the cluster status gives when its walk of the raw files hit its bound. */
+export const RAW_CHECK_INCOMPLETE = "raw check incomplete";
+
+/**
+ * The note above the scene list when the cluster could not check every raw file (a large
+ * split hits the walk's time or entry bound). A partial check never marks a scene stale,
+ * so the note says a raw change may not show. Null when the check was complete or not run.
+ */
+export function rawCheckNotice(
+  rawCheck: { state: string; reason: string | null } | null | undefined,
+): string | null {
+  if (rawCheck?.state !== "incomplete") return null;
+  return "Raw check incomplete: the cluster could not check every raw file in time, so prepared scenes stay ready and a change to the raw files may not show here.";
+}
+
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 

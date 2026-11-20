@@ -289,6 +289,7 @@ plus the cache-level fields:
   "raw_root": "/datasets/.../opv2v",
   "split": "test",
   "updated_unix": 1793462000,
+  "raw_check": {"state": "complete", "reason": null},
   "scenes": [
     {
       "scene_id": "2021_09_09_20_09_24",
@@ -303,7 +304,21 @@ plus the cache-level fields:
 ```
 
 The same record is used inside `dataset.json.scenes`; `scene_id` is implied by
-the map key there. The UI polls this command; `state`/`reason` are the only
+the map key there.
+
+`raw_check` says whether status could check the raw split for changes:
+
+| state | meaning |
+| --- | --- |
+| `complete` | the walk of the raw split and the stored fingerprint are both complete, so they were compared. |
+| `incomplete` | one of the walks hit its entry or time bound (`reason`: `raw check incomplete`). Nothing was marked stale, and a raw change may not show. The app shows a note. |
+| `not_run` | the raw files were not checked. |
+
+A walk cut off by its bound covers a different part of the tree each run, so
+its digest can change with no raw change. Only two complete walks mark ready
+scenes stale (`raw dataset fingerprint changed`), in status and in a prepare. A
+prepare keeps a complete stored fingerprint rather than replace it with a
+truncated one. Clusters running an older Coperceive send no `raw_check`. The UI polls this command; `state`/`reason` are the only
 fields it needs to render progress and failures, and `job_id` links a preparing
 scene to its Slurm job.
 
