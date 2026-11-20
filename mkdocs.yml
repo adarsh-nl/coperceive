@@ -42,6 +42,7 @@ exclude_docs: |
   design/**/*.json
   log/
   media/
+  !media/viewer-griffin-town03.png
   release/
   superpowers/
 nav:
