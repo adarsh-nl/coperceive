@@ -4,7 +4,9 @@ import assert from "node:assert";
 import {
   groupScenes,
   isDatasetGrouping,
+  MANIFEST_CHANGED,
   recordingTime,
+  staleExplanation,
   type SceneRowState,
 } from "./grouping.ts";
 
@@ -97,4 +99,14 @@ test("recordingTime reads only YYYY_MM_DD_HH_MM_SS with real calendar values", (
 test("isDatasetGrouping accepts only the three settings", () => {
   for (const value of ["none", "state", "day"]) assert.ok(isDatasetGrouping(value), value);
   for (const value of ["date", "", null, undefined, 1]) assert.ok(!isDatasetGrouping(value), String(value));
+});
+
+test("a stale scene says which change made it stale", () => {
+  const manifest = staleExplanation(MANIFEST_CHANGED);
+  assert.match(manifest, /converts this dataset differently/);
+  assert.match(manifest, /Re-prepare/);
+  assert.doesNotMatch(manifest, /raw files changed/);
+  const raw = staleExplanation("raw dataset fingerprint changed");
+  assert.match(raw, /^The raw files changed since this scene was prepared \(raw dataset fingerprint changed\)/);
+  assert.match(staleExplanation(null), /\(fingerprint changed\)/);
 });

@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from coperceive.adapters.build import BuildError, ManifestAdapter
-from coperceive.adapters.ingest import ingest
+from coperceive.adapters.ingest import ingest, manifest_changed, manifest_sha256
 from coperceive.adapters.prefetch import collecting
 from coperceive.adapters.readers.numpy_yaml import yaml_loader_kind
 from coperceive.adapters.registry import RegistryError, resolve_adapter
@@ -277,6 +277,35 @@ def _write_dataset(cache_dir: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+# The reason a ready scene turns stale when its adapter's conversion rules changed.
+MANIFEST_CHANGED = "adapter manifest changed"
+RAW_CHANGED = "raw dataset fingerprint changed"
+
+
+def _adapter_digest(adapter_name: object) -> str | None:
+    """The current manifest digest of ``adapter_name``; ``None`` when it has none or is unknown."""
+    if not isinstance(adapter_name, str):
+        return None
+    try:
+        return manifest_sha256(resolve_adapter(adapter_name))
+    except (RegistryError, SpecError, OSError):
+        return None
+
+
+def _mark_manifest_stale(cache: Path, dataset: dict[str, Any]) -> None:
+    """Every ready scene prepared under another adapter manifest becomes stale."""
+    current = _adapter_digest(dataset.get("adapter"))
+    if current is None:
+        return
+    for scene_id, record in dataset.get("scenes", {}).items():
+        if record.get("state") != "ready":
+            continue
+        folder = scene_path(cache, safe_scene_id(scene_id))
+        if manifest_changed(folder, current):
+            record["state"] = "stale"
+            record["reason"] = MANIFEST_CHANGED
+
+
 def _scene_ready(cache_dir: Path, scene_id: str) -> bool:
     safe_scene_id(scene_id)
     folder = scene_path(cache_dir, scene_id)
@@ -449,7 +478,11 @@ def _claim_and_prepare_scene(
                 "scene_dir": scene_id,
             },
         )
-        if record.get("state") == "ready" and _scene_ready(cache, scene_id):
+        if (
+            record.get("state") == "ready"
+            and _scene_ready(cache, scene_id)
+            and not manifest_changed(scene_path(cache, scene_id), manifest_sha256(adapter))
+        ):
             if record.get("images") == images:
                 return scene_id, "ready", None, record.get("prepared_unix")
             # Ready in the other camera-image mode (or from before modes): only its
@@ -679,7 +712,8 @@ def prepare_cluster_dataset(
             for record in dataset.get("scenes", {}).values():
                 if record.get("state") == "ready":
                     record["state"] = "stale"
-                    record["reason"] = "raw dataset fingerprint changed"
+                    record["reason"] = RAW_CHANGED
+        _mark_manifest_stale(cache, dataset)
         for ref in refs:
             dataset.setdefault("scenes", {}).setdefault(
                 ref.scene_id,
@@ -753,7 +787,9 @@ def dataset_status_document(cache_dir: str | Path, *, refresh_stale: bool = True
                 for record in dataset.get("scenes", {}).values():
                     if record.get("state") == "ready":
                         record["state"] = "stale"
-                        record["reason"] = "raw dataset fingerprint changed"
+                        record["reason"] = RAW_CHANGED
+    if refresh_stale:
+        _mark_manifest_stale(cache, dataset)
     records = []
     for scene_id, record in sorted(dataset.get("scenes", {}).items()):
         item = _status_record(cache, record)
