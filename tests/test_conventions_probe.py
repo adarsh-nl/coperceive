@@ -110,6 +110,11 @@ def _verdict(lines: Sequence[str], row: str) -> tuple[str, float | None]:
     raise AssertionError(f"no verdict for {row} in:\n" + "\n".join(lines))
 
 
+def _named(dataset: str, question: str, reading: str) -> str:
+    """How the probe prints ``reading``: ``adapter`` when the built-in adapter implements it."""
+    return "adapter" if PROBE.builtin_readings(dataset)[question] == reading else reading
+
+
 def _assert_picks(lines: Sequence[str], row: str, expected: str) -> None:
     reading, margin = _verdict(lines, row)
     report = "\n".join(lines)
@@ -124,9 +129,9 @@ def _assert_picks(lines: Sequence[str], row: str, expected: str) -> None:
 def test_opv2v_camera_extrinsic(exported: Callable[..., Path], extrinsic: str) -> None:
     root = exported(export_opv2v.export, camera_extrinsic=extrinsic)
     lines = _run(["opv2v", str(root / OPENCOOD_SCENE), "650", FIRST_STEM])
-    _assert_picks(lines, "OPV-7", extrinsic)
+    _assert_picks(lines, "OPV-7", _named("opv2v", "camera_extrinsic", extrinsic))
     # The exporter's default Euler reading is CARLA's, which flips roll and pitch.
-    _assert_picks(lines, "OPV-6", "flipped")
+    _assert_picks(lines, "OPV-6", _named("opv2v", "euler", "flipped"))
 
 
 @pytest.mark.parametrize("extrinsic", export_v2xset.READINGS["camera_extrinsic"])
@@ -134,14 +139,14 @@ def test_opv2v_camera_extrinsic(exported: Callable[..., Path], extrinsic: str) -
 def test_v2xset_camera_extrinsic(exported: Callable[..., Path], extrinsic: str, agent: str) -> None:
     root = exported(export_v2xset.export, camera_extrinsic=extrinsic)
     lines = _run(["v2xset", str(root / OPENCOOD_SCENE), agent, FIRST_STEM])
-    _assert_picks(lines, "OPV-7", extrinsic)
+    _assert_picks(lines, "OPV-7", _named("v2xset", "camera_extrinsic", extrinsic))
 
 
-def test_opv2v_euler_as_the_adapter_reads_it(exported: Callable[..., Path]) -> None:
+def test_opv2v_euler_as_written(exported: Callable[..., Path]) -> None:
     root = exported(export_opv2v.export, euler="rzryrx")
     lines = _run(["opv2v", str(root / OPENCOOD_SCENE), "651", FIRST_STEM])
-    _assert_picks(lines, "OPV-6", "adapter")
-    _assert_picks(lines, "OPV-7", "lidar_to_camera")
+    _assert_picks(lines, "OPV-6", _named("opv2v", "euler", "as_written"))
+    _assert_picks(lines, "OPV-7", _named("opv2v", "camera_extrinsic", "lidar_to_camera"))
 
 
 # --- V2V4Real: V4R-7 and V4R-1 ----------------------------------------------------------------
@@ -160,7 +165,7 @@ def test_v2v4real_box_frame_and_handedness(
         pose_encoding=pose_encoding,
     )
     lines = _run(["v2v4real", str(root / V2V4REAL_SCENE), "1", FIRST_STEM])
-    _assert_picks(lines, "V4R-7", box_frame)
+    _assert_picks(lines, "V4R-7", _named("v2v4real", "box_frame", box_frame))
     # Containment cannot pick a handedness: the files of the two readings are mirror
     # images of each other, so every point lands in the same box under both. The probe
     # must say so instead of naming one.
@@ -318,3 +323,43 @@ def test_pcd_binary_compressed() -> None:
     sizes = len(compressed).to_bytes(4, "little") + len(columns).to_bytes(4, "little")
     xyz = PROBE.read_pcd_xyz(header + sizes + compressed, "a test cloud")
     assert xyz.tolist() == points.astype(np.float64).tolist()
+
+
+# --- the adapter's readings come from its manifest --------------------------------------------
+
+
+def test_builtin_manifests_implement_the_readings_the_real_data_picked() -> None:
+    # PR #166, 18 real frames: OPV-6 flipped, OPV-7 lidar_to_camera, V4R-7 lidar.
+    for dataset in ("opv2v", "v2xset"):
+        readings = PROBE.builtin_readings(dataset)
+        assert readings["euler"] == "flipped", dataset
+        assert readings["camera_extrinsic"] == "lidar_to_camera", dataset
+    readings = PROBE.builtin_readings("v2v4real")
+    assert readings["box_frame"] == "lidar"
+    # V4R-6 (the roll/pitch signs of V2V4Real) is not changed by the V4R-7 fix.
+    assert readings["euler"] == "as_written"
+
+
+def test_a_manifest_with_the_v011_readings_disagrees_with_the_real_data(tmp_path: Path) -> None:
+    from coperceive.adapters.spec import load_manifest
+
+    builtin = REPO / "coperceive" / "adapters" / "builtin"
+    text = (builtin / "opv2v.yaml").read_text(encoding="utf-8")
+    old = text.replace("        signs: [-1, -1, 1]\n", "").replace(", signs: [-1, -1, 1]", "")
+    old = old.replace("direction: parent_to_child", "direction: child_to_parent")
+    assert old.count("signs") == 0 and old != text
+    path = tmp_path / "opv2v.yaml"
+    path.write_text(old, encoding="utf-8")
+    readings = PROBE.adapter_readings(load_manifest(path))
+    assert readings["euler"] == "as_written"
+    assert readings["camera_extrinsic"] == "camera_to_lidar"
+    scores = [PROBE.Score("flipped", 0.9, 500), PROBE.Score("as_written", 0.4, 500)]
+    line = PROBE.verdict("OPV-6", "euler", scores, readings["euler"])
+    assert line.startswith("verdict OPV-6 euler: flipped margin"), line
+    assert line.endswith("; adapter reads as_written)"), line
+
+    v4r = (builtin / "v2v4real.yaml").read_text(encoding="utf-8")
+    assert v4r.count("    frame: body\n") == 1
+    path = tmp_path / "v2v4real.yaml"
+    path.write_text(v4r.replace("    frame: body\n", "    frame: world\n"), encoding="utf-8")
+    assert PROBE.adapter_readings(load_manifest(path))["box_frame"] == "world"
