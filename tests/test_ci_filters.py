@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for CI workflow path filters and triggers."""
 
+import re
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, cast
@@ -87,6 +88,24 @@ def test_desktop_path_filters_cover_required_directories() -> None:
     assert matches_any("coperceive/app/server.py"), (
         "Changes to coperceive/app/ must not skip desktop-macos"
     )
+    for desktop_py in (
+        "coperceive/demo/generate.py",
+        "coperceive/evaluation/evaluate.py",
+        "coperceive/evalview.py",
+        "coperceive/cli.py",
+        "coperceive/cluster_datasets.py",
+        "coperceive/scene/pack.py",
+        "coperceive/remote/scan.py",
+        "coperceive/remote_view/stream.py",
+        "coperceive/repro/export.py",
+        "coperceive/adapters/generic.py",
+        "coperceive/hdmap/store.py",
+        "coperceive/bundle/open.py",
+        "coperceive/validate.py",
+        "coperceive/viewdata.py",
+        "tests/fixtures/synthetic_scene/synth_001/manifest.json",
+    ):
+        assert matches_any(desktop_py), f"Changes to {desktop_py} must not skip desktop-macos"
     assert matches_any("scripts/desktop/e2e_mac.sh"), (
         "Changes to scripts/desktop/ must not skip desktop-macos"
     )
@@ -105,6 +124,23 @@ def test_desktop_path_filters_cover_required_directories() -> None:
     assert not matches_any("tests/test_cli_griffin.py"), "Test changes should skip desktop-macos"
     assert not matches_any("docs/ci.md"), "Documentation changes should skip desktop-macos"
     assert not matches_any("README.md"), "Root doc changes should skip desktop-macos"
+
+    # 3. Verify Guard check filter accuracy regex stays in sync with desktop filter
+    guard_step = next(s for s in changes_steps if s.get("name") == "Guard check filter accuracy")
+    guard_script = str(guard_step.get("run", ""))
+    m = re.search(r"CHANGED_CRITICAL=\$\(git diff[^\n]*grep -E '([^']+)'", guard_script)
+    assert m is not None, "Could not locate CHANGED_CRITICAL regex in ci.yml guard step"
+    critical_re = re.compile(m.group(1))
+    assert critical_re.search("coperceive/demo/generate.py"), (
+        "Guard regex must include coperceive/demo/generate.py"
+    )
+    assert critical_re.search("coperceive/evaluation/evaluate.py"), (
+        "Guard regex must include coperceive/evaluation/evaluate.py"
+    )
+    assert critical_re.search("coperceive/cli.py"), "Guard regex must include coperceive/cli.py"
+    assert not critical_re.search("coperceive/griffin/commands.py")
+    assert not critical_re.search("docs/ci.md")
+    assert not critical_re.search("README.md")
 
 
 def test_docs_path_filters_and_job() -> None:
