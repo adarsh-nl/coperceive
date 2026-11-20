@@ -2,7 +2,9 @@
 """Test that documentation links and community files resolve and contain no leaks."""
 
 import re
-from pathlib import Path
+import subprocess
+from collections.abc import Iterable
+from pathlib import Path, PurePosixPath
 
 
 def _repo_root() -> Path:
@@ -111,3 +113,99 @@ def test_code_of_conduct_enforcement_placeholder() -> None:
     assert not re.search(r"[\w\.-]+@[\w\.-]+\.\w+", content), (
         "CODE_OF_CONDUCT.md should not contain real email addresses"
     )
+
+
+# Explicit allowlist for tracked PNG/JPG assets under docs/ or site/ inside a
+# screenshots/ directory. Intentional README / site media belongs in
+# docs/media/ or site/public/ rather than generated screenshots/ folders.
+ALLOWED_SCREENSHOT_PATHS: frozenset[str] = frozenset()
+ALLOWED_SCREENSHOT_PREFIXES: tuple[str, ...] = (
+    "docs/media/",
+    "site/public/",
+)
+_SCREENSHOT_IMAGE_SUFFIXES: frozenset[str] = frozenset({".png", ".jpg", ".jpeg"})
+
+
+def _is_allowlisted_screenshot(rel_posix: str) -> bool:
+    return rel_posix in ALLOWED_SCREENSHOT_PATHS or rel_posix.startswith(
+        ALLOWED_SCREENSHOT_PREFIXES
+    )
+
+
+def _find_disallowed_screenshot_images(rel_paths: Iterable[str]) -> list[str]:
+    """Return sorted docs/ or site/ PNG/JPG paths under a screenshots/ dir not on the allowlist."""
+    offenders: list[str] = []
+    for raw in rel_paths:
+        rel = raw.replace("\\", "/")
+        path = PurePosixPath(rel)
+        if not path.parts or path.parts[0] not in {"docs", "site"}:
+            continue
+        if path.suffix.lower() not in _SCREENSHOT_IMAGE_SUFFIXES:
+            continue
+        if "screenshots" not in path.parts[1:-1]:
+            continue
+        if _is_allowlisted_screenshot(rel):
+            continue
+        offenders.append(rel)
+    return sorted(offenders)
+
+
+def _tracked_docs_and_site_paths(root: Path) -> list[str]:
+    proc = subprocess.run(
+        ["git", "ls-files", "-z", "docs", "site"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode == 0:
+        return [
+            entry.decode("utf-8", errors="surrogateescape")
+            for entry in proc.stdout.split(b"\0")
+            if entry
+        ]
+    paths: list[str] = []
+    for base_name in ("docs", "site"):
+        base = root / base_name
+        if not base.is_dir():
+            continue
+        for file_path in base.rglob("*"):
+            if not file_path.is_file():
+                continue
+            rel = file_path.relative_to(root).as_posix()
+            if rel.startswith(("site/node_modules/", "site/dist/")):
+                continue
+            paths.append(rel)
+    return paths
+
+
+def test_no_committed_screenshots_in_docs_or_site() -> None:
+    """Fail if any tracked PNG/JPG under docs/ or site/ is inside a screenshots/ directory."""
+    root = _repo_root()
+    tracked = _tracked_docs_and_site_paths(root)
+    assert tracked, "Expected tracked files under docs/ or site/"
+    offenders = _find_disallowed_screenshot_images(tracked)
+    assert offenders == [], (
+        "Generated screenshots must not be committed under docs/ or site/ "
+        "(redirect test output to tests/.artifacts/ or add intentional media to "
+        f"docs/media/ or site/public/): {offenders}"
+    )
+
+
+def test_screenshot_image_guard_catches_disallowed_paths() -> None:
+    """Verify the image-path guard catches screenshots/ PNG/JPGs and respects allowlists."""
+    sample = [
+        "docs/design/screenshots/claude_design_mock_1600x1000.png",
+        "docs/design/v0.1.1/screenshots/app-pages/local-1280x800-dark.jpg",
+        "site/screenshots/preview.JPEG",
+        "docs/media/Town03-000.png",
+        "docs/media/screenshots/allowlisted.png",
+        "site/public/og.png",
+        "site/public/screenshots/allowlisted.jpg",
+        "docs/design/screenshots/README.md",
+        "tests/fixtures/screenshots/fixture.png",
+    ]
+    assert _find_disallowed_screenshot_images(sample) == [
+        "docs/design/screenshots/claude_design_mock_1600x1000.png",
+        "docs/design/v0.1.1/screenshots/app-pages/local-1280x800-dark.jpg",
+        "site/screenshots/preview.JPEG",
+    ]

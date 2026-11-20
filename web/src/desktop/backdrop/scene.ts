@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Ported and adapted from "Viewer Directions.dc.html" (Section 1b "Ledger")
-// and "viewer-engine.js" by Adarsh (Coperceive UI Design Options, 2026-10-18).
+// Ported and adapted from the Coperceive UI design specification (Section 1b "Ledger", 2026-10-18).
 // Extended with a 3-chapter parametric 60-second loop and seamless crossfade.
 
 export type Point3D = [number, number, number];

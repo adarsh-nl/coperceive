@@ -2255,7 +2255,7 @@ form.stack, .stack { display: flex; flex-direction: column; gap: 8px; }
   color: var(--danger);
 }
 
-/* New evaluation: the plan builder steps (docs/design/v0.1.1, New evaluation). */
+/* New evaluation: the plan builder steps (v0.1.1 layout). */
 .c-steps {
   display: flex;
   flex-direction: column;
@@ -2410,7 +2410,7 @@ main > .tab-panel:not([hidden]) {
   content: "+ ";
 }
 
-/* -- Dataset view v2 (docs/design/v0.1.1/HPC Dataset View v2.dc.html) ---------- */
+/* -- Dataset view v2 (v0.1.1 layout) ----------------------------------------- */
 :root {
   --dv-ready: #2da44e;
   --dv-preparing: #1f6feb;
@@ -2900,7 +2900,7 @@ main > .tab-panel:not([hidden]) {
 .dv-insp-button.is-warn { border-color: var(--dv-stale); color: var(--dv-stale); }
 
 /* ------------------------------------------------------------------ */
-/* Scene viewer, v0.1.1 layout (docs/design/v0.1.1/Scene Viewer.dc.html):
+/* Scene viewer, v0.1.1 layout:
    flush side panels, the stage with its chips, the camera strip and the
    timeline under it, scene stats / selection / radar on the right. */
 
