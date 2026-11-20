@@ -63,7 +63,7 @@ coperceive eval run RUN_ID --root /data/v2v4real-scenes
 - World-frame handedness: **unverified**. The adapter mirrors on a CARLA assumption. See [V4R-1](../geometry/conventions.md#v4r-1).
 - LiDAR +y: **unverified**. See [V4R-2](../geometry/conventions.md#v4r-2).
 - A published pose is a 4×4 matrix where the adapter reads six Euler numbers, and a six-value list would store pitch and roll with the wrong sign. See [V4R-4](../geometry/conventions.md#v4r-4) and [V4R-6](../geometry/conventions.md#v4r-6).
-- Boxes are annotated in the vehicle LiDAR frame and stored as world boxes. See [V4R-7](../geometry/conventions.md#v4r-7) (checked on real data (6 frames, 4 recordings)).
+- Boxes are annotated in the vehicle LiDAR frame. v0.1.1 stored them as world boxes; v0.1.2 reads them in the LiDAR frame. See [V4R-7](../geometry/conventions.md#v4r-7) (checked on real data (6 frames, 4 recordings)).
 - Camera data is not in the release the conventions page cites. Extrinsics are **unverified**. See [V4R-9](../geometry/conventions.md#v4r-9).
 - One stem per 0.1 s is not a source statement of the stem step. See [V4R-11](../geometry/conventions.md#v4r-11).
 

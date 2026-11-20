@@ -57,10 +57,10 @@ Those flags are `coperceive adapters check --help`, `coperceive adapters ingest 
 
 The labels below are rows of [Geometry conventions](../geometry/conventions.md).
 
-- Roll and pitch sign: the finding is that non-zero pitch and roll are stored with the wrong sign. See [OPV-6](../geometry/conventions.md#opv-6) (checked on real data (6 frames)) and [OPV-13](../geometry/conventions.md#opv-13).
+- Roll and pitch sign: v0.1.1 stored non-zero pitch and roll with the wrong sign; v0.1.2 negates them as the source does. See [OPV-6](../geometry/conventions.md#opv-6) (checked on real data (6 frames)) and [OPV-13](../geometry/conventions.md#opv-13).
 - Which CARLA version wrote the clouds: **unverified**. See [OPV-2](../geometry/conventions.md#opv-2).
 - Intensity is dropped. See [OPV-3](../geometry/conventions.md#opv-3).
-- Camera extrinsic direction: the finding is that the stored matrix is inverted. See [OPV-7](../geometry/conventions.md#opv-7) (checked on real data (6 frames)).
+- Camera extrinsic direction: v0.1.1 used the stored matrix inverted; v0.1.2 reads it LiDAR-to-camera. See [OPV-7](../geometry/conventions.md#opv-7) (checked on real data (6 frames)).
 - Whether camera blocks change across frames: **unverified**. See [OPV-11](../geometry/conventions.md#opv-11).
 - The adapter split `test_culver_city` differs from the documented `test_culvercity`. See [OPV-17](../geometry/conventions.md#opv-17).
 
