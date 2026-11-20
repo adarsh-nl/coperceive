@@ -7,8 +7,8 @@ export interface DemoProgressInfo {
 }
 
 /** Approximate demo cache size before generation (must stay within ±20% of real output). */
-export const DEMO_APPROX_BYTES = 8 * 1024 * 1024;
-export const DEMO_APPROX_SIZE_LABEL = "about 8 MiB";
+export const DEMO_APPROX_BYTES = 12_986_276;
+export const DEMO_APPROX_SIZE_LABEL = "about 12.4 MiB";
 
 export function formatDemoSize(bytes?: number | null): string {
   if (typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0) {

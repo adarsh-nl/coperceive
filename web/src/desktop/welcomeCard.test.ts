@@ -100,7 +100,7 @@ test("welcome card renders required actions, description, and handles callbacks"
   });
 
   const generatingBtn = [...host.querySelectorAll("button")].find((b) =>
-    b.textContent?.includes("Generating demo scene… (about 8 MiB) · 4s elapsed"),
+    b.textContent?.includes("Generating demo scene… (about 12.4 MiB) · 4s elapsed"),
   );
   assert.ok(generatingBtn, "shows progress and size while generating");
   assert.ok(
@@ -174,13 +174,13 @@ test("DemoProgressBanner renders progress, stage, older Mac timing guidance, and
 test("runDemoOpenFlow opens cached demo without generating banner and shows progress when generating", async () => {
   const { DEMO_APPROX_BYTES, DEMO_APPROX_SIZE_LABEL, formatDemoSize, runDemoOpenFlow } =
     await import("./demoMeta.ts");
-  assert.equal(DEMO_APPROX_SIZE_LABEL, "about 8 MiB");
-  assert.equal(formatDemoSize(8_218_188), "7.8 MiB");
-  assert.equal(formatDemoSize(null), "about 8 MiB");
+  assert.equal(DEMO_APPROX_SIZE_LABEL, "about 12.4 MiB");
+  assert.equal(formatDemoSize(12_986_276), "12.4 MiB");
+  assert.equal(formatDemoSize(null), "about 12.4 MiB");
 
   let cachedGenStarted = false;
   const cachedOutcome = await runDemoOpenFlow({
-    ensureDemo: async () => ({ path: "/tmp/demo", generated: false, bytes: 8_218_188 }),
+    ensureDemo: async () => ({ path: "/tmp/demo", generated: false, bytes: 12_986_276 }),
     subscribeProgress: async () => () => {},
     onGeneratingStart: () => {
       cachedGenStarted = true;
@@ -199,7 +199,7 @@ test("runDemoOpenFlow opens cached demo without generating banner and shows prog
   await runDemoOpenFlow({
     ensureDemo: async () => {
       progressHandler?.({ stage: "Packing LiDAR frames & camera strip…", elapsed_seconds: 2 });
-      return { path: "/tmp/demo", generated: true, bytes: 8_218_188 };
+      return { path: "/tmp/demo", generated: true, bytes: 12_986_276 };
     },
     subscribeProgress: async (handler) => {
       progressHandler = handler;
@@ -223,7 +223,7 @@ test("runDemoOpenFlow opens cached demo without generating banner and shows prog
   assert.equal(genStarted, true, "uncached demo triggers generating banner");
   assert.equal(genEnded, true);
   assert.equal(lastStage, "Packing LiDAR frames & camera strip…");
-  assert.equal(measuredBytes, 8_218_188);
+  assert.equal(measuredBytes, 12_986_276);
   assert.ok(DEMO_APPROX_BYTES > 0);
 });
 
