@@ -505,6 +505,12 @@ pub fn cache_dir(
     cache_relative: &str,
 ) -> Result<String, String> {
     let split = split.map(str::trim).filter(|split| !split.is_empty()).unwrap_or("all");
+    if !matches!(adapter, "griffin" | "opv2v" | "v2xset" | "v2v4real" | "dair-v2x-c") {
+        return Err(format!("{adapter} is not a built-in cluster adapter."));
+    }
+    if !split.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err("The dataset split must be a plain name.".to_string());
+    }
     let parts: Vec<&str> = cache_relative.split('/').collect();
     let valid = matches!(
         parts.as_slice(),
@@ -604,6 +610,9 @@ mod tests {
         ] {
             assert!(cache_dir(&profile, "opv2v", Some("test"), bad).is_err(), "{bad}");
         }
+        // The adapter and split must be plain too, even when the path matches them.
+        assert!(cache_dir(&profile, "..", Some("test"), "coperceive-cache/../3b1e2f0a9c77/test").is_err());
+        assert!(cache_dir(&profile, "opv2v", Some(".."), "coperceive-cache/opv2v/3b1e2f0a9c77/..").is_err());
     }
 
     #[test]
