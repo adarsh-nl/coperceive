@@ -35,7 +35,7 @@ STAGING=$((SECONDS - STAGE_START))  # rsync wall time -> timings.staging_s
 
 # The run's exit status is kept: a partial run (3 or 4) still comes home below.
 set +e
-/opt/venv/bin/python -m coperceive model run --manifest <REPO>/plugins/griffin/coperceive_griffin_model/model.yaml --scenes "$SCRATCH/scenes" --out "$SCRATCH/out" --run-id griffin25m-vehicle-plugin --work "$SCRATCH/work" --staging-seconds "$STAGING" --model vehicle-side --raw-root "$SCRATCH/raw" --media-root <FIXTURE>/raw
+/opt/venv/bin/python -m coperceive model run --manifest <REPO>/plugins/griffin/coperceive_griffin_model/model.yaml --scenes "$SCRATCH/scenes" --out "$SCRATCH/out" --run-id griffin25m-vehicle-plugin --work "$SCRATCH/work" --staging-seconds "$STAGING" --model vehicle-side --raw-root "$SCRATCH/raw" --media-root <FIXTURE>/raw --option ckpt_root=<FIXTURE>/ckpts
 RC=$?
 set -e
 echo "model run exit $RC"
