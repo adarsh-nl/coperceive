@@ -35,14 +35,16 @@ _tauri_env="$HOME/.conda/envs/coperceive-tauri-deps"
 export PKG_CONFIG="$_tauri_env/bin/pkg-config"
 export PKG_CONFIG_PATH="$_tauri_env/lib/pkgconfig:$_tauri_env/share/pkgconfig"
 export CARGO_TARGET_DIR="$HOME/src/coperceive/.cargo-target"   # in your clone, not shared
-export CARGO_BUILD_JOBS=2                                      # be gentle on a shared node
+export CARGO_BUILD_JOBS=1                                      # one core on a shared node
 export PATH="/home/alice/node/bin:$PATH"                       # node, npm, npx
 unset _tauri_env
 ```
 
+Many clusters limit login-node commands to about a minute on one core, so this file
+keeps Cargo to a single job. Check your site's rules.
+
 Do not export `LD_LIBRARY_PATH` in this file. The environment ships its own OpenSSL and
-other libraries, so `git` and `ssh` in the same shell could load them. Set it only on the
-`cargo test` command line (step 4).
+other libraries, so `git` and `ssh` in the same shell could load them.
 
 Add `.cargo-target/` to `.git/info/exclude` too.
 
@@ -71,16 +73,15 @@ This needs Node and npm on `PATH`.
 ```bash
 source ~/src/coperceive/.hpc-env.sh
 cd src-tauri && nice -n 19 cargo check --quiet
-LD_LIBRARY_PATH="$HOME/.conda/envs/coperceive-tauri-deps/lib" nice -n 19 cargo test --lib
 ```
 
-With `CARGO_BUILD_JOBS=2`, expect these times:
-
-- The first `cargo check` compiles every dependency and takes a few minutes.
-- Later checks take seconds.
-- `cargo test --lib` builds the test profile once.
-
-Run long checks at low priority and follow your site's login-node policy. If the
-policy does not allow a build of this size, run it in a batch job instead.
+- **Warm checks:** after the first build, the hook's `cargo check` and `tsc -b` take
+  seconds, which fits a login node.
+- **Cold rebuilds:** the first `cargo check`, or one after a dependency change, compiles
+  every dependency and takes several minutes. Run it only when needed, at `nice -n 19`
+  with `CARGO_BUILD_JOBS=1`. If your site does not allow a build of that length on a
+  login node, run it in a batch job instead.
+- **Tests:** do not run `cargo test` on a login node. Its test build is as long as a cold
+  rebuild. CI runs the Rust tests on pull requests that change desktop code.
 
 Never bypass the hook with `--no-verify`.
