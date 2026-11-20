@@ -644,10 +644,10 @@ options:
 usage: coperceive model run [-h] [--manifest MANIFEST] --scenes SCENES --out OUT --run-id RUN_ID
        [--model MODEL] [--agents AGENTS] [--source SOURCE] [--scene-ids SCENE_IDS] [--raw-root
        RAW_ROOT] [--media-root MEDIA_ROOT] [--artifacts ARTIFACTS] [--no-auto-dependencies]
-       [--option K=V] [--frame-timeout FRAME_TIMEOUT] [--run-timeout RUN_TIMEOUT] [--no-cache]
-       [--hash-inputs] [--work WORK] [--force] [--perturb PERTURB] [--staging-seconds
-       STAGING_SECONDS] [--slurm] [--submit] [--slurm-python SLURM_PYTHON] [--slurm-partition
-       SLURM_PARTITION] [--slurm-logs SLURM_LOGS] [--slurm-results SLURM_RESULTS]
+       [--option K=V] [--protocol {default,legacy}] [--frame-timeout FRAME_TIMEOUT] [--run-timeout
+       RUN_TIMEOUT] [--no-cache] [--hash-inputs] [--work WORK] [--force] [--perturb PERTURB]
+       [--staging-seconds STAGING_SECONDS] [--slurm] [--submit] [--slurm-python SLURM_PYTHON]
+       [--slurm-partition SLURM_PARTITION] [--slurm-logs SLURM_LOGS] [--slurm-results SLURM_RESULTS]
        [--slurm-scratch-template SLURM_SCRATCH_TEMPLATE] [plugin]
 
 positional arguments:
@@ -670,6 +670,11 @@ options:
                         An earlier run's cache for depends_on.
   --no-auto-dependencies
   --option K=V
+  --protocol {default,legacy}
+                        Evaluation protocol to record for this run (run.json provenance); a later
+                        eval run without --protocol or a config protocol uses it. default: per-
+                        frame ranking, connected-union ground truth (70 m). legacy: the v0.1.1
+                        rules.
   --frame-timeout FRAME_TIMEOUT
   --run-timeout RUN_TIMEOUT
   --no-cache

@@ -161,6 +161,36 @@ def test_import_without_score_note_exits_2(tmp_path: Path) -> None:
     assert caught.value.code == 2
 
 
+def test_eval_run_uses_the_protocol_recorded_in_run_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A run made for a protocol is scored under it unless --protocol or a config file
+    says otherwise; the choice is therefore recorded with the run, not hidden globally."""
+    root, jsonl = _prepare(tmp_path)
+    _import(root, jsonl)
+    run_json = root / "predictions" / "synthetic" / "run.json"
+    document = json.loads(run_json.read_text(encoding="utf-8"))
+    document["provenance"] = {"eval_protocol": "legacy"}
+    run_json.write_text(json.dumps(document), encoding="utf-8")
+
+    main(["eval", "run", "synthetic", "--root", str(root)])
+    capsys.readouterr()
+    metrics = json.loads(
+        (root / "predictions" / "synthetic" / SCENE_ID / "metrics.json").read_text(encoding="utf-8")
+    )
+    assert metrics["config"]["ranking_scope"] == "pooled"
+    assert metrics["config"]["gt_scope"] == "ego_only"
+
+    # An explicit choice wins over the recorded one.
+    main(["eval", "run", "synthetic", "--root", str(root), "--protocol", "default"])
+    capsys.readouterr()
+    metrics = json.loads(
+        (root / "predictions" / "synthetic" / SCENE_ID / "metrics.json").read_text(encoding="utf-8")
+    )
+    assert metrics["config"]["ranking_scope"] == "per_frame"
+    assert metrics["config"]["gt_scope"] == "connected_union"
+
+
 def test_eval_run_report_and_compare(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     root, jsonl = _prepare(tmp_path)
     # The fixture's run.json list: the cone in the ground truth is not on it.

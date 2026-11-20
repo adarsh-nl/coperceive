@@ -40,6 +40,10 @@ import {
   pipelineNeedsCheckpoint,
   pipelineNeedsCkptRoot,
   pipelineNeedsSplit,
+  EVAL_PROTOCOL_CHOICES,
+  DEFAULT_EVAL_PROTOCOL,
+  evalProtocolLabel,
+  type EvalProtocol,
   planSummary,
   jobStateLabel,
   validateArgumentForm,
@@ -174,6 +178,7 @@ export default function NewEvaluation() {
   const [rawRoot, setRawRoot] = useState("");
   const [mediaRoot, setMediaRoot] = useState("");
   const [ckptRoot, setCkptRoot] = useState("");
+  const [evalProtocol, setEvalProtocol] = useState<EvalProtocol>(DEFAULT_EVAL_PROTOCOL);
   const [overrideEnv, setOverrideEnv] = useState(false);
   const [environment, setEnvironment] = useState<EnvironmentSetup>(emptyEnvironmentOverride());
   const [plan, setPlan] = useState<RunPlan | null>(null);
@@ -427,6 +432,7 @@ export default function NewEvaluation() {
         raw_root: selectedPipeline.source === "builtin" ? rawRoot.trim() : "",
         media_root: selectedPipeline.source === "builtin" ? mediaRoot.trim() : "",
         ckpt_root: selectedPipeline.source === "builtin" && needsCkptRoot ? ckptRoot.trim() : "",
+        eval_protocol: evalProtocol,
         environment_override: overrideEnv ? environment : null,
       };
       const built = await buildRunPlan(selectedProfile.id, request);
@@ -513,6 +519,8 @@ export default function NewEvaluation() {
                     ) : null}
                     <dt>Media root</dt>
                     <dd className="c-mono">{mediaRoot.trim() || "—"}</dd>
+                    <dt>AP protocol</dt>
+                    <dd>{evalProtocolLabel(evalProtocol)}</dd>
                   </>
                 ) : null}
                 <dt>Environment</dt>
@@ -675,6 +683,29 @@ export default function NewEvaluation() {
                           />
                           <span className="c-step-note">
                             Optional: leave it empty and the job passes no --media-root, as the CLI does.
+                          </span>
+                        </div>
+                        <div style={field} role="radiogroup" aria-label="AP protocol">
+                          <span style={labelStyle}>AP protocol</span>
+                          {EVAL_PROTOCOL_CHOICES.map((choice) => (
+                            <label
+                              key={choice.value}
+                              style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", fontSize: "0.82rem", color: "var(--text)" }}
+                            >
+                              <input
+                                type="radio"
+                                name="plan-eval-protocol"
+                                value={choice.value}
+                                checked={evalProtocol === choice.value}
+                                onChange={() => setEvalProtocol(choice.value)}
+                              />
+                              <span>
+                                <strong>{choice.label}</strong>: {choice.description}
+                              </span>
+                            </label>
+                          ))}
+                          <span className="c-step-note">
+                            Recorded with the run; a later eval run uses it unless told otherwise.
                           </span>
                         </div>
                       </>
@@ -1113,6 +1144,7 @@ export default function NewEvaluation() {
                         profileId={profileId}
                         planId={plan.id}
                         initialOutcome={submitOutcome}
+                        evalProtocol={plan.eval_protocol}
                       />
                     </div>
                   ) : null}

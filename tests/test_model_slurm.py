@@ -98,6 +98,27 @@ def test_resources_default_to_one_cpu_and_two_gb() -> None:
     assert spec.resources.cpus == 1 and spec.resources.memory_gb == 2
 
 
+def test_plan_records_the_evaluation_protocol(
+    roots: tuple[Path, Path, Scene], tmp_path: Path
+) -> None:
+    """The inner command records the protocol: model run --protocol legacy."""
+    plan = _plan(roots, load_manifest(FAKE), tmp_path, eval_protocol="legacy")
+    run_line = next(
+        line
+        for line in plan.script.splitlines()
+        if " -m coperceive model run " in line and not line.startswith("#")
+    )
+    assert "--protocol legacy" in run_line
+    # No recorded protocol means no flag: the run keeps eval run's own default.
+    plain = _plan(roots, load_manifest(FAKE), tmp_path, eval_protocol=None)
+    plain_line = next(
+        line
+        for line in plain.script.splitlines()
+        if " -m coperceive model run " in line and not line.startswith("#")
+    )
+    assert "--protocol" not in plain_line
+
+
 def test_module_load_for_the_venv_interpreter(
     roots: tuple[Path, Path, Scene], tmp_path: Path
 ) -> None:

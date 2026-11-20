@@ -63,6 +63,10 @@ function EvalFiguresGrid({ summary }: { summary: EvalSummary }) {
           <span className="tag">{a.runId === "demo" ? "synthetic predictions" : a.runId}</span>
         )}
       </h3>
+      <p className="eval-note">
+        protocol: {summary.protocol}
+        {summary.compareProtocol ? ` · B: ${summary.compareProtocol}` : ""}
+      </p>
       <dl className="stat-grid eval-grid">
         {a.map.map((row, index) => (
           <div key={row.threshold}>

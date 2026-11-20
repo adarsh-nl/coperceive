@@ -82,6 +82,20 @@ def test_batch_writes_a_complete_run(roots: tuple[Path, Path, Scene]) -> None:
     assert (out / "r1" / ".." / ".work" / "r1" / "parent.log").resolve().is_file()
 
 
+def test_a_run_records_the_evaluation_protocol_it_was_made_for(
+    roots: tuple[Path, Path, Scene],
+) -> None:
+    """model run --protocol writes the intended eval protocol into run.json provenance;
+    a run that did not choose one records nothing (eval run keeps its own default)."""
+    _, out = _run(roots, eval_protocol="legacy")
+    provenance = read_run_meta(out, "r1").provenance
+    assert provenance is not None and provenance["eval_protocol"] == "legacy"
+
+    _, out = _run(roots, run_id="r2")
+    provenance = read_run_meta(out, "r2").provenance
+    assert provenance is not None and "eval_protocol" not in provenance
+
+
 def test_rows_are_time_major_and_single(roots: tuple[Path, Path, Scene]) -> None:
     _, out = _run(roots)
     _, _, scene = roots

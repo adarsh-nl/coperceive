@@ -109,6 +109,16 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     run.add_argument("--artifacts", default=None, help="An earlier run's cache for depends_on.")
     run.add_argument("--no-auto-dependencies", action="store_true")
     run.add_argument("--option", action="append", default=[], metavar="K=V")
+    run.add_argument(
+        "--protocol",
+        choices=("default", "legacy"),
+        default=None,
+        help=(
+            "Evaluation protocol to record for this run (run.json provenance); a later "
+            "eval run without --protocol or a config protocol uses it. default: per-frame "
+            "ranking, connected-union ground truth (70 m). legacy: the v0.1.1 rules."
+        ),
+    )
     run.add_argument("--frame-timeout", type=float, default=None)
     run.add_argument("--run-timeout", type=float, default=None)
     run.add_argument("--no-cache", action="store_true")
@@ -485,6 +495,7 @@ def _run_options(args: argparse.Namespace) -> RunOptions:
         force=bool(args.force),
         staging_seconds=args.staging_seconds,
         perturbation=load_perturbation(args.perturb) if isinstance(args.perturb, str) else None,
+        eval_protocol=args.protocol if isinstance(args.protocol, str) else None,
     )
 
 
