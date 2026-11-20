@@ -62,6 +62,7 @@ Only in `coperceive/evaluation/`. For each confirmed bug: a test that fails on t
 
 1. **3D IoU.** The evaluator has BEV IoU and centre distance only. Is a 3D-IoU AP expected (a feature, outside this PR), or is "BEV and 3D" in the brief loose wording? Until answered, the spec states plainly that every AP is a BEV AP.
 2. **Code-only facts.** Some protocol details of OpenCOOD-style benchmarks may be written down nowhere except their source. Default here: they stay "unverified". The alternative is a classic two-room split, where a party that never touches our evaluator reads that source and writes a prose description.
+   *Answered (PM, 2026-11-20):* two rooms. A separate session reads OpenCOOD's evaluation code and writes behaviour in prose only, no code; this side reads only that note, the room A note `opencood-ap-behaviour.md` (not yet written), and cites it in [eval-spec](../eval-spec.md) A.4.
 3. **Score ties.** File-order ties are deterministic but make AP depend on row order. Options: keep and document; or break ties by a key that does not depend on row order. Decided after the tests measure how much it moves a number.
 4. **Dev dependency.** `shapely` (BSD-3-Clause) and `types-shapely` in the `dev` extra.
 
