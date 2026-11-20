@@ -9,6 +9,7 @@
 //! what it supports (`coperceive capabilities`), so an older build gets "too old,
 //! update it with …" instead of raw argparse output.
 
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -20,6 +21,8 @@ use crate::ssh::{quote_remote_argv, shell_quote};
 pub const DETECT_SCHEMA: &str = "coperceive-cluster-detect-1";
 pub const INDEX_SCHEMA: &str = "coperceive-cluster-index-1";
 pub const PREVIEWS_SCHEMA: &str = "coperceive-cluster-previews-1";
+pub const STATUS_SCHEMA: &str = "coperceive-cluster-scene-status-1";
+const STATUS_TIMEOUT: Duration = Duration::from_secs(45);
 const DETECT_TIMEOUT: Duration = Duration::from_secs(45);
 const INDEX_TIMEOUT: Duration = Duration::from_secs(120);
 pub const CAPABILITIES_SCHEMA: &str = "coperceive-capabilities-1";
@@ -313,6 +316,94 @@ pub fn index(
     run_document(runner, profile, &args, INDEX_TIMEOUT, INDEX_SCHEMA)
 }
 
+/// `dataset status --cache <cache>` on the login node, plus `--live-claims` when
+/// asked. The error is returned as is; callers add [`explain_failure`].
+pub fn status_once(
+    runner: &dyn RemoteRunner,
+    profile: &ServerProfile,
+    cache: &str,
+    live_claims: bool,
+) -> Result<Value, String> {
+    let mut args = vec![
+        "dataset".to_string(),
+        "status".to_string(),
+        "--cache".to_string(),
+        cache.to_string(),
+    ];
+    if live_claims {
+        args.push("--live-claims".to_string());
+    }
+    let command = quote_remote_argv(&coperceive_argv(profile, &args));
+    let result = runner.run(&command, STATUS_TIMEOUT, None)?;
+    let unexpected = || "The cluster returned an unexpected dataset status document.".to_string();
+    let document = serde_json::from_str::<Value>(result.stdout.trim()).map_err(|_| unexpected())?;
+    // An error document also carries the status schema: check the error first.
+    if let Some(error) = document.get("error").and_then(Value::as_str) {
+        return Err(error.to_string());
+    }
+    if document.get("schema").and_then(Value::as_str) != Some(STATUS_SCHEMA) {
+        return Err(unexpected());
+    }
+    Ok(document)
+}
+
+/// The scenes "Prepare remaining" submits, in index order: those the cache
+/// does not know, and those not prepared, failed or stale. A preparing scene
+/// is left out while a job still holds its claim (`live_claims`). A status
+/// without `live_claims` (an older coperceive on the server) holds every
+/// preparing scene. A prepare task still checks each claim itself.
+pub fn remaining_scene_ids(index: &Value, status: &Value) -> Vec<String> {
+    let states: HashMap<&str, &str> = status
+        .get("scenes")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    Some((
+                        row.get("scene_id")?.as_str()?,
+                        row.get("state").and_then(Value::as_str).unwrap_or(""),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let held: Option<HashSet<&str>> = status
+        .get("live_claims")
+        .and_then(Value::as_array)
+        .map(|ids| ids.iter().filter_map(Value::as_str).collect());
+    index
+        .get("scenes")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row.get("scene_id").and_then(Value::as_str))
+                .filter(|id| match states.get(id).copied() {
+                    None => true,
+                    Some("ready") => false,
+                    Some("preparing") => held.as_ref().is_some_and(|held| !held.contains(id)),
+                    Some(_) => true,
+                })
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Read the cache's status for "Prepare remaining" and pick its scenes. An
+/// older coperceive refuses `--live-claims`; then the plain status is read.
+pub fn remaining_scenes(
+    runner: &dyn RemoteRunner,
+    profile: &ServerProfile,
+    cache: &str,
+    index: &Value,
+) -> Result<Vec<String>, String> {
+    let status = match status_once(runner, profile, cache, true) {
+        Ok(document) => document,
+        Err(_) => status_once(runner, profile, cache, false)?,
+    };
+    Ok(remaining_scene_ids(index, &status))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -566,5 +657,115 @@ mod tests {
             message.contains("pip install --upgrade git+https://github.com/adarsh-nl/coperceive@feat/m2-import (in the environment that provides coperceive)"),
             "{message}"
         );
+    }
+
+    /// Answers each command by the first rule whose text it contains.
+    struct RuleRunner {
+        calls: Mutex<Vec<String>>,
+        rules: Vec<(&'static str, bool, String)>,
+    }
+
+    impl RemoteRunner for RuleRunner {
+        fn run(
+            &self,
+            remote_cmd: &str,
+            _timeout: Duration,
+            _stdin: Option<&str>,
+        ) -> Result<CommandResult, String> {
+            self.calls.lock().unwrap().push(remote_cmd.to_string());
+            let (_, success, stdout) = self
+                .rules
+                .iter()
+                .find(|(needle, _, _)| remote_cmd.contains(needle))
+                .expect("a scripted answer");
+            Ok(CommandResult {
+                success: *success,
+                stdout: stdout.clone(),
+                stderr: String::new(),
+            })
+        }
+    }
+
+    fn six_scene_index() -> Value {
+        let scenes: Vec<Value> = ["s0", "s1", "s2", "s3", "s4", "s5"]
+            .iter()
+            .map(|id| serde_json::json!({ "scene_id": id }))
+            .collect();
+        serde_json::json!({ "schema": INDEX_SCHEMA, "scenes": scenes })
+    }
+
+    fn six_scene_status(live_claims: Option<&[&str]>) -> Value {
+        let mut status = serde_json::json!({
+            "schema": STATUS_SCHEMA,
+            "scenes": [
+                {"scene_id": "s0", "state": "ready"},
+                {"scene_id": "s1", "state": "stale"},
+                {"scene_id": "s2", "state": "failed"},
+                {"scene_id": "s3", "state": "preparing"},
+                {"scene_id": "s4", "state": "preparing"},
+                {"scene_id": "s6", "state": "not_prepared"},
+            ],
+        });
+        if let Some(ids) = live_claims {
+            status["live_claims"] = serde_json::json!(ids);
+        }
+        status
+    }
+
+    #[test]
+    fn remaining_leaves_out_ready_scenes_and_live_claims() {
+        // s5 is not in the cache yet; s3's job still runs; s4's claim is dead.
+        let remaining = remaining_scene_ids(&six_scene_index(), &six_scene_status(Some(&["s3"])));
+        assert_eq!(remaining, ["s1", "s2", "s4", "s5"]);
+        // s6 is in the cache but no longer in the index: never submitted.
+    }
+
+    #[test]
+    fn remaining_without_live_claims_holds_every_preparing_scene() {
+        let remaining = remaining_scene_ids(&six_scene_index(), &six_scene_status(None));
+        assert_eq!(remaining, ["s1", "s2", "s5"]);
+    }
+
+    #[test]
+    fn remaining_scenes_asks_for_live_claims_and_falls_back_for_an_older_build() {
+        let status = six_scene_status(Some(&["s3"])).to_string();
+        let runner = RuleRunner {
+            calls: Mutex::new(Vec::new()),
+            rules: vec![("--live-claims", true, status)],
+        };
+        let remaining =
+            remaining_scenes(&runner, &profile(), "/r/coperceive-cache/opv2v/h/test", &six_scene_index())
+                .expect("remaining");
+        assert_eq!(remaining, ["s1", "s2", "s4", "s5"]);
+        let calls = runner.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert!(
+            calls[0].contains("dataset status --cache /r/coperceive-cache/opv2v/h/test --live-claims"),
+            "{calls:?}"
+        );
+
+        // An older coperceive: argparse refuses the flag, prints nothing on stdout.
+        let old = RuleRunner {
+            calls: Mutex::new(Vec::new()),
+            rules: vec![
+                ("--live-claims", false, String::new()),
+                ("dataset status", true, six_scene_status(None).to_string()),
+            ],
+        };
+        let remaining =
+            remaining_scenes(&old, &profile(), "/r/c", &six_scene_index()).expect("fallback");
+        assert_eq!(remaining, ["s1", "s2", "s5"]);
+        assert_eq!(old.calls.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn status_once_returns_the_error_document_as_an_error() {
+        let runner = FakeRunner::new(
+            r#"{"schema":"coperceive-cluster-scene-status-1","error":"cannot read /r/c/dataset.json"}"#,
+        );
+        let error = status_once(&runner, &profile(), "/r/c", false).expect_err("error");
+        assert_eq!(error, "cannot read /r/c/dataset.json");
+        let garbage = FakeRunner::new("not json");
+        assert!(status_once(&garbage, &profile(), "/r/c", false).is_err());
     }
 }

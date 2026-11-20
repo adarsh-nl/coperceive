@@ -3446,9 +3446,12 @@ async fn dataset_prepare(
     let images = images
         .filter(|mode| !mode.trim().is_empty())
         .unwrap_or_else(|| state::load_state().camera_images(Some(&profile_id)).effective);
+    // "all": every indexed scene. "remaining": resolved below from the cache's
+    // status, at preview time. A list: exactly those scenes.
+    let remaining = matches!(&scenes, Some(serde_json::Value::String(text)) if text == "remaining");
     let scenes: Option<Vec<String>> = match scenes {
         None => None,
-        Some(serde_json::Value::String(text)) if text == "all" => None,
+        Some(serde_json::Value::String(text)) if text == "all" || text == "remaining" => None,
         Some(serde_json::Value::Array(items)) => Some(
             items
                 .iter()
@@ -3456,7 +3459,9 @@ async fn dataset_prepare(
                 .map(str::to_string)
                 .collect(),
         ),
-        Some(_) => return Err("scenes must be a list of scene ids or \"all\".".to_string()),
+        Some(_) => {
+            return Err("scenes must be a list of scene ids, \"all\" or \"remaining\".".to_string())
+        }
     };
     let (preview, pending) = tauri::async_runtime::spawn_blocking(move || {
         let entry = find_server_entry(&profile_id)?;
@@ -3483,6 +3488,37 @@ async fn dataset_prepare(
             .get("estimated_cache_bytes")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
+        // "Prepare remaining": the scenes not prepared, failed or stale, minus the
+        // ones a running job still holds, read from the cache now.
+        let scenes = if remaining {
+            let cache = coperceive_desktop::dataset_jobs::cache_absolute(
+                &entry.profile,
+                &adapter,
+                &raw_root,
+                split.as_deref(),
+            )?;
+            let ids = coperceive_desktop::cluster_datasets::remaining_scenes(
+                &runner,
+                &entry.profile,
+                &cache,
+                &index,
+            )
+            .map_err(|error| {
+                coperceive_desktop::cluster_datasets::explain_failure(
+                    &runner,
+                    &entry.profile,
+                    format!("Could not read which scenes are already prepared: {error}"),
+                )
+            })?;
+            if ids.is_empty() {
+                return Err(
+                    "Every scene is prepared or being prepared. Nothing to submit.".to_string()
+                );
+            }
+            Some(ids)
+        } else {
+            scenes
+        };
         // One array task per selected scene; "all" is every scene the index lists.
         let scene_ids: Vec<String> = scenes.clone().unwrap_or_else(|| {
             index
@@ -3610,42 +3646,14 @@ async fn dataset_status(
             &raw_root,
             split.as_deref(),
         )?;
-        let command = coperceive_desktop::ssh::quote_remote_argv(
-            &coperceive_desktop::hpc::coperceive_argv(
-                &entry.profile,
-                &[
-                    "dataset".to_string(),
-                    "status".to_string(),
-                    "--cache".to_string(),
-                    cache,
-                ],
-            ),
-        );
-        let result = coperceive_desktop::slurm_adapter::RemoteRunner::run(
-            &runner,
-            &command,
-            std::time::Duration::from_secs(45),
-            None,
-        )?;
-        let text = result.stdout.trim();
-        let failure = match serde_json::from_str::<serde_json::Value>(text) {
-            // An error document also carries the status schema: check the error first.
-            Ok(document) => match document.get("error").and_then(serde_json::Value::as_str) {
-                Some(error) => error.to_string(),
-                None if document.get("schema").and_then(serde_json::Value::as_str)
-                    == Some("coperceive-cluster-scene-status-1") =>
-                {
-                    return Ok(document);
-                }
-                None => "The cluster returned an unexpected dataset status document.".to_string(),
-            },
-            Err(_) => "The cluster returned an unexpected dataset status document.".to_string(),
-        };
-        Err(coperceive_desktop::cluster_datasets::explain_failure(
-            &runner,
-            &entry.profile,
-            failure,
-        ))
+        coperceive_desktop::cluster_datasets::status_once(&runner, &entry.profile, &cache, false)
+            .map_err(|failure| {
+                coperceive_desktop::cluster_datasets::explain_failure(
+                    &runner,
+                    &entry.profile,
+                    failure,
+                )
+            })
     })
     .await
     .map_err(|error| format!("Dataset status could not finish: {error}"))?

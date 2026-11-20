@@ -373,6 +373,28 @@ served = json.load(open(f"{tmp}/one-served.json", encoding="utf-8"))
 assert served == ["scene_0000"], served
 PY
 
+# --- Flow R: "Prepare remaining" previews only the scenes not prepared yet -----
+# scene_0000 is ready (Flow B): the preview lists the other two, read from the
+# cache's `dataset status` at preview time, and nothing is submitted.
+run_flow remaining "[
+  {\"command\": \"dataset_prepare\", \"args\": {${DATASET_ARGS}, \"scenes\": \"remaining\"}}
+]"
+check remaining <<'PY'
+import json, sys
+result, ssh_log, tmp, raw = sys.argv[1:5]
+(step,) = json.load(open(result, encoding="utf-8"))["steps"]
+assert step["ok"], step
+preview = step["value"]
+assert (preview["cpus_per_task"], preview["array_tasks"], preview["throttle"]) == (1, 2, 2), preview
+assert "#SBATCH --array=0-1%2" in preview["script"], preview["script"]
+assert "SCENES=(scene_0001 scene_0002)" in preview["script"], preview["script"]
+log = open(ssh_log, encoding="utf-8").read().splitlines()
+# The ready scene is left out from the cache's status (the --live-claims flag is unit-tested).
+assert "dataset-status" in log, log
+assert not [line for line in log if line.startswith("sbatch")], log
+print("Step CD-R verified: Prepare remaining -> scene_0001 scene_0002")
+PY
+
 # --- Flow C: prepare all with default workers, status, open -------------------
 camera_query() {  # camera_query SCENE [extra json fields]: frame 0 of agent 641's camera0
     printf '{"scene": "%s", "time_us": 0, "agent_id": "641", "sensor_id": "camera0"%s}' "$1" "${2:-}"
