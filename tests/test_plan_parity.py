@@ -109,8 +109,11 @@ def _logical(text: str, tmp_path: Path, code_root: str | None = None) -> str:
     return text
 
 
-def _cli_script(case: dict[str, Any], tmp_path: Path) -> str:
-    """The CLI's script for ``case`` with every path mapped back to its logical one."""
+def _cli_script(case: dict[str, Any], tmp_path: Path, *, with_ckpt_root: bool = True) -> str:
+    """The CLI's script for ``case`` with every path mapped back to its logical one.
+
+    ``with_ckpt_root=False`` leaves out the required Griffin option, for the refusal test.
+    """
     root = _under(tmp_path, case["root"])
     root.parent.mkdir(parents=True, exist_ok=True)
     scenes, raw, out = _build_fixture(root)
@@ -136,6 +139,9 @@ def _cli_script(case: dict[str, Any], tmp_path: Path) -> str:
             shutil.copytree(GRIFFIN.parent, manifest.parent)
         patched = mock.patch.object(slurm, "coperceive_root", return_value=code)
     media = ["--media-root", str(raw)] if case.get("media_root", True) else []
+    ckpt_root = _under(tmp_path, case.get("ckpt_root", f"{case['root']}/ckpts"))
+    # Griffin's ckpt_root has no manifest default, so every case gives the worker one.
+    ckpt = ["--option", f"ckpt_root={ckpt_root}"]
     options = [word for extra in case.get("extras", []) for word in ("--option", extra)]
     args = [
         "model",
@@ -149,6 +155,7 @@ def _cli_script(case: dict[str, Any], tmp_path: Path) -> str:
         "--raw-root",
         str(raw),
         *media,
+        *(ckpt if with_ckpt_root else []),
         *options,
         "--out",
         str(out),
@@ -421,6 +428,17 @@ def test_the_app_and_the_cli_write_the_same_griffin_job(name: str, tmp_path: Pat
         for side, text in (("cli", cli), ("app", app)):
             done = subprocess.run(["bash", "-n", "-c", text], capture_output=True, text=True)
             assert done.returncode == 0, (name, side, done.stderr)
+
+
+def test_the_cli_refuses_a_missing_required_ckpt_root_before_writing_a_script(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Griffin's ckpt_root has no default. ``model run --slurm`` must stop at the option
+    check, name the parameter, and write no sbatch (no submission is ever reached)."""
+    with pytest.raises(SystemExit):
+        _cli_script(_case("base"), tmp_path, with_ckpt_root=False)
+    assert "ckpt_root" in capsys.readouterr().err
+    assert not list(tmp_path.rglob("*.sbatch"))
 
 
 @pytest.mark.parametrize(

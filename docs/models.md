@@ -175,6 +175,8 @@ The Griffin plugin (`coperceive-griffin-model`) wraps the four released Griffin-
 
 Each model also accepts `--option det_json=<path>` and `--option nusc_root=<dir>` to index an existing `results_nusc_det.json` without a GPU, which is what `coperceive model check` and login-node verification use.
 
+Every Griffin model declares the required parameter `ckpt_root`: the root folder of the released 25m checkpoints (the folder that holds `griffin_50scenes_25m/`). It has **no default**, because the released checkpoints live wherever your cluster keeps them. Pass it as `--option ckpt_root=<dir>`; without it `model run`/`model check` stop with a message naming `ckpt_root` before writing a script or starting a run. The worker receives it as `--ckpt-root`.
+
 ## Reproducing the Griffin numbers
 
 The four Griffin-25m camera-only Agile models can be reproduced and evaluated on an HPC cluster with Slurm and NVIDIA A40 GPUs using the `coperceive model run --slurm` commands below. The val split contains 10 scenes (1,490 frames).
@@ -189,6 +191,7 @@ coperceive model run griffin --model vehicle-side \
   --scenes /path/to/staged-scenes \
   --raw-root /path/to/griffin-release \
   --media-root /path/to/griffin-release \
+  --option ckpt_root=/path/to/griffin-ckpts \
   --out /path/to/predictions \
   --run-id griffin25m-vehicle-plugin \
   --slurm --submit
@@ -198,6 +201,7 @@ coperceive model run griffin --model drone-side \
   --scenes /path/to/staged-scenes \
   --raw-root /path/to/griffin-release \
   --media-root /path/to/griffin-release \
+  --option ckpt_root=/path/to/griffin-ckpts \
   --out /path/to/predictions \
   --run-id griffin25m-drone-plugin \
   --slurm --submit
@@ -207,6 +211,7 @@ coperceive model run griffin --model instance-fusion \
   --scenes /path/to/staged-scenes \
   --raw-root /path/to/griffin-release \
   --media-root /path/to/griffin-release \
+  --option ckpt_root=/path/to/griffin-ckpts \
   --out /path/to/predictions \
   --run-id griffin25m-instance-plugin \
   --slurm --submit
@@ -216,6 +221,7 @@ coperceive model run griffin --model early-fusion \
   --scenes /path/to/staged-scenes \
   --raw-root /path/to/griffin-release \
   --media-root /path/to/griffin-release \
+  --option ckpt_root=/path/to/griffin-ckpts \
   --out /path/to/predictions \
   --run-id griffin25m-early-plugin \
   --slurm --submit

@@ -1,5 +1,5 @@
 {
-  "about": "Plan parity (ADR 0018, ported to release/v0.1.1): one logical input set per case for the Griffin vehicle-side run. src-tauri/tests/plan_parity.rs renders the app's job script into app/<case>.sbatch; tests/test_plan_parity.py renders `coperceive model run --slurm` for the same inputs and compares the two whole scripts line by line against allowed_differences.json. Paths are logical: the CLI builds them under a temporary directory and maps it back. Each case's `python` is the interpreter that runs `model run` (the CLI's --slurm-python, and the interpreter both sides record environment.json with). Each case's `pyvenv_cfg` is the pyvenv.cfg of the venv that holds `python`, on this cluster's /software/python/<version> base: the CLI reads it locally (slurm.py interpreter_module), the app over the plan's read-only interpreter check, and both load that python module after module purge. Each case's `coperceive_root` and `samples` are what the run's python reports on the cluster (the app's read-only plan-python check): the root of the coperceive it imports (the job's PYTHONPATH; the CLI exports the root of the checkout that emitted the job, mapped to code_root) and the pose times of the fixture's 10 scenes x 149 poses, which the CLI counts locally for its --time estimate. A case may also give its own `code_root` (the manifest's folder and PYTHONPATH; the CLI copies the plugin there), `extras` (the model's options: the app's extras, the CLI's --option k=v) and `media_root: false` (no media root). A profile's `proxy_jump` and `port` are the SSH settings the app reaches the cluster with; plan_parity.rs checks they reach the SSH arguments and leave the script byte-identical. `refusals` are inputs the app refuses: plan_parity.rs holds the app to the exact `refused` message (`<stage>: <message>`) and tests/test_plan_parity.py checks that `model run --slurm` takes the same input; `why` and `cite` say why the difference stays.",
+  "about": "Plan parity (ADR 0018, ported to release/v0.1.1): one logical input set per case for the Griffin vehicle-side run. src-tauri/tests/plan_parity.rs renders the app's job script into app/<case>.sbatch; tests/test_plan_parity.py renders `coperceive model run --slurm` for the same inputs and compares the two whole scripts line by line against allowed_differences.json. Paths are logical: the CLI builds them under a temporary directory and maps it back. Each case's `python` is the interpreter that runs `model run` (the CLI's --slurm-python, and the interpreter both sides record environment.json with). Each case's `pyvenv_cfg` is the pyvenv.cfg of the venv that holds `python`, on this cluster's /software/python/<version> base: the CLI reads it locally (slurm.py interpreter_module), the app over the plan's read-only interpreter check, and both load that python module after module purge. Each case's `coperceive_root` and `samples` are what the run's python reports on the cluster (the app's read-only plan-python check): the root of the coperceive it imports (the job's PYTHONPATH; the CLI exports the root of the checkout that emitted the job, mapped to code_root) and the pose times of the fixture's 10 scenes x 149 poses, which the CLI counts locally for its --time estimate. A case may also give its own `code_root` (the manifest's folder and PYTHONPATH; the CLI copies the plugin there), `extras` (the model's options: the app's extras, the CLI's --option k=v), `ckpt_root` (Griffin's required released-checkpoints folder; default `<root>/ckpts`) and `media_root: false` (no media root). A profile's `proxy_jump` and `port` are the SSH settings the app reaches the cluster with; plan_parity.rs checks they reach the SSH arguments and leave the script byte-identical. `refusals` are inputs the app refuses: plan_parity.rs holds the app to the exact `refused` message (`<stage>: <message>`) and tests/test_plan_parity.py checks that `model run --slurm` takes the same input; `why` and `cite` say why the difference stays.",
   "run_id": "plan-1790000000-aabbccddeeff",
   "code_root": "/opt/coperceive",
   "model_list": "model_list.json",
@@ -32,6 +32,36 @@
       "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
       "coperceive_root": "/opt/coperceive",
       "samples": 1490
+    },
+    {
+      "name": "ckpt_root_custom",
+      "about": "The base case with the released checkpoints in their own folder (/data/griffin/checkpoints), not beside the raw root: both sides must pass --option ckpt_root=/data/griffin/checkpoints to model run, and the app's plan records that folder as ckpt_root.",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "profile": {
+        "partition": "gpu-a40",
+        "discovered_gpu_types": [
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [
+          "nvidia/cuda-11.8",
+          "nvidia/cuda-11.x_cudnn-8.6"
+        ],
+        "coperceive_command": [
+          "/opt/venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules"
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/opt/venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490,
+      "ckpt_root": "/data/griffin/checkpoints"
     },
     {
       "name": "mixed_partition",

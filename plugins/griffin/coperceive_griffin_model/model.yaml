@@ -61,6 +61,7 @@ models:
       frame_timeout_s: 3600        # the whole scene set runs at the first configure
       slurm_constraint: "a40"      # pinned to A40 for acceptance runs; "a40|a100" is valid for non-acceptance runs (sm_86/sm_80 SASS in torch 1.9.1+cu111)
     options:
+      ckpt_root: {type: str, description: "root of the released 25m checkpoints: the folder that holds griffin_50scenes_25m/<model>/iter_33024.pth; required, there is no site default"}
       subset: {type: str, default: "25m", choices: ["25m"], description: the released 25m checkpoints are the only ones pinned here}
       min_score: {type: float, default: 0.05, description: rows below this detection_score are dropped}
       det_json: {type: str, default: "", description: answer from this results_nusc_det.json instead of running the toolkit (no GPU)}
@@ -113,6 +114,7 @@ models:
       frame_timeout_s: 3600
       slurm_constraint: "a40"      # pinned to A40 for acceptance runs; "a40|a100" is valid for non-acceptance runs
     options:
+      ckpt_root: {type: str, description: "root of the released 25m checkpoints: the folder that holds griffin_50scenes_25m/<model>/iter_33024.pth; required, there is no site default"}
       subset: {type: str, default: "25m", choices: ["25m"]}
       min_score: {type: float, default: 0.05}
       det_json: {type: str, default: ""}
@@ -147,6 +149,7 @@ models:
       frame_timeout_s: 3600
       slurm_constraint: "a40"      # pinned to A40 for acceptance runs; "a40|a100" is valid for non-acceptance runs
     options:
+      ckpt_root: {type: str, description: "root of the released 25m checkpoints: the folder that holds griffin_50scenes_25m/<model>/iter_33024.pth; required, there is no site default"}
       subset: {type: str, default: "25m", choices: ["25m"]}
       min_score: {type: float, default: 0.05}
       det_json: {type: str, default: ""}
@@ -205,10 +208,11 @@ models:
       frame_timeout_s: 3600
       slurm_constraint: "a40"      # pinned to A40 for acceptance runs; "a40|a100" is valid for non-acceptance runs
     options:
+      ckpt_root: {type: str, description: "root of the released 25m checkpoints: the folder that holds griffin_50scenes_25m/<model>/iter_33024.pth; required, there is no site default"}
       subset: {type: str, default: "25m", choices: ["25m"]}
       min_score: {type: float, default: 0.05}
       det_json: {type: str, default: ""}
       nusc_root: {type: str, default: ""}
 commands:
-  batch: ["{python}", "{plugin_dir}/worker.py", "--model", "{model}"]
+  batch: ["{python}", "{plugin_dir}/worker.py", "--model", "{model}", "--ckpt-root", "{option:ckpt_root}"]
 notes: "toolkit commit 9c02ba4a, mmdet3d v0.17.1; conversion rules of scripts/griffin/griffin_to_predictions.py"

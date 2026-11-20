@@ -38,6 +38,7 @@ import {
   walltimeProblem,
   artifactFingerprintText,
   pipelineNeedsCheckpoint,
+  pipelineNeedsCkptRoot,
   pipelineNeedsSplit,
   planSummary,
   jobStateLabel,
@@ -172,6 +173,7 @@ export default function NewEvaluation() {
   const [model, setModel] = useState("vehicle-side");
   const [rawRoot, setRawRoot] = useState("");
   const [mediaRoot, setMediaRoot] = useState("");
+  const [ckptRoot, setCkptRoot] = useState("");
   const [overrideEnv, setOverrideEnv] = useState(false);
   const [environment, setEnvironment] = useState<EnvironmentSetup>(emptyEnvironmentOverride());
   const [plan, setPlan] = useState<RunPlan | null>(null);
@@ -195,6 +197,7 @@ export default function NewEvaluation() {
   // pipeline gets these fields when its registration declares the role; otherwise its
   // own typed arguments are the complete input set.
   const needsCheckpoint = pipelineNeedsCheckpoint(selectedPipeline, model);
+  const needsCkptRoot = pipelineNeedsCkptRoot(selectedPipeline, model);
   const needsSplit = pipelineNeedsSplit(selectedPipeline);
   const seeded = useRef(false);
   const stepArguments = (selectedPipeline?.spec.arguments ?? []).filter(
@@ -400,6 +403,12 @@ export default function NewEvaluation() {
         return;
       }
     }
+    if (needsCkptRoot && !ckptRoot.trim()) {
+      setError(
+        "Choose the ckpt_root parameter (the released checkpoints root) for this built-in model.",
+      );
+      return;
+    }
     setError("");
     setNote("");
     setBusy("check");
@@ -417,6 +426,7 @@ export default function NewEvaluation() {
         model: selectedPipeline.source === "builtin" ? model.trim() : "",
         raw_root: selectedPipeline.source === "builtin" ? rawRoot.trim() : "",
         media_root: selectedPipeline.source === "builtin" ? mediaRoot.trim() : "",
+        ckpt_root: selectedPipeline.source === "builtin" && needsCkptRoot ? ckptRoot.trim() : "",
         environment_override: overrideEnv ? environment : null,
       };
       const built = await buildRunPlan(selectedProfile.id, request);
@@ -495,6 +505,12 @@ export default function NewEvaluation() {
                     <dd className="c-mono">{model.trim() || "—"}</dd>
                     <dt>Raw root</dt>
                     <dd className="c-mono">{rawRoot.trim() || "—"}</dd>
+                    {needsCkptRoot ? (
+                      <>
+                        <dt>Checkpoint root</dt>
+                        <dd className="c-mono">{ckptRoot.trim() || "—"}</dd>
+                      </>
+                    ) : null}
                     <dt>Media root</dt>
                     <dd className="c-mono">{mediaRoot.trim() || "—"}</dd>
                   </>
@@ -631,6 +647,23 @@ export default function NewEvaluation() {
                             placeholder="/data/griffin-release"
                           />
                         </div>
+                        {needsCkptRoot ? (
+                          <div style={field}>
+                            <label style={labelStyle} htmlFor="plan-ckpt-root">
+                              Checkpoint root (ckpt_root)
+                            </label>
+                            <input
+                              id="plan-ckpt-root"
+                              className="c-path-input"
+                              value={ckptRoot}
+                              onChange={(event) => setCkptRoot(event.target.value)}
+                              placeholder="/data/griffin/ckpts"
+                            />
+                            <span className="c-step-note">
+                              Required: the released checkpoints folder. The model declares no default.
+                            </span>
+                          </div>
+                        ) : null}
                         <div style={field}>
                           <label style={labelStyle} htmlFor="plan-media">Media root</label>
                           <input

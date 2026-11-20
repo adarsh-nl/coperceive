@@ -11,11 +11,18 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 import yaml
 from coperceive.evaluation.predictions import read_boxes, read_run_meta
 from coperceive.models.batch import RunOptions, run_batch
 from coperceive.models.check import check_plugin
-from coperceive.models.spec import load_manifest
+from coperceive.models.spec import (
+    ModelSpecError,
+    check_options,
+    load_manifest,
+    render_argv,
+    select_model,
+)
 from coperceive.models.synthetic import synthetic_scene
 from coperceive.store import write_scene
 
@@ -63,8 +70,14 @@ def _test_manifest(tmp_path: Path) -> Path:
     return plugin / "model.yaml"
 
 
-def _options() -> dict[str, str]:
-    return {"det_json": str(FIXTURES / "results_nusc_det.json"), "nusc_root": str(FIXTURES)}
+def _options(tmp_path: Path) -> dict[str, str]:
+    return {
+        # The real manifest declares ckpt_root without a default: this copy overrides
+        # commands.batch with a stand-in folder, but check_options still needs the option.
+        "ckpt_root": str(tmp_path / "ckpts"),
+        "det_json": str(FIXTURES / "results_nusc_det.json"),
+        "nusc_root": str(FIXTURES),
+    }
 
 
 def test_check_with_det_json_fixture(tmp_path: Path) -> None:
@@ -75,7 +88,7 @@ def test_check_with_det_json_fixture(tmp_path: Path) -> None:
         keep=False,
         raw_root=None,
         parent_env=_env(),
-        options=_options(),
+        options=_options(tmp_path),
     )
     failed = [r for r in results if r.status == "fail"]
     assert failed == [], failed
@@ -96,7 +109,7 @@ def test_run_batch_with_det_json_reproduces_the_fixture(tmp_path: Path) -> None:
         scenes,
         out,
         "griffin-fixture",
-        RunOptions(model="vehicle-side", options=_options(), raw_root=tmp_path / "raw"),
+        RunOptions(model="vehicle-side", options=_options(tmp_path), raw_root=tmp_path / "raw"),
         created_utc=CREATED,
         parent_env=_env(),
     )
@@ -126,7 +139,7 @@ def test_run_batch_with_det_json_reproduces_the_fixture(tmp_path: Path) -> None:
         "griffin-fixture-strict",
         RunOptions(
             model="vehicle-side",
-            options={**_options(), "min_score": "0.5"},
+            options={**_options(tmp_path), "min_score": "0.5"},
             raw_root=tmp_path / "raw",
         ),
         created_utc=CREATED,
@@ -149,7 +162,7 @@ def test_instance_fusion_in_det_json_mode_needs_no_dependency_artifact(tmp_path:
         keep=False,
         raw_root=None,
         parent_env=_env(),
-        options=_options(),
+        options=_options(tmp_path),
     )
     assert [r for r in results if r.status == "fail"] == []
     scenes = tmp_path / "scenes"
@@ -165,7 +178,7 @@ def test_instance_fusion_in_det_json_mode_needs_no_dependency_artifact(tmp_path:
         "griffin-instance-fixture",
         RunOptions(
             model="instance-fusion",
-            options=_options(),
+            options=_options(tmp_path),
             raw_root=tmp_path / "raw",
             artifacts_dir=stand_in,
         ),
@@ -194,7 +207,7 @@ def test_early_fusion_in_det_json_mode_writes_fused_vehicle_rows(tmp_path: Path)
         keep=False,
         raw_root=None,
         parent_env=_env(),
-        options=_options(),
+        options=_options(tmp_path),
     )
     assert [r for r in results if r.status == "fail"] == []
     scenes = tmp_path / "scenes"
@@ -205,7 +218,7 @@ def test_early_fusion_in_det_json_mode_writes_fused_vehicle_rows(tmp_path: Path)
         scenes,
         out,
         "griffin-early-fixture",
-        RunOptions(model="early-fusion", options=_options(), raw_root=tmp_path / "raw"),
+        RunOptions(model="early-fusion", options=_options(tmp_path), raw_root=tmp_path / "raw"),
         created_utc=CREATED,
         parent_env=_env(),
     )
@@ -216,3 +229,47 @@ def test_early_fusion_in_det_json_mode_writes_fused_vehicle_rows(tmp_path: Path)
     meta = read_run_meta(out, "griffin-early-fixture")
     assert meta.model == "griffin early-fusion 0.1.0"
     assert meta.provenance is not None and meta.provenance["dependencies"] == {}
+
+
+# -- the required ckpt_root parameter --------------------------------------------------------
+
+
+def test_the_manifest_declares_ckpt_root_with_no_default_and_the_worker_gets_it() -> None:
+    manifest = load_manifest(PLUGIN / "model.yaml")
+    assert manifest.name == "griffin"
+    for spec in manifest.models.values():
+        option = spec.options["ckpt_root"]
+        assert option.type == "str"
+        assert option.default is None, "a default would be a guessed site path"
+        assert option.required is True
+    # The value reaches the worker through the manifest's own batch command; there is no
+    # site path in the plugin to fall back to.
+    assert "{option:ckpt_root}" in " ".join(manifest.commands.batch)
+    argv = render_argv(
+        manifest,
+        "batch",
+        python=Path("/usr/bin/python3"),
+        plugin_dir=PLUGIN,
+        work_dir=Path("/tmp/work"),
+        model="vehicle-side",
+        options={"ckpt_root": "/data/griffin/ckpts"},
+    )
+    assert argv[argv.index("--ckpt-root") + 1] == "/data/griffin/ckpts"
+
+
+def test_a_missing_ckpt_root_is_refused_by_name_before_anything_runs() -> None:
+    spec = select_model(load_manifest(PLUGIN / "model.yaml"), "vehicle-side")
+    with pytest.raises(ModelSpecError, match=r"needs --option ckpt_root=VALUE"):
+        check_options(spec, {"det_json": str(FIXTURES / "results_nusc_det.json")})
+    with pytest.raises(ModelSpecError, match=r"needs --option ckpt_root=VALUE"):
+        check_options(spec, {"ckpt_root": ""})
+    given = check_options(spec, {"ckpt_root": "/data/griffin/ckpts"})
+    assert given["ckpt_root"] == "/data/griffin/ckpts"
+
+
+def test_the_plugin_carries_no_site_specific_checkpoint_path() -> None:
+    # The removed default named one university's cluster. Keep it out of the shipped
+    # manifest and worker; this test is the one place the string may still appear.
+    forbidden = "eemcs/ps/cv/huggingface"
+    for name in ("model.yaml", "worker.py"):
+        assert forbidden not in (PLUGIN / name).read_text(encoding="utf-8"), name

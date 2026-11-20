@@ -32,6 +32,7 @@ Accepted cases:
 | `proxy_jump_modules` | A modules profile reached through a jump host on port 2222, on a CPU partition, data and results under `/data`, with `--option min_score=0.05`. |
 | `spaces_and_quotes` | Scenes, raw root and media root under `te st/it's "q"`, and a code root with a space. |
 | `no_media_root` | The base case with no media root. The CLI's `--media-root` is optional, so the app accepts it too and both scripts leave the flag out entirely. |
+| `ckpt_root_custom` | The base case with the released checkpoints in `/data/griffin/checkpoints`: both `model run` lines pass `--option ckpt_root=...`, and the manifest's `commands.batch` gives the worker `--ckpt-root`. |
 
 Refusals (`refusals` in `cases.json`) are inputs the app refuses. Each carries the exact message, a reason and a citation:
 
@@ -40,6 +41,7 @@ Refusals (`refusals` in `cases.json`) are inputs the app refuses. Each carries t
 | `results_root_with_space` | `#170`'s message: a results folder with a space, a `#` or a quote is refused. | Takes it. The CLI writes no results folder into an `#SBATCH` line, and refuses a `--slurm-logs` folder with a space for the same reason. |
 
 The PM decided on 2026-11-20 that the CLI is the reference here too: a built-in plan needs the model and the raw root, and the media root is optional. The app's "predates this schema" check therefore uses `work_dir`, which was added in the same commit as the model/raw/media fields (`9b4d9a0`) and is recorded by every built-in plan saved since then; an empty media root is a valid new plan and no longer identifies an old one.
+
 
 **`src-tauri/tests/plan_parity.rs`** renders the app's side:
 

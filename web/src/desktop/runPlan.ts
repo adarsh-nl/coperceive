@@ -78,6 +78,8 @@ export interface RunPlanRequest {
   model: string;
   raw_root: string;
   media_root: string;
+  /** A model parameter the plan records as a path (Griffin's required ckpt_root). */
+  ckpt_root: string;
   environment_override: EnvironmentSetup | null;
 }
 
@@ -124,6 +126,10 @@ export interface RunPlan {
   model: string;
   raw_root: PlanArtifact;
   media_root: PlanArtifact;
+  /** The model's ckpt_root parameter; empty for a model that declares none. */
+  ckpt_root: PlanArtifact;
+  /** The --option keys the model's manifest declared when the plan was saved. */
+  model_options?: string[];
   work_dir: string;
   staging_seconds: number | null;
   output_dir: string;
@@ -239,6 +245,16 @@ export function pipelineNeedsCheckpoint(entry: PipelineEntry | null, model: stri
     return entry.builtin?.models[model.trim()]?.options.includes("checkpoint") ?? false;
   }
   return entry.spec.arguments.some((argument) => argument.role === "checkpoint");
+}
+
+/**
+ * Whether a built-in model declares the required ckpt_root parameter (Griffin's released
+ * checkpoints folder). Like the checkpoint rule, the cluster's model list is the authority:
+ * a model the listing does not know gets no field, and the plan check names the reason.
+ */
+export function pipelineNeedsCkptRoot(entry: PipelineEntry | null, model: string): boolean {
+  if (!entry || entry.source !== "builtin") return false;
+  return entry.builtin?.models[model.trim()]?.options.includes("ckpt_root") ?? false;
 }
 
 /** A built-in model always runs over its scenes; a custom pipeline when it declares one. */
