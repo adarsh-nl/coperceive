@@ -69,7 +69,19 @@ if [ -n "${STDIN_DATA}" ]; then
                 DIFF_FILES="$(git diff --name-only "${local_oid}~1" "${local_oid}" 2>/dev/null || true)"
             fi
         else
-            DIFF_FILES="$(git diff --name-only "${remote_oid}" "${local_oid}" 2>/dev/null || true)"
+            # Existing branch: check what the branch itself changes, relative to
+            # the integration branch it sits on. Diffing the old remote head
+            # against the new head would, after a rebase or a merge of the
+            # release branch, count every file the release branch changed as
+            # this branch's change (e.g. src-tauri/ for a docs-only branch).
+            # For a push to the integration branch itself the merge-base is the
+            # remote head, so this is the same as the plain remote..local diff.
+            MERGE_BASE="$(closest_merge_base "${local_oid}")"
+            if [ -n "${MERGE_BASE}" ]; then
+                DIFF_FILES="$(git diff --name-only "${MERGE_BASE}" "${local_oid}" 2>/dev/null || true)"
+            else
+                DIFF_FILES="$(git diff --name-only "${remote_oid}" "${local_oid}" 2>/dev/null || true)"
+            fi
         fi
         CHANGED_FILES="${CHANGED_FILES}"$'\n'"${DIFF_FILES}"
     done <<< "${STDIN_DATA}"
@@ -105,6 +117,12 @@ done
 
 # Clean up empty lines and deduplicate
 FILES="$(echo "${CHANGED_FILES}" | sed '/^[[:space:]]*$/d' | sort -u || true)"
+
+# Test hook: print the files the checks would run on, and stop.
+if [ "${COPERCEIVE_PREPUSH_LIST_FILES:-}" = "1" ]; then
+    printf '%s\n' "${FILES}"
+    exit 0
+fi
 
 if [ -z "${FILES}" ]; then
     echo "[pre-push] No changed files detected. Push allowed."
