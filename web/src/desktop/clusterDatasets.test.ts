@@ -186,7 +186,7 @@ test("datasetDetect and datasetIndex provide typed cluster contract shapes", asy
 
 test("datasetStatus tracks scene status states plainly", async () => {
   _resetStubStore();
-  const ds = { adapter: "opv2v", rawRoot: "/datasets/opv2v", split: "test" };
+  const ds = { adapter: "opv2v", rawRoot: "/datasets/opv2v", split: "test", cacheRelative: "coperceive-cache/opv2v/3b1e2f0a9c77/test" };
 
   // Initially empty
   const initialStatus = await datasetStatus("profile-1", ds);
@@ -245,7 +245,7 @@ test("datasetPrepareSubmit requires a valid preview hash and confirmation", asyn
 });
 
 test("opening a ready scene completes with contract return shape", async () => {
-  const ds = { adapter: "opv2v", rawRoot: "/datasets/opv2v", split: "test" };
+  const ds = { adapter: "opv2v", rawRoot: "/datasets/opv2v", split: "test", cacheRelative: "coperceive-cache/opv2v/3b1e2f0a9c77/test" };
   const openRes = await datasetOpen("profile-1", "scene_0001", ds);
   assert.strictEqual(openRes.target_type, "remote");
   assert.ok(openRes.origin.length > 0);
@@ -296,6 +296,7 @@ test("in Tauri mode, a rejected invoke throws an error and returns no job id (no
           adapter: "opv2v",
           rawRoot: "/datasets/opv2v",
           split: "test",
+          cacheRelative: "coperceive-cache/opv2v/3b1e2f0a9c77/test",
         });
       },
       {
@@ -311,6 +312,7 @@ test("in Tauri mode, a rejected invoke throws an error and returns no job id (no
           adapter: "opv2v",
           rawRoot: "/datasets/opv2v",
           split: "test",
+          cacheRelative: "coperceive-cache/opv2v/3b1e2f0a9c77/test",
         });
       },
       {
@@ -691,5 +693,39 @@ test("the browser-test index mock keeps the requested null split, so the cache k
     assert.deepStrictEqual(opv2v.params, { split: "test" });
   } finally {
     globals.window = previous;
+  }
+});
+
+test("status and open send the index's cache path, never one the app computed", async () => {
+  (globalThis as unknown as { window?: { __TAURI_INTERNALS__?: unknown } }).window = {
+    __TAURI_INTERNALS__: {},
+  };
+  const sent: Array<{ cmd: string; args: unknown }> = [];
+  _setInvokeForTesting(async (cmd, args) => {
+    sent.push({ cmd, args });
+    if (cmd === "dataset_status") {
+      return { schema: "coperceive-cluster-scene-status-1", scenes: [] } as never;
+    }
+    return { target_type: "remote", origin: "http://127.0.0.1:1", token: "t" } as never;
+  });
+  try {
+    const params = {
+      adapter: "opv2v",
+      rawRoot: "/data/opv2v/",
+      split: "test",
+      cacheRelative: "coperceive-cache/opv2v/3b1e2f0a9c77/test",
+    };
+    await datasetStatus("profile-1", params);
+    await datasetOpen("profile-1", "scene_0001", params);
+    assert.deepStrictEqual(
+      sent.map(({ cmd, args }) => [cmd, (args as { cacheRelative?: string }).cacheRelative]),
+      [
+        ["dataset_status", "coperceive-cache/opv2v/3b1e2f0a9c77/test"],
+        ["dataset_open", "coperceive-cache/opv2v/3b1e2f0a9c77/test"],
+      ],
+    );
+  } finally {
+    _setInvokeForTesting(null);
+    delete (globalThis as unknown as { window?: unknown }).window;
   }
 });

@@ -422,6 +422,35 @@ def test_status_marks_ready_scenes_stale_when_the_raw_files_change(tmp_path: Pat
     assert dataset_status_document(cache)["scenes"][0]["state"] == "ready"
 
 
+def test_dataset_prepare_exits_2_only_for_its_own_failed_scenes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An array task's exit code reports its own scene, not another task's failure."""
+    from coperceive import cli
+
+    raw = _opv2v(tmp_path / "opv2v")
+    (raw / "test" / "scene_0002" / "641" / "000069.yaml").write_text(
+        "not: [valid", encoding="utf-8"
+    )
+    cache = _cache(tmp_path, raw)
+    argv = ["dataset", "prepare", "--adapter", "opv2v", "--raw-root", str(raw / "test")]
+    argv += ["--cache", str(cache)]
+
+    # The task for scene_0002 fails, and says so.
+    with pytest.raises(SystemExit) as failed:
+        cli.main([*argv, "--scenes", "scene_0002"])
+    assert failed.value.code == 2
+    # The task for scene_0001 succeeds while scene_0002 stays failed in the cache.
+    cli.main([*argv, "--scenes", "scene_0001"])
+    capsys.readouterr()
+    states = {s["scene_id"]: s["state"] for s in dataset_status_document(cache)["scenes"]}
+    assert states == {"scene_0001": "ready", "scene_0002": "failed"}
+    # A run over every scene includes scene_0002 again, so it fails.
+    with pytest.raises(SystemExit) as every:
+        cli.main([*argv, "--all"])
+    assert every.value.code == 2
+
+
 def test_cache_inside_the_raw_root_is_refused(tmp_path: Path) -> None:
     raw = _opv2v(tmp_path / "opv2v")
     with pytest.raises(DatasetError, match="must not be inside"):

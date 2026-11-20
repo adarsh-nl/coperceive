@@ -405,11 +405,15 @@ export default function DatasetView({
 
   const fetchStatus = async () => {
     if (initialStatuses) return;
+    // The cache split is the one the index named; without an index there is nothing to read yet.
+    const cacheRelative = indexRef.current?.cache?.relative_path;
+    if (!cacheRelative) return;
     try {
       const statusDoc = await datasetStatus(profile.id, {
         adapter: dataset.adapter || "opv2v",
         rawRoot: dataset.raw_root || dataset.path,
         split: dataset.split,
+        cacheRelative,
       });
       if (statusDoc.cache_root) {
         setServerCacheRoot(statusDoc.cache_root);
@@ -533,10 +537,16 @@ export default function DatasetView({
     }, 5000);
   };
 
+  // Status is read once the index (cached or fresh) names the cache split, and again if it
+  // names another one.
+  const cacheRelative = indexDoc?.cache?.relative_path ?? null;
   useEffect(() => {
-    if (!initialStatuses) {
+    if (!initialStatuses && cacheRelative) {
       void fetchStatus();
     }
+  }, [cacheRelative]);
+
+  useEffect(() => {
     return () => {
       if (pollTimerRef.current) {
         clearInterval(pollTimerRef.current);
@@ -562,10 +572,13 @@ export default function DatasetView({
     setOpenError(null);
     setViewerStart(sceneId);
     try {
+      const cacheRelative = indexRef.current?.cache?.relative_path;
+      if (!cacheRelative) throw new Error("The scene list is still loading. Try again in a moment.");
       await datasetOpen(profile.id, sceneId, {
         adapter: dataset.adapter || "opv2v",
         rawRoot: dataset.raw_root || dataset.path,
         split: dataset.split,
+        cacheRelative,
       });
       if (indexDoc && !initialStatuses) {
         await shareDatasetScenesWithViewer(

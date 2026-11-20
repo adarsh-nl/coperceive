@@ -20,7 +20,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use sha1::{Digest, Sha1};
 
 use crate::hpc::{coperceive_argv, is_under, normalise_path, validate_results_root, ServerProfile};
 use crate::job_submit::{job_scratch_dir, parse_job_id, safe_job_name};
@@ -199,17 +198,6 @@ pub fn estimate_seconds(
     (total.round() as u64, note)
 }
 
-pub fn cache_slug(adapter: &str, raw_root: &str, split: Option<&str>) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(raw_root.as_bytes());
-    let digest = hasher.finalize();
-    let short: String = digest.iter().take(6).map(|byte| format!("{byte:02x}")).collect();
-    format!(
-        "coperceive-cache/{adapter}/{short}/{}",
-        split.unwrap_or("all")
-    )
-}
-
 fn preview_hash(script: &str) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     script.hash(&mut hasher);
@@ -347,10 +335,7 @@ pub fn render_prepare_script_with_estimate(
         .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_WALLTIME.to_string());
-    let job_name = format!(
-        "coperceive-dataset-{}",
-        cache_relative.rsplit('/').next().unwrap_or("prepare")
-    );
+    let job_name = prepare_job_name(cache_relative);
     sbatch_value("job name", &job_name)?;
     sbatch_value("partition", partition)?;
     sbatch_value("walltime", &walltime)?;
@@ -496,18 +481,46 @@ pub fn submit_prepared(
     }))
 }
 
-pub fn cache_absolute(
+/// The prepare job's Slurm name: `coperceive-dataset-<hash>-<split>` from the
+/// cache path, so two datasets with a `test` split never share a name (the job
+/// watch checks a job by its name and user).
+pub fn prepare_job_name(cache_relative: &str) -> String {
+    let mut parts = cache_relative.trim_end_matches('/').rsplit('/');
+    let split = parts.next().filter(|part| !part.is_empty()).unwrap_or("all");
+    match parts.next().filter(|part| !part.is_empty()) {
+        Some(hash) => format!("coperceive-dataset-{hash}-{split}"),
+        None => format!("coperceive-dataset-{split}"),
+    }
+}
+
+/// `<results_root>/<cache.relative_path>`: the cache split directory the
+/// dataset index named. The app never builds the path itself. Only the
+/// server's coperceive knows the raw root's real path, which the hash is
+/// taken from. The path must be `coperceive-cache/<adapter>/<12 hex>/<split>`
+/// for this adapter and split (`all` without one).
+pub fn cache_dir(
     profile: &ServerProfile,
     adapter: &str,
-    raw_root: &str,
     split: Option<&str>,
+    cache_relative: &str,
 ) -> Result<String, String> {
+    let split = split.map(str::trim).filter(|split| !split.is_empty()).unwrap_or("all");
+    let parts: Vec<&str> = cache_relative.split('/').collect();
+    let valid = matches!(
+        parts.as_slice(),
+        ["coperceive-cache", a, hash, s]
+            if *a == adapter
+                && *s == split
+                && hash.len() == 12
+                && hash.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+    );
+    if !valid {
+        return Err(
+            "The dataset index named an unexpected cache path. Index the dataset again.".to_string(),
+        );
+    }
     let results = normalise_path(&profile.results_root, "results_root")?;
-    Ok(format!(
-        "{}/{}",
-        results.trim_end_matches('/'),
-        cache_slug(adapter, raw_root, split)
-    ))
+    Ok(format!("{}/{}", results.trim_end_matches('/'), cache_relative))
 }
 
 #[cfg(test)]
@@ -536,6 +549,61 @@ mod tests {
 
     fn scenes(ids: &[&str]) -> Vec<String> {
         ids.iter().map(|id| id.to_string()).collect()
+    }
+
+    #[test]
+    fn the_prepare_job_name_is_unique_per_dataset_split() {
+        let entry = entry();
+        let one = render_prepare_script(
+            &entry.profile,
+            &request(),
+            &scenes(&["scene_0001"]),
+            "coperceive-cache/opv2v/3b1e2f0a9c77/test",
+            1,
+            2,
+        )
+        .expect("preview");
+        assert_eq!(one.job_name, "coperceive-dataset-3b1e2f0a9c77-test");
+        assert!(one.script.contains("\n#SBATCH --job-name=coperceive-dataset-3b1e2f0a9c77-test\n"));
+        // Another raw root with a `test` split gets another name (it used to be
+        // `coperceive-dataset-test` for both).
+        let other = render_prepare_script(
+            &entry.profile,
+            &request(),
+            &scenes(&["scene_0001"]),
+            "coperceive-cache/opv2v/0f0f0f0f0f0f/test",
+            1,
+            2,
+        )
+        .expect("preview");
+        assert_ne!(one.job_name, other.job_name);
+        assert_eq!(prepare_job_name("coperceive-cache/griffin/aaaaaaaaaaaa/all"), "coperceive-dataset-aaaaaaaaaaaa-all");
+        assert_eq!(prepare_job_name("test"), "coperceive-dataset-test");
+    }
+
+    #[test]
+    fn the_cache_dir_is_the_index_path_under_the_results_root() {
+        let profile = entry().profile;
+        let dir = cache_dir(&profile, "opv2v", Some("test"), "coperceive-cache/opv2v/3b1e2f0a9c77/test")
+            .expect("cache dir");
+        assert_eq!(dir, "/data/results/coperceive-cache/opv2v/3b1e2f0a9c77/test");
+        assert_eq!(
+            cache_dir(&profile, "griffin", None, "coperceive-cache/griffin/3b1e2f0a9c77/all").expect("no split"),
+            "/data/results/coperceive-cache/griffin/3b1e2f0a9c77/all"
+        );
+        for bad in [
+            "coperceive-cache/opv2v/3b1e2f0a9c77/train",
+            "coperceive-cache/v2xset/3b1e2f0a9c77/test",
+            "coperceive-cache/opv2v/3B1E2F0A9C77/test",
+            "coperceive-cache/opv2v/abc123/test",
+            "coperceive-cache/opv2v/../../../etc",
+            "coperceive-cache/opv2v/3b1e2f0a9c77/test/..",
+            "/abs/coperceive-cache/opv2v/3b1e2f0a9c77/test",
+            "other/opv2v/3b1e2f0a9c77/test",
+            "",
+        ] {
+            assert!(cache_dir(&profile, "opv2v", Some("test"), bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
