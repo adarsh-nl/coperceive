@@ -48,7 +48,12 @@ from coperceive.models.protocol import (
     Result,
     to_prediction_box,
 )
-from coperceive.models.runner import PluginProcess, RunnerError, RunnerTimeout
+from coperceive.models.runner import (
+    PluginProcess,
+    RunnerError,
+    RunnerTimeout,
+    check_plugin_python,
+)
 from coperceive.models.spec import (
     Manifest,
     ModelSpec,
@@ -93,6 +98,8 @@ class RunOptions:
     force: bool = False
     staging_seconds: float | None = None  # the rsync wall time, measured by the Slurm job
     perturbation: PerturbationSpec | None = None
+    # ``--plugin-python``: the plugin's interpreter, replacing the manifest's environment.
+    plugin_python: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -227,8 +234,9 @@ def provenance_json(
     checkpoint: CheckpointInfo | None = None,
     gpu: str | None = None,
     perturbation: Mapping[str, object] | None = None,
+    plugin_python: Path | None = None,
 ) -> dict[str, object]:
-    """Every key of spec §Provenance."""
+    """Every key of spec §Provenance (``plugin_python`` only when it was given)."""
     body: dict[str, object] = {
         "checkpoint": checkpoint.as_json() if checkpoint is not None else None,
         "plugin": manifest.name,
@@ -257,6 +265,8 @@ def provenance_json(
     }
     if perturbation is not None:
         body["perturbation"] = dict(perturbation)
+    if plugin_python is not None:
+        body["plugin_python"] = str(plugin_python)
     return body
 
 
@@ -390,6 +400,11 @@ def run_batch(
         raise BatchError(f"model {spec.key} needs --raw-root for its raw inputs")
     if manifest.source is None:
         raise BatchError("the manifest must come from a file")
+    if options.plugin_python is not None:
+        try:
+            check_plugin_python(options.plugin_python)
+        except ModelSpecError as exc:
+            raise BatchError(str(exc)) from None
     digest = manifest_sha256(manifest)
     plugin_dir = manifest.source.parent
     work_dir = options.work_dir or (out_root / ".work" / run_id)
@@ -456,6 +471,7 @@ def run_batch(
             timings=_timings(wall, frames, reported, options.staging_seconds),
             parent_env=env,
             perturbation=None if options.perturbation is None else options.perturbation.to_json(),
+            plugin_python=options.plugin_python,
         )
         return run_meta_for(
             manifest, spec, run_id=run_id, created_utc=created_utc, provenance=provenance
@@ -511,6 +527,7 @@ def run_batch(
                     parent_env=env,
                     hello_timeout_s=frame_timeout,
                     options=effective,
+                    python_override=options.plugin_python,
                 )
                 environment = child.hello.environment
                 git_commit = child.hello.git_commit
@@ -721,6 +738,8 @@ def _run_dependency(
         cache=options.cache and not fresh,
         work_dir=work_dir,
         force=options.force or fresh,
+        # The same plugin, so the same interpreter.
+        plugin_python=options.plugin_python,
     )
     report = run_batch(
         manifest,
