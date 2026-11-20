@@ -27,6 +27,7 @@ import {
   type ServerEntry,
 } from "./hpc";
 import {
+  builtinPlanInputProblem,
   collectValues,
   emptyEnvironmentOverride,
   environmentSummary,
@@ -392,12 +393,12 @@ export default function NewEvaluation() {
       );
       return;
     }
-    if (
-      selectedPipeline.source === "builtin" &&
-      (!model.trim() || !rawRoot.trim() || !mediaRoot.trim())
-    ) {
-      setError("Choose the model key, raw root and media root for this built-in model.");
-      return;
+    if (selectedPipeline.source === "builtin") {
+      const inputProblem = builtinPlanInputProblem({ model, rawRoot, mediaRoot });
+      if (inputProblem) {
+        setError(inputProblem);
+        return;
+      }
     }
     setError("");
     setNote("");
@@ -639,6 +640,9 @@ export default function NewEvaluation() {
                             onChange={(event) => setMediaRoot(event.target.value)}
                             placeholder="/data/griffin-release"
                           />
+                          <span className="c-step-note">
+                            Optional: leave it empty and the job passes no --media-root, as the CLI does.
+                          </span>
                         </div>
                       </>
                     ) : null}
