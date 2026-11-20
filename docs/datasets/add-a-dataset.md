@@ -145,7 +145,10 @@ Reading it top to bottom:
 - `poses` is one CSV table per agent, keyed by `sample_field`. One record per
   sample (`json_record`, `yaml_record`) is the other shape. A quaternion names
   its field order; Euler angles are always `[about_x, about_y, about_z]` and
-  `order` says how they compose.
+  `order` says how they compose. `signs: [sx, sy, sz]` (each `1` or `-1`, default
+  all `1`) multiplies each angle first, for a source whose rotation negates some
+  of its angles: CARLA and OpenCOOD build `Rz(yaw) Ry(-pitch) Rx(-roll)`, so the
+  OPV2V and V2XSet manifests say `signs: [-1, -1, 1]` (conventions OPV-6).
 - `sensors` reads one calibration file per sensor. The extrinsic is a 4×4
   matrix (`matrix: {field: extrinsic, shape: 4x4}`) or a translation plus a
   rotation. `direction` says which way the matrix goes. The first matching
