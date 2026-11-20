@@ -299,6 +299,19 @@ def test_each_row_action_calls_its_backend_command(visual_browser: Browser, app_
                 "() => window.__INVOKES__.some((c) => c.cmd === 'dataset_prepare_submit')"
             )
             page.locator("button", has_text="Cancel").last.click()
+
+        # The whole-dataset button, with scenes already known to the cache: it asks for the
+        # remaining scenes only (resolved by the app), never "all" again.
+        page.evaluate("() => { window.__INVOKES__ = []; }")
+        page.locator("button.dv-prepare").click()
+        page.wait_for_function("() => window.__INVOKES__.some((c) => c.cmd === 'dataset_prepare')")
+        whole = page.evaluate(
+            "() => window.__INVOKES__.find((c) => c.cmd === 'dataset_prepare').args"
+        )
+        assert whole["scenes"] == "remaining", whole
+        assert not page.evaluate(
+            "() => window.__INVOKES__.some((c) => c.cmd === 'dataset_prepare_submit')"
+        )
     finally:
         context.close()
 

@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::hpc::{coperceive_argv, ServerProfile};
+use crate::hpc::{coperceive_argv, normalise_path, ServerProfile};
 use crate::slurm_adapter::RemoteRunner;
 use crate::ssh::{quote_remote_argv, shell_quote};
 
@@ -389,17 +389,23 @@ pub fn remaining_scene_ids(index: &Value, status: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Read the cache's status for "Prepare remaining" and pick its scenes. An
-/// older coperceive refuses `--live-claims`; then the plain status is read.
+/// Read the cache's status for "Prepare remaining" and pick its scenes. The
+/// cache is the split the index named (`cache.relative_path`), where the
+/// prepare job writes. An older coperceive refuses `--live-claims`; then the
+/// plain status is read.
 pub fn remaining_scenes(
     runner: &dyn RemoteRunner,
     profile: &ServerProfile,
-    cache: &str,
+    cache_relative: &str,
     index: &Value,
 ) -> Result<Vec<String>, String> {
-    let status = match status_once(runner, profile, cache, true) {
+    let cache = normalise_path(
+        &format!("{}/{}", profile.results_root.trim_end_matches('/'), cache_relative),
+        "cache root",
+    )?;
+    let status = match status_once(runner, profile, &cache, true) {
         Ok(document) => document,
-        Err(_) => status_once(runner, profile, cache, false)?,
+        Err(_) => status_once(runner, profile, &cache, false)?,
     };
     Ok(remaining_scene_ids(index, &status))
 }
@@ -734,13 +740,13 @@ mod tests {
             rules: vec![("--live-claims", true, status)],
         };
         let remaining =
-            remaining_scenes(&runner, &profile(), "/r/coperceive-cache/opv2v/h/test", &six_scene_index())
+            remaining_scenes(&runner, &profile(), "coperceive-cache/opv2v/h/test", &six_scene_index())
                 .expect("remaining");
         assert_eq!(remaining, ["s1", "s2", "s4", "s5"]);
         let calls = runner.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1, "{calls:?}");
         assert!(
-            calls[0].contains("dataset status --cache /r/coperceive-cache/opv2v/h/test --live-claims"),
+            calls[0].contains("dataset status --cache /data/results/coperceive-cache/opv2v/h/test --live-claims"),
             "{calls:?}"
         );
 
@@ -753,7 +759,8 @@ mod tests {
             ],
         };
         let remaining =
-            remaining_scenes(&old, &profile(), "/r/c", &six_scene_index()).expect("fallback");
+            remaining_scenes(&old, &profile(), "coperceive-cache/opv2v/h/test", &six_scene_index())
+                .expect("fallback");
         assert_eq!(remaining, ["s1", "s2", "s5"]);
         assert_eq!(old.calls.lock().unwrap().len(), 2);
     }
