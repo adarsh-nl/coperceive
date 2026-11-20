@@ -32,6 +32,7 @@ import {
   _setInvokeForTesting,
   type ClusterDetectDocument,
   type ClusterIndexDocument,
+  wholeDatasetScenes,
 } from "./clusterDatasets.ts";
 
 test("formatDetectBannerTitle formats adapter, split, and scene count plainly", () => {
@@ -692,4 +693,13 @@ test("the browser-test index mock keeps the requested null split, so the cache k
   } finally {
     globals.window = previous;
   }
+});
+
+test("the whole-dataset button asks for the remaining scenes once a status is known", () => {
+  // No cache yet (no status): every indexed scene.
+  assert.equal(wholeDatasetScenes(0), "all");
+  // The cache knows the split: the app resolves the not prepared, failed and stale scenes,
+  // minus live claims, so ready scenes are never submitted again.
+  assert.equal(wholeDatasetScenes(1), "remaining");
+  assert.equal(wholeDatasetScenes(1500), "remaining");
 });
