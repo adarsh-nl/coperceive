@@ -4,6 +4,26 @@ The short pages are [OPV2V](opv2v.md) and [V2XSet](v2xset.md).
 
 Two CARLA-based cooperative perception datasets with the same on-disk layout, read through the builtin manifests `opv2v` and `v2xset` (`coperceive/adapters/builtin/`). The manifest rules they needed beyond Griffin's are [ADR 0012](../adr/0012-left-handed-sources.md). Nothing in this page or in the repository holds dataset bytes.
 
+## Licence, citation and download
+
+### OPV2V
+
+**Licence.** See [Licence: unknown](#licence-unknown) below for data uncertainty, software terms, copyright and project restrictions.
+
+**Citation.** Use the canonical arXiv entry on the [OPV2V page](opv2v.md#citation).
+
+**Download.** [Authors UCLA Box data host](https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V).
+
+### V2XSet
+
+**Licence.** See [Licence: unknown](#licence-unknown) below for data uncertainty, software terms, copyright and project restrictions.
+
+**Citation.** Use the canonical arXiv entry on the [V2XSet page](v2xset.md#citation).
+
+**Download.** [Authors UCLA Box data host](https://ucla.app.box.com/v/UCLA-MobilityLab-V2XVIT).
+
+Upstream asset terms have not been checked.
+
 ## Licence: unknown
 
 Neither dataset publishes a licence. The OPV2V page states "Copyright © 2021 UCLA Mobility Lab. All Rights Reserved."; the OpenCOOD and v2x-vit code repositories are MIT and say nothing about the data; the V2X-ViT paper states no terms. Both manifests carry `licence: {status: unknown, ...}` with the links, and `coperceive adapters check` prints it. Rule in this project (2026-10-18): local viewing and evaluation on the HPC for research is fine; no frames, crops, screenshots or derived scene files from either dataset enter the public repository; test fixtures are synthetic (`tests/opencood_release.py`); Playwright screenshots stay under `~/results/`.
