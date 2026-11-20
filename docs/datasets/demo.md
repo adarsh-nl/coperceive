@@ -127,11 +127,11 @@ a few KB between platforms because of parquet/PNG metadata, not contents).
 
 - The spec does not name the LiDAR point frame. The demo writes body-frame points
   (the app applies the agent pose once), so GEN-6 is fixed here; the spec gap
-  remains. See [GEN-6](../geometry/conventions.md#gen-6) (draft, PR #166).
-- Intensity in the `.bin` file is dropped. See [GEN-7](../geometry/conventions.md#gen-7) (draft, PR #166).
-- Whether box `x, y, z` is the centre: **unverified** in the generic spec. See [GEN-8](../geometry/conventions.md#gen-8) (draft, PR #166).
-- Box length axis and the zero of `yaw_deg`: **unverified**. See [GEN-9](../geometry/conventions.md#gen-9) (draft, PR #166).
-- `handedness: left` does not reflect LiDAR points. The demo writes `handedness: right`. See [GEN-10](../geometry/conventions.md#gen-10) (draft, PR #166).
+  remains. See [GEN-6](../geometry/conventions.md#gen-6).
+- Intensity in the `.bin` file is dropped. See [GEN-7](../geometry/conventions.md#gen-7).
+- Whether box `x, y, z` is the centre: **unverified** in the generic spec. See [GEN-8](../geometry/conventions.md#gen-8).
+- Box length axis and the zero of `yaw_deg`: **unverified**. See [GEN-9](../geometry/conventions.md#gen-9).
+- `handedness: left` does not reflect LiDAR points. The demo writes `handedness: right`. See [GEN-10](../geometry/conventions.md#gen-10).
 
 ## Citation
 

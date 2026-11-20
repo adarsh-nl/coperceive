@@ -55,14 +55,14 @@ Those flags are `coperceive adapters check --help`, `coperceive adapters ingest 
 
 ## Known issues and conventions
 
-The labels below are the ones in the geometry draft. See [Geometry conventions](../geometry/conventions.md).
+The labels below are rows of [Geometry conventions](../geometry/conventions.md).
 
-- Roll and pitch sign: the draft's finding is that non-zero pitch and roll are stored with the wrong sign. See [OPV-6](../geometry/conventions.md#opv-6) and [OPV-13](../geometry/conventions.md#opv-13) (draft, PR #166).
-- Which CARLA version wrote the clouds: **unverified**. See [OPV-2](../geometry/conventions.md#opv-2) (draft, PR #166).
-- Intensity is dropped. See [OPV-3](../geometry/conventions.md#opv-3) (draft, PR #166).
-- Camera extrinsic direction: the draft's finding is that the stored matrix is inverted. See [OPV-7](../geometry/conventions.md#opv-7) (draft, PR #166).
-- Whether camera blocks change across frames: **unverified**. See [OPV-11](../geometry/conventions.md#opv-11) (draft, PR #166).
-- The adapter split `test_culver_city` differs from the documented `test_culvercity`. See [OPV-17](../geometry/conventions.md#opv-17) (draft, PR #166).
+- Roll and pitch sign: the finding is that non-zero pitch and roll are stored with the wrong sign. See [OPV-6](../geometry/conventions.md#opv-6) (checked on real data (6 frames)) and [OPV-13](../geometry/conventions.md#opv-13).
+- Which CARLA version wrote the clouds: **unverified**. See [OPV-2](../geometry/conventions.md#opv-2).
+- Intensity is dropped. See [OPV-3](../geometry/conventions.md#opv-3).
+- Camera extrinsic direction: the finding is that the stored matrix is inverted. See [OPV-7](../geometry/conventions.md#opv-7) (checked on real data (6 frames)).
+- Whether camera blocks change across frames: **unverified**. See [OPV-11](../geometry/conventions.md#opv-11).
+- The adapter split `test_culver_city` differs from the documented `test_culvercity`. See [OPV-17](../geometry/conventions.md#opv-17).
 
 ## Citation
 

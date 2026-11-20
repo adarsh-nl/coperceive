@@ -57,11 +57,11 @@ coperceive eval run RUN_ID --root /data/mine-scenes
 
 ## Known issues and conventions
 
-- The adapter names the world ENU. The spec does not. See [GEN-1](../geometry/conventions.md#gen-1) (draft, PR #166).
-- The frame of LiDAR points: **unverified** in the spec. See [GEN-6](../geometry/conventions.md#gen-6) (draft, PR #166).
-- The fourth `.bin` value is not read. See [GEN-7](../geometry/conventions.md#gen-7) (draft, PR #166).
-- Box centre, length axis, and yaw sign: **unverified**. See [GEN-8](../geometry/conventions.md#gen-8) and [GEN-9](../geometry/conventions.md#gen-9) (draft, PR #166).
-- `handedness: left` is specified to reflect points. The adapter does not. See [GEN-10](../geometry/conventions.md#gen-10) (draft, PR #166).
+- The adapter names the world ENU. The spec does not. See [GEN-1](../geometry/conventions.md#gen-1).
+- The frame of LiDAR points: **unverified** in the spec. See [GEN-6](../geometry/conventions.md#gen-6).
+- The fourth `.bin` value is not read. See [GEN-7](../geometry/conventions.md#gen-7).
+- Box centre, length axis, and yaw sign: **unverified**. See [GEN-8](../geometry/conventions.md#gen-8) and [GEN-9](../geometry/conventions.md#gen-9).
+- `handedness: left` is specified to reflect points. The adapter does not. See [GEN-10](../geometry/conventions.md#gen-10).
 
 ## Citation
 
