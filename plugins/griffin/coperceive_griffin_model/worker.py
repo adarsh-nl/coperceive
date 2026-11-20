@@ -1,4 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
+# The plugin is standalone Python 3.8 code (no third-party stubs) and is outside the
+# project's pyright include (pyproject.toml); the pre-push hook checks changed files one by
+# one, so keep this file at basic mode rather than the project-wide strict mode.
+# pyright: basic
 """The Griffin plugin's protocol-1 worker (Python 3.8, standard library only).
 
 Started by coperceive as ``python worker.py --model <name>`` from the plugin directory, in
@@ -52,7 +56,6 @@ from toolkit import (
 PROTOCOL = 1
 PLUGIN = "griffin"
 VERSION = "0.1.0"
-DEFAULT_CKPT_ROOT = "/datasets/eemcs/ps/cv/huggingface/griffin/ckpts"
 DEFAULT_TOOLKIT = os.path.expanduser("~/src/griffin")
 SUBSET = "25m"
 
@@ -371,7 +374,11 @@ class Worker:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True, choices=sorted(MODELS))
-    parser.add_argument("--ckpt-root", default=DEFAULT_CKPT_ROOT, help="released checkpoints root")
+    parser.add_argument(
+        "--ckpt-root",
+        required=True,
+        help="released checkpoints root (the folder that holds griffin_50scenes_25m)",
+    )
     parser.add_argument("--toolkit", default=DEFAULT_TOOLKIT, help="Griffin toolkit checkout")
     args = parser.parse_args(argv)
     try:

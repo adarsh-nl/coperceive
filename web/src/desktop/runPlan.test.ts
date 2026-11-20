@@ -26,6 +26,7 @@ import {
   artifactFingerprintText,
   builtinPlanInputProblem,
   pipelineNeedsCheckpoint,
+  pipelineNeedsCkptRoot,
   pipelineNeedsSplit,
   planSummary,
   progressLabel,
@@ -76,6 +77,8 @@ function plan(overrides: Partial<RunPlan> = {}): RunPlan {
     environment_note: "Environment from the server profile.",
     checkpoint: { path: "/data/code/checkpoints/model.pt", sha256: "abc", kind: "file", real_path: "/data/code/checkpoints/model.pt" },
     split: { path: "/data/code/splits/test.txt", sha256: "def", kind: "file", real_path: "/data/code/splits/test.txt" },
+    ckpt_root: { path: "", sha256: null, kind: "", real_path: null },
+    model_options: [],
     output_dir: "/data/results/runs/plan-1",
     scratch_dir: "/work/alice",
     checks: [{ name: "checkpoint", label: "Checkpoint", ok: true, detail: "", hint: null, duration_ms: 1 }],
@@ -164,7 +167,7 @@ function griffinEntry(builtin: PipelineEntry["builtin"] | undefined = undefined)
             error: null,
             modules: ["nvidia/cuda-11.8"],
             models: {
-              "vehicle-side": { gpu: true, options: ["det_json", "min_score", "nusc_root", "subset"] },
+              "vehicle-side": { gpu: true, options: ["ckpt_root", "det_json", "min_score", "nusc_root", "subset"] },
               "weights-from-option": { gpu: false, options: ["checkpoint"] },
             },
           }
@@ -201,6 +204,22 @@ test("a built-in plan requires the model and raw root but not a media root", () 
   const message = "Choose the model key and raw root for this built-in model.";
   assert.strictEqual(builtinPlanInputProblem({ ...base, model: "  " }), message);
   assert.strictEqual(builtinPlanInputProblem({ ...base, rawRoot: " " }), message);
+});
+
+test("a built-in model needs a checkpoint root only when its manifest declares ckpt_root", () => {
+  // Griffin's released checkpoints root is a required parameter with no default.
+  assert.strictEqual(pipelineNeedsCkptRoot(griffinEntry(), "vehicle-side"), true);
+  assert.strictEqual(pipelineNeedsCkptRoot(griffinEntry(), "weights-from-option"), false);
+  assert.strictEqual(pipelineNeedsCkptRoot(griffinEntry(), "nope"), false);
+  assert.strictEqual(pipelineNeedsCkptRoot(griffinEntry(null), "vehicle-side"), false);
+  assert.strictEqual(pipelineNeedsCkptRoot({ ...griffinEntry(), source: "custom" }, "vehicle-side"), false);
+});
+
+test("the New evaluation panel shows the declared checkpoint root next to the raw root", () => {
+  const source = readFileSync(new URL("./NewEvaluation.tsx", import.meta.url), "utf8");
+  assert.ok(source.includes("pipelineNeedsCkptRoot(selectedPipeline, model)"), "ckpt_root rule");
+  assert.ok(source.includes('id="plan-ckpt-root"'), "ckpt_root field");
+  assert.ok(source.includes('ckpt_root: selectedPipeline.source === "builtin" && needsCkptRoot'), "request field");
 });
 
 test("a Griffin plan with no checkpoint and a fingerprinted scenes folder can be saved", () => {

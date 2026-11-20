@@ -500,6 +500,10 @@ def plan_sbatch(
     """The sbatch of ADR 0011 decision 5 for ``coperceive model run`` over ``scenes``."""
     run_id = validate_run_id(run_id)
     scratch_template = validate_scratch_template(scratch_template)
+    # Validate every option before anything is written: an unknown option, a bad value or a
+    # required option with no value (a manifest option with no default) is refused here,
+    # naming the option, instead of on the compute node after the job was submitted.
+    check_options(spec, options.options)
     _check_header_values(manifest, spec, run_id, python)
     validate_logs_dir(logs_dir)
     samples = sum(len(pose_times(scene)) for scene in scenes.values())

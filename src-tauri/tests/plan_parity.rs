@@ -258,6 +258,9 @@ fn render(cases: &Value, case: &Value, entry: &ServerEntry) -> Result<String, St
         raw_root: format!("{root}/raw"),
         // `"media_root": false` leaves the field empty, as the form does when none is chosen.
         media_root: if case["media_root"].as_bool() == Some(false) { String::new() } else { format!("{root}/raw") },
+        // Griffin declares ckpt_root without a default: every case gives one, and the
+        // ckpt_root_custom case gives a folder of its own rather than the default.
+        ckpt_root: case["ckpt_root"].as_str().map(str::to_string).unwrap_or_else(|| format!("{root}/ckpts")),
         environment_override: None,
     };
     let plan = build_run_plan(&cluster, entry, &request).map_err(|e| format!("build_run_plan: {e}"))?;

@@ -124,9 +124,12 @@ class Dependency:
 @dataclass(frozen=True)
 class OptionSpec:
     type: str
-    default: object
+    # None when the manifest declares no default: such an option is required (the
+    # validated effective value then has to come from the caller's --option).
+    default: object | None
     choices: tuple[object, ...] | None
     description: str | None
+    required: bool = False
 
 
 @dataclass(frozen=True)
@@ -336,18 +339,38 @@ def check_secret_name(value: str, path: str = "environment.secrets") -> str:
 
 
 def check_options(spec: ModelSpec, given: Mapping[str, str]) -> dict[str, object]:
-    """Typed option values with defaults filled; an unknown name or a bad value is an error."""
-    out: dict[str, object] = {key: option.default for key, option in spec.options.items()}
+    """Typed option values with defaults filled; an unknown name or a bad value is an error.
+
+    An option declared without a default is required: a missing one is refused here, before
+    a run or a Slurm script starts, with a message that names the option and how to pass it.
+    """
+    out: dict[str, object] = {}
+    missing: list[str] = []
+    for key, option in spec.options.items():
+        if option.required:
+            missing.append(key)
+        else:
+            out[key] = option.default
     for key, text in given.items():
         option = spec.options.get(key)
         if option is None:
             known = ", ".join(spec.options) or "none"
             raise ModelSpecError(f"unknown option {key!r} for model {spec.key}; known: {known}")
+        if option.required and not text:
+            # An empty value is not a value: leave it in missing for the error below.
+            continue
         value = _coerce_option(key, option, text)
         if option.choices is not None and value not in option.choices:
             choices = ", ".join(str(choice) for choice in option.choices)
             raise ModelSpecError(f"option {key}: expected one of {choices}, got {text!r}")
         out[key] = value
+        if option.required and key in missing:
+            missing.remove(key)
+    if missing:
+        key = missing[0]
+        option = spec.options[key]
+        detail = f": {option.description}" if option.description else ""
+        raise ModelSpecError(f"model {spec.key} needs --option {key}=VALUE{detail}")
     return out
 
 
@@ -704,8 +727,12 @@ def _options(node: _Node | None) -> dict[str, OptionSpec]:
         sub = node.sub(key)
         assert sub is not None
         kind = sub.str("type", choices=OPTION_TYPES)
-        default = sub.any("default")
-        _check_option_value(sub.at("default"), kind, default)
+        # No "default" key: the option is required, and check_options refuses a run that
+        # does not give it. A default of null is not a value any option type allows.
+        required = not sub.has("default")
+        default = sub.any("default", optional=True)
+        if not required:
+            _check_option_value(sub.at("default"), kind, default)
         choices_raw = sub.any("choices", optional=True)
         choices: tuple[object, ...] | None = None
         if choices_raw is not None:
@@ -715,7 +742,11 @@ def _options(node: _Node | None) -> dict[str, OptionSpec]:
             for choice in choices:
                 _check_option_value(sub.at("choices"), kind, choice)
         out[key] = OptionSpec(
-            type=kind, default=default, choices=choices, description=sub.opt_str("description")
+            type=kind,
+            default=default,
+            choices=choices,
+            description=sub.opt_str("description"),
+            required=required,
         )
         sub.done()
     node.done()

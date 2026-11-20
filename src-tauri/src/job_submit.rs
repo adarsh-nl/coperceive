@@ -187,6 +187,19 @@ pub fn render_run_script(
                 .to_string(),
         );
     }
+    // A model option with no manifest default (Griffin's ckpt_root) cannot be guessed: a
+    // saved plan that records the model's option keys but no value is refused here, before
+    // anything is submitted. A plan saved before model_options existed has none recorded;
+    // its argv then lacks the option and `coperceive model run` refuses it by name.
+    if plan.pipeline.source == "builtin"
+        && plan.model_options.iter().any(|option| option == "ckpt_root")
+        && plan.ckpt_root.path.trim().is_empty()
+    {
+        return Err(
+            "This saved plan has no ckpt_root value, but its model declares the required ckpt_root parameter. Rebuild this plan before submitting."
+                .to_string(),
+        );
+    }
     let builtin = plan.pipeline.source == "builtin";
     if builtin
         && plan
@@ -1017,6 +1030,8 @@ mod tests {
             model: String::new(),
             raw_root: crate::run_plan::PlanArtifact::default(),
             media_root: crate::run_plan::PlanArtifact::default(),
+            ckpt_root: crate::run_plan::PlanArtifact::default(),
+            model_options: Vec::new(),
             work_dir: String::new(),
             staging_seconds: None,
             checkpoint: crate::run_plan::PlanArtifact {
@@ -1272,6 +1287,25 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_plan_missing_its_required_ckpt_root_is_refused_before_submission() {
+        // ckpt_root has no manifest default: a plan that records the model's options but
+        // no value must be rebuilt, not submitted with a guessed path.
+        let profile = profile("ps");
+        let mut plan = builtin_plan(&profile);
+        plan.ckpt_root = crate::run_plan::PlanArtifact::default();
+        let at = plan
+            .argv
+            .iter()
+            .position(|word| word == "ckpt_root=/data/scenes/ckpts")
+            .expect("fixture passes ckpt_root");
+        plan.argv.drain(at - 1..at + 1);
+        let error = render_run_script(&profile, &plan, &SubmitOptions::default())
+            .expect_err("missing ckpt_root");
+        assert!(error.contains("ckpt_root"), "{error}");
+        assert!(error.contains("Rebuild this plan"), "{error}");
+    }
+
+    #[test]
     fn submit_requires_an_explicit_confirmation_and_matching_preview() {
         let profile = profile("ps");
         let plan = plan(&profile);
@@ -1360,6 +1394,17 @@ mod tests {
             ..crate::run_plan::PlanArtifact::default()
         };
         plan.media_root = plan.raw_root.clone();
+        plan.ckpt_root = crate::run_plan::PlanArtifact {
+            path: "/data/scenes/ckpts".to_string(),
+            kind: "folder".to_string(),
+            ..crate::run_plan::PlanArtifact::default()
+        };
+        plan.model_options = [
+            "ckpt_root", "det_json", "min_score", "nusc_root", "subset",
+        ]
+        .iter()
+        .map(|option| option.to_string())
+        .collect();
         plan.work_dir = "$SCRATCH_DIR/work".to_string();
         plan.checkpoint = crate::run_plan::PlanArtifact::default();
         plan.split = crate::run_plan::PlanArtifact {
@@ -1379,6 +1424,7 @@ mod tests {
             "--model", "vehicle-side",
             "--raw-root", "/data/scenes/raw",
             "--media-root", "/data/scenes/raw",
+            "--option", "ckpt_root=/data/scenes/ckpts",
             "--work", "$SCRATCH_DIR/work",
         ]
         .iter()

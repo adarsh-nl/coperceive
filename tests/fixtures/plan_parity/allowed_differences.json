@@ -147,6 +147,7 @@
       "cases": [
         "base",
         "no_media_root",
+        "ckpt_root_custom",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -192,6 +193,7 @@
       "cases": [
         "base",
         "no_media_root",
+        "ckpt_root_custom",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -239,6 +241,7 @@
       "cases": [
         "base",
         "no_media_root",
+        "ckpt_root_custom",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -302,6 +305,7 @@
       "cases": [
         "base",
         "no_media_root",
+        "ckpt_root_custom",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -331,6 +335,7 @@
       "cases": [
         "base",
         "no_media_root",
+        "ckpt_root_custom",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -360,6 +365,7 @@
       "cases": [
         "base",
         "no_media_root",
+        "ckpt_root_custom",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -399,6 +405,7 @@
       "cases": [
         "base",
         "no_media_root",
+        "ckpt_root_custom",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -438,6 +445,7 @@
       "cases": [
         "base",
         "no_media_root",
+        "ckpt_root_custom",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -477,6 +485,7 @@
       "cases": [
         "base",
         "no_media_root",
+        "ckpt_root_custom",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
@@ -522,6 +531,7 @@
       "cases": [
         "base",
         "no_media_root",
+        "ckpt_root_custom",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
