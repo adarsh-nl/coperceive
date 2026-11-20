@@ -204,6 +204,8 @@ class EulerSpec:
     fields: tuple[str, str, str]  # about x, about y, about z
     order: str
     intrinsic: bool
+    # Each angle is multiplied by its sign before use (about x, about y, about z).
+    signs: tuple[int, int, int] = (1, 1, 1)
 
 
 @dataclass(frozen=True)
@@ -700,6 +702,18 @@ def _conventions(node: _Node | None) -> Conventions:
     return out
 
 
+def _signs(node: _Node) -> tuple[int, int, int]:
+    """``signs: [sx, sy, sz]`` of an euler block, each 1 or -1; absent is all 1."""
+    raw = node.any("signs", optional=True)
+    if raw is None:
+        return (1, 1, 1)
+    items = cast(list[object], raw) if isinstance(raw, list) else []
+    if len(items) != 3 or any(isinstance(v, bool) or v not in (1, -1) for v in items):
+        raise SpecError(f"{node.at('signs')}: must be three values, each 1 or -1")
+    values = [int(cast(int, v)) for v in items]
+    return (values[0], values[1], values[2])
+
+
 def _rotation(node: _Node | None, *, allow_missing: bool) -> RotationSpec:
     if node is None:
         raise SpecError("rotation: required")
@@ -714,7 +728,8 @@ def _rotation(node: _Node | None, *, allow_missing: bool) -> RotationSpec:
         if len(order) != 3 or set(order) != {"x", "y", "z"}:
             raise SpecError(f"{sub.at('order')}: must be a permutation of xyz")
         frame = sub.str("frame", choices=("intrinsic", "extrinsic"))
-        euler = EulerSpec((fields[0], fields[1], fields[2]), order, frame == "intrinsic")
+        signs = _signs(sub)
+        euler = EulerSpec((fields[0], fields[1], fields[2]), order, frame == "intrinsic", signs)
         sub.done()
     sub = node.sub("quaternion", optional=True)
     if sub is not None:

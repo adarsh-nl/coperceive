@@ -29,7 +29,9 @@ PNG_1X1 = base64.b64decode(
 FX = 335.639852470912
 CX, CY = 400.0, 300.0
 CAMERAS = ("camera0", "camera1", "camera2", "camera3")
-# Camera-to-lidar extrinsics (rotation, translation) in the source lidar frame.
+# Camera poses in the source lidar frame (yaw offset, translation): lidar_from_camera.
+# The YAML ``extrinsic`` is written as its inverse, camera_from_lidar, as the real releases
+# hold it (conventions OPV-7; checked on real data, PR #166).
 CAMERA_OFFSETS: dict[str, tuple[float, tuple[float, float, float]]] = {
     "camera0": (0.0, (-3.0, 0.0, 0.9)),
     "camera1": (100.0, (-0.21, 0.54, 0.1)),
@@ -132,10 +134,13 @@ def world_to_lidar(pose: tuple[Vec3, Vec3], point: Vec3) -> Vec3:
 def _camera_block(name: str, pose: tuple[Vec3, Vec3]) -> dict[str, object]:
     yaw_off, (dx, dy, dz) = CAMERA_OFFSETS[name]
     r = rotation(0.0, yaw_off, 0.0)
+    # camera_from_lidar = [R^T, -R^T d] of lidar_from_camera = [R, d].
+    rt = _transpose(r)
+    back = _apply(rt, (-dx, -dy, -dz))
     extrinsic = [
-        [r[0][0], r[0][1], r[0][2], dx],
-        [r[1][0], r[1][1], r[1][2], dy],
-        [r[2][0], r[2][1], r[2][2], dz],
+        [rt[0][0], rt[0][1], rt[0][2], back[0]],
+        [rt[1][0], rt[1][1], rt[1][2], back[1]],
+        [rt[2][0], rt[2][1], rt[2][2], back[2]],
         [0.0, 0.0, 0.0, 1.0],
     ]
     t, (roll, yaw, pitch) = pose
