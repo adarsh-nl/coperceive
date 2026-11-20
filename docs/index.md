@@ -4,7 +4,7 @@ Coperceive is a desktop application and a Python library for cooperative multi-a
 
 The library page below is a screenshot of the app with synthetic fixtures. It is not a frame from a real dataset.
 
-![Library page: design mock, app with synthetic fixtures, and an empty library](design/v0.1.1/screenshots/app-pages/library-1600x1000-dark.jpg)
+![The scene viewer on a Griffin Town03 scene: several agents, LiDAR and camera views](media/viewer-griffin-town03.png)
 
 | | |
 | --- | --- |

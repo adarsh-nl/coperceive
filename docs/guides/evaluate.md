@@ -2,8 +2,6 @@
 
 Put a model's boxes beside schema 1 scenes, match them to the ground truth, and read the table. The screenshot is the evaluation page with synthetic fixtures.
 
-![Evaluation page: design mock, app with synthetic fixtures, and an empty evaluation page](../design/v0.1.1/screenshots/app-pages/evaluation-1600x1000-dark.jpg)
-
 ## Steps
 
 1. Import boxes. `coperceive predictions import` writes `run.json` and one `boxes.parquet` per scene. `--score-note` is required:

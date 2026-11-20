@@ -2,7 +2,7 @@
 
 Open one schema 1 scene in the app or in the local page. The screenshot is the scene viewer with synthetic fixtures, not a real dataset frame.
 
-![Scene viewer: design mock, app with synthetic fixtures, and an empty viewer](../design/v0.1.1/screenshots/scene-viewer/viewer-1600x1000-dark.jpg)
+![The scene viewer on a Griffin Town03 scene: several agents, LiDAR and camera views](../media/viewer-griffin-town03.png)
 
 ## Steps
 

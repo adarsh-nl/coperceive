@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Ported and adapted from "viewer-engine.js" by Adarsh (Coperceive UI Design Options, 2026-10-18).
+// Ported and adapted from the Coperceive UI design specification (2026-10-18).
 // Canvas 2D Bird's-Eye View (BEV) rendering for the desktop Connect screen backdrop.
 
 import type { BackdropScene, ObjectState, SceneObject } from "./scene";

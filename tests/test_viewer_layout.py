@@ -562,10 +562,9 @@ def _style_case(
         if os.environ.get("COPERCEIVE_STYLE_SHOTS") == "1" and size == (1440, 900):
             shot = (
                 Path(__file__).resolve().parents[1]
-                / "docs"
-                / "design"
-                / "scene-viewer-v2"
-                / "screenshots"
+                / "tests"
+                / ".artifacts"
+                / "scene-viewer-v2-screenshots"
             )
             shot.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(shot / f"{style}-{theme}-1440x900.png"))

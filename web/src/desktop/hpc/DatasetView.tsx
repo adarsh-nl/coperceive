@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * Dense HPC Dataset View matching the Claude Design specification
- * (`docs/design/hpc-dataset-view/HPC Dataset View.dc.html`).
+ * Dense HPC Dataset View matching the desktop workspace design (ADR 0014 / ADR 0015).
  *
  * Accepts the same props and backend data contract as `ClusterDatasetView.tsx`
  * so it can replace `ClusterDatasetView` directly once #110 merges, while also

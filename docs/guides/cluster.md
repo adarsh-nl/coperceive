@@ -2,8 +2,6 @@
 
 Point Coperceive at a raw tree that is already on the cluster. The app does not contain a site path. Use `/data/<dataset>` as the stand-in below.
 
-![Servers page: design mock, app with synthetic fixtures, and an empty servers page](../design/v0.1.1/screenshots/app-pages/servers-1600x1000-dark.jpg)
-
 ## Steps
 
 1. In the app, open **Servers** and add an SSH profile (release README). Partitions and accounts come from that profile ([ADR 0015](../adr/0015-cluster-profiles-scheduler-adapter.md)).

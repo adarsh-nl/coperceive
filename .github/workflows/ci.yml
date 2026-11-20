@@ -291,6 +291,7 @@ jobs:
         run: pytest tests/test_landing_page.py -v
         env:
           COPERCEIVE_E2E_REQUIRED: "1"
+          COPERCEIVE_E2E_SHOTS: /tmp/landing-artifacts
       - name: Measure frame-time & record hero video
         run: |
           mkdir -p /tmp/landing-artifacts
@@ -302,7 +303,7 @@ jobs:
         with:
           name: landing-page-media
           path: |
-            /tmp/landing-artifacts/landing_page.png
+            /tmp/landing-artifacts/*.png
             /tmp/landing-artifacts/hero_recording.webm
           if-no-files-found: error
 
