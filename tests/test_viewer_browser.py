@@ -2005,7 +2005,7 @@ def test_switching_tabs_keeps_each_tab_mounted(session: _Session) -> None:
     assert visible.count() == 1
 
 
-# v0.1.1 layout (docs/design/v0.1.1/Scene Viewer.dc.html): what each new element
+# v0.1.1 scene viewer layout: what each new element
 # shows comes from the scene, and what the scene lacks is not offered.
 
 

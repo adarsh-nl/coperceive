@@ -636,7 +636,7 @@ def visual_browser(playwright_instance: Playwright) -> Iterator[Browser]:
 
 @pytest.fixture(scope="module")
 def screenshots_dir() -> Path:
-    shots = Path(__file__).resolve().parents[1] / "docs" / "design" / "screenshots"
+    shots = Path(__file__).resolve().parents[1] / "tests" / ".artifacts" / "design-screenshots"
     shots.mkdir(parents=True, exist_ok=True)
     return shots
 
@@ -922,22 +922,22 @@ def test_visual_revamp_screens_and_traffic_lights_no_overlap(
     # 6. Render reference Claude Design mock at 1600x1000 for side-by-side comparison
     mock_html = (
         Path(__file__).resolve().parents[1]
-        / "docs"
+        / "tests"
+        / "fixtures"
         / "design"
-        / "hpc-dataset-view"
         / "HPC Dataset View.dc.html"
     )
-    if mock_html.is_file():
-        ctx = visual_browser.new_context(viewport={"width": 1600, "height": 1000})
-        mpage = ctx.new_page()
-        try:
-            mpage.goto(mock_html.as_uri(), wait_until="domcontentloaded")
-            mpage.wait_for_timeout(300)
-            mock_shot = screenshots_dir / "claude_design_mock_1600x1000.png"
-            mpage.screenshot(path=str(mock_shot), full_page=False)
-            assert mock_shot.is_file()
-        finally:
-            ctx.close()
+    assert mock_html.is_file(), f"Missing design fixture: {mock_html}"
+    ctx = visual_browser.new_context(viewport={"width": 1600, "height": 1000})
+    mpage = ctx.new_page()
+    try:
+        mpage.goto(mock_html.as_uri(), wait_until="domcontentloaded")
+        mpage.wait_for_timeout(300)
+        mock_shot = screenshots_dir / "claude_design_mock_1600x1000.png"
+        mpage.screenshot(path=str(mock_shot), full_page=False)
+        assert mock_shot.is_file()
+    finally:
+        ctx.close()
 
 
 def test_no_personal_identifiers_in_web_src() -> None:

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * Browse a remote server's data folders (docs/design/v0.1.1/App Pages.dc.html,
- * Servers): a breadcrumb path, the folders listed under it, and an inspector
+ * Browse a remote server's data folders (v0.1.1 Servers layout):
+ * a breadcrumb path, the folders listed under it, and an inspector
  * for the selected folder.
  *
  * Metadata only: one `coperceive remote scan` over the reused SSH connection
