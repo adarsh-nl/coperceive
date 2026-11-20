@@ -636,7 +636,7 @@ def visual_browser(playwright_instance: Playwright) -> Iterator[Browser]:
 
 @pytest.fixture(scope="module")
 def screenshots_dir() -> Path:
-    shots = Path(__file__).resolve().parents[1] / "docs" / "design" / "screenshots"
+    shots = Path(__file__).resolve().parents[1] / "tests" / ".artifacts" / "design-screenshots"
     shots.mkdir(parents=True, exist_ok=True)
     return shots
 

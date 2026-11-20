@@ -103,5 +103,5 @@ def test_desktop_path_filters_cover_required_directories() -> None:
         "Python library changes should skip desktop-macos"
     )
     assert not matches_any("tests/test_cli_griffin.py"), "Test changes should skip desktop-macos"
-    assert not matches_any("docs/ci.md"), "Documentation changes should skip desktop-macos"
+    assert not matches_any("docs/index.md"), "Documentation changes should skip desktop-macos"
     assert not matches_any("README.md"), "Root doc changes should skip desktop-macos"
