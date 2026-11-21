@@ -57,7 +57,22 @@ agents:
 ```
 
 - **Frames:** `timestamps_us` (integers, strictly increasing), a
-  `timestamp_file`, or `frame_rate_hz` + `frame_count` (time in µs).
+  `timestamp_file`, or `frame_rate_hz` + `frame_count` (time in µs). If more
+  than one timing key is present, `timestamps_us` takes precedence over
+  `timestamp_file`, which takes precedence over `frame_rate_hz`. When derived
+  from `frame_rate_hz` and `frame_count`, frame `i` (`0 <= i < frame_count`) is
+  stamped with `round(i * 1_000_000 / float(frame_rate_hz))` using Python's
+  round-half-to-even (`round`), starting at `0` µs; the resulting timestamps
+  must still be strictly increasing (`coperceive/adapters/generic.py`,
+  `_timestamps`). `poses.csv` and `boxes.csv` must match these exact
+  microsecond values.
+
+  - Example (non-integer period): `frame_rate_hz: 30`, `frame_count: 4` yields
+    `[0, 33333, 66667, 100000]` µs (cumulative division rounded per frame, not
+    `i * 33333`).
+  - Example (half-microsecond tie): `frame_rate_hz: 128`, `frame_count: 4`
+    yields `[0, 7812, 15625, 23438]` µs (`7812.5` rounds to even `7812`;
+    `23437.5` rounds to even `23438`).
 - **Agent pose:** a `fixed_pose` (same pose every frame) or `poses.csv` with
   header `timestamp_us,x,y,z,roll_deg,pitch_deg,yaw_deg`. Pose is
   `world_from_agent_body`; translation is metres, angles degrees, composition
@@ -83,14 +98,60 @@ agents:
   examples use; `[0, 90, 0]` would send image right to body −z (down) and is
   wrong.
 - **Cameras:** `intrinsic: [fx, fy, cx, cy]` and optional
-  `image_size: [width, height]`; files PNG/JPEG. **LiDAR:** PCD
-  ASCII/binary with `x y z`, or a binary `.bin` of float32 `x y z i` records.
+  `image_size: [width, height]`; files PNG/JPEG.
+- **LiDAR:** PCD ASCII/binary with `x y z`, or a binary `.bin` of float32
+  `x y z i` records. Points are stored in the **LiDAR sensor frame** in metres
+  (the frame `body_from_sensor` maps into the agent body; schema 1 assumes
+  `+X` forward, `+Y` left, `+Z` up — see
+  [format.md](format.md#axis-conventions) and
+  [format.md](format.md#pointsbin)). The adapter copies parsed `x, y, z`
+  values directly into `PointCloud` without transforming them
+  (`coperceive/adapters/generic.py`, `GenericAdapter.load`,
+  `_sensor_extrinsic`), and consumers map each sweep into the world frame via
+  `world_from_body ∘ body_from_sensor` (`coperceive/viewdata.py`,
+  `world_points`; `coperceive/transform.py`, `_world_from_frame`). When
+  `body_from_sensor` and `extrinsic` are omitted, `_sensor_extrinsic` defaults
+  to identity, so the LiDAR sensor frame coincides with the agent body frame.
+
+  - Example: an agent with `world_from_agent_body` at `(10, 0, 0)` and
+    `rotation_rpy_deg: [0, 0, 0]`, and a LiDAR with
+    `body_from_sensor: {translation_m: [0, 0, 1.8], rotation_rpy_deg: [0, 0, 0]}`,
+    stores a return 5 m ahead of the sensor as `(5.0, 0.0, 0.0)` in the
+    `.pcd`/`.bin` file; composing `world_from_body ∘ body_from_sensor` places
+    it at `(5.0, 0.0, 1.8)` in the agent body frame and `(15.0, 0.0, 1.8)` in
+    the world frame.
 - **Missing frames:** the validator reports a warning per sensor, e.g.
   `sensor cam_north/camera: 3 of 120 frames missing (first: 000041)`, and load
   skips those frames rather than referencing absent files.
 - **Boxes CSV** (optional, per agent):
   `timestamp_us,track_id,category,x,y,z,length,width,height,yaw_deg`, in the
-  **world** frame. No boxes is valid; no track/category is required.
+  **world** frame (`BoxFrame.WORLD`). No boxes is valid; no track/category is
+  required. Each `timestamp_us` must match a scene timestamp.
+
+  - **Box position (`x, y, z`):** the **3D geometric centre** of the box in
+    world metres — not the bottom-centre or a corner
+    (`coperceive/adapters/generic.py`, `GenericAdapter._boxes`; corners extend
+    symmetrically by `±length/2`, `±width/2`, `±height/2` around `center` in
+    `coperceive/project.py`, `box_world_points`).
+    - Example: a car resting on ground `z = 0.0` with `height = 1.6` at
+      horizontal centre `(10.0, -1.75)` has `x = 10.0, y = -1.75, z = 0.8`
+      (bottom face at `z = 0.0`, top face at `z = 1.6`, as in
+      `examples/generic/driving/agents/ego/boxes.csv`).
+  - **Box length axis and `yaw_deg`:** `size_lwh` is `(length, width, height)`
+    with **`length` along box local `+x`**, `width` along `+y`, and `height`
+    along `+z`. Orientation is a pure right-handed rotation `Rz(yaw_deg)`
+    about world `+z` with `roll = 0` and `pitch = 0`
+    (`coperceive/adapters/generic.py`, `GenericAdapter._boxes`;
+    `coperceive/se3.py`, `SE3.from_rpy_deg`; `coperceive/project.py`,
+    `box_world_points`). Thus `yaw_deg = 0` aligns the box's length axis
+    (`+x`) with world **`+x`** (and width with world `+y`), and positive
+    `yaw_deg` rotates **counter-clockwise** about world `+z` (matching the
+    agent pose yaw convention). If the `yaw_deg` column is absent from the
+    CSV, it defaults to `0.0`.
+    - Example: a box centred at `(10.0, 0.0, 0.8)` with `length = 4.0`,
+      `width = 2.0`, `height = 1.6` spans `x ∈ [8.0, 12.0]`, `y ∈ [-1.0, 1.0]`
+      at `yaw_deg = 0`, and spans `x ∈ [9.0, 11.0]`, `y ∈ [-2.0, 2.0]` (length
+      aligned with world `+y`) at `yaw_deg = 90`.
 - **World frame:** right-handed, metres, +z up. `handedness: left` applies one
   y-reflection (ADR 0012) to poses, extrinsics, points and boxes, so a
   left-handed source can say so instead of converting files.
