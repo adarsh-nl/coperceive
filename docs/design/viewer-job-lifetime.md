@@ -1,148 +1,128 @@
 # Viewer lifetime on the HPC
 
-Proposed on 2026-11-20 for v0.1.3 (feature C), for PM review and Adarsh's approval. No
-product code until it is approved. Code is cited from `release/v0.1.3`. Anything the code
-does not settle is marked **unverified**.
+Proposed on 2026-11-20 for v0.1.3 (feature C); decisions recorded on 2026-11-22. Code is
+cited from `release/v0.1.3`. Anything the code does not settle is marked **unverified**.
+
+## Decisions
+
+- **DECIDED (Adarsh, 2026-11-20): remove the app-side `remote_connect` viewer-job path,
+  and keep the `coperceive remote` CLI.**
+  - The removal is its own PR against `release/v0.1.3`, after this note merges.
+  - The inventory below lists everything that reaches the path.
+- **DECIDED (Adarsh, 2026-11-20): measure reopen time before building any idle timeout.**
+  - "Stay connected for 10 minutes after the window closes" is built only if the real
+    number justifies it.
+  - If it is built, its default is a Settings value.
+- **DECIDED (Adarsh, 2026-11-20): the Re-check action for scenes wrongly marked stale is
+  a v0.1.2 P0 fix**, not part of this feature.
+- **DECISION (Adarsh), new:** Open predictions is broken today, and the removal touches it
+  (see below).
 
 ## Does viewing run a Slurm job? No.
 
-The brief says every HPC viewing session starts a CPU job. That has not been true since
-v0.1.0.
-
 - **The app's only viewing path is `dataset_open`** (`src-tauri/src/main.rs`):
-  - It starts a local `coperceive serve` on the laptop (`SidecarSession`), which reads
-    the cache over one SSH connection to `coperceive dataset stream` on the login node.
+  - It starts a local `coperceive serve` (`SidecarSession`).
+  - That server reads the cache over one SSH connection to `coperceive dataset stream`
+    on the login node.
   - It logs `reading … over SSH, no Slurm job`.
-  - The dataset view calls it (`DatasetView.tsx` › `openSceneInViewer`).
-- **The contract says so:**
-  - `docs/datasets/cluster-datasets.md`, "Viewing: over SSH, no job".
-  - CHANGELOG [0.1.0] (2026-11-05): "Viewing a prepared cluster dataset runs no Slurm job."
-- **The older viewer-job path is still in the tree:**
+  - Contract: `docs/datasets/cluster-datasets.md`, "Viewing: over SSH, no job"; and
+    CHANGELOG [0.1.0]: "Viewing a prepared cluster dataset runs no Slurm job."
+- **The old viewer-job path:**
   - The chain: `remote_connect` › `RemoteSessionManager` (`remote.rs`) ›
-    `coperceive remote start` (`coperceive/remote/manager.py` › `start_session`) ›
-    `sbatch scripts/desktop/remote_serve.sbatch`.
-  - **No web code calls `remote_connect`.** The web invokes only `remote_scan` and
-    `remote_view_cache` of the `remote_*` commands.
-  - Only the test-mode controller (#171) and the fake-SSH E2E reach it
-    (`e2e_cluster_datasets_app.sh`, Flow F and step CD-15).
-
-### What the old path does, if anything calls it
-
-- **Name and walltime:**
-  - The job name is `coperceive-desktop-<uuid>`.
-  - Walltime is the profile's `time_limit`, else the partition default.
-- **Stop:** the app stops the job on quit. On `RunEvent::Exit` and when the main window
-  closes, `disconnect` runs `remote stop`, which cancels the job.
-- **Reattach after a crash:**
-  - The app keeps the job's uuid in `state.json` (`viewer_sessions`).
-  - It fetches the token over SSH from `~/.coperceive/tokens/<uuid>.token` (mode 0600).
-- **Heartbeat lease, inferred and unverified on the cluster:**
+    `coperceive remote start` › `sbatch scripts/desktop/remote_serve.sbatch`.
+  - `state.remote` is set only by `remote_connect` (`main.rs:4318`).
+  - No TypeScript file in the history has ever contained `remote_connect` (`git log -S`).
+- **Its lease is never renewed:**
   - `remote_serve.sbatch` stops the server once its heartbeat file is 600 s old
-    (`COPERCEIVE_HEARTBEAT_TIMEOUT`).
-  - Nothing in the app calls `RemoteClient::heartbeat`; only a unit test does. It has
-    been that way since the lease was added (d823c58, 2026-10-20).
-  - So a job started by `remote_connect` stops itself about 10 minutes after it
-    starts, however much it is used.
-- **DECISION (Adarsh):**
-  - **(a) Recommended:** remove the app-side `remote_connect` path and its two E2E
-    flows. Keep the `coperceive remote` CLI, which `docs/reference/cli.md` documents and
-    whose lease a CLI user renews with `remote heartbeat`.
-  - **(b)** Keep the path and make the app renew the lease.
-  - Either way, the rest of this note is about the stream path.
+    (`COPERCEIVE_HEARTBEAT_TIMEOUT`, watchdog at lines 212–221).
+  - The app never calls `RemoteClient::heartbeat`.
+
+## Removal inventory: everything that reaches the path
+
+| Caller | Where it stays covered, or why it is no longer needed |
+|---|---|
+| Test controller command `"remote_connect"` (`main.rs:4042`) | Test-only. Its only users are the two E2E steps below. Removed with them. |
+| E2E Flow I, step CD-15: a slow-starting viewer job is attached, not refused | The app no longer attaches to jobs. The status rule stays tested for the CLI: `test_a_running_job_without_its_session_file_yet_is_starting_not_stopped` (`tests/test_remote.py`). |
+| E2E Flow F step 3, CD-19: `remote_connect`, then a local scene sends `remote stop` and clears the header | Steps 1–2 of the same flow stay: `dataset_open` streaming, then `start_local` clears "Streaming over SSH". With no remote session there is nothing to stop. (The script also labels the camera-preview flow, CD-11–13, as "Flow F".) |
+| `remote.rs` tests of `RemoteSessionManager`: queued/attach, cancel, reattach, `disconnect_with_timeout` | Removed with the manager. The command quoting, injection and token-redaction tests stay while `remote_status` or anything else uses `RemoteClient`. If nothing does, the CLI's own tests cover the same rules (`tests/test_remote.py`). |
+| `controller.rs` test `…allowed_origin_for_remote_connect` | Kept and renamed. It checks `open_viewer_window`'s origin sync, which `dataset_open` also uses. |
+| Disconnect on window close and quit (`main.rs:5559`, `5592`, `5633`); `disconnect_remote_in_background` (`829`, `1852`, `3854`) | Removed with `state.remote`. The sidecar stop next to each one stays. |
+| `state.json` `viewer_sessions` (`state.rs:423`) | Removed. `AppPersistentState` does not deny unknown fields, so an old file still loads; add a test. |
+| Viewer job badge: `Viewer.tsx` › `getViewerJob` › `viewer_get_job` and `/viewer-session` › `viewer_session_status` (`main.rs:1050`) | Always empty in the app today, because nothing sets `state.remote`. Remove it with the path. |
+| Commands `remote_status`, `remote_disconnect` | No web caller. Remove them. |
+| **`open_predictions` (`main.rs:3313`), reached from Job watch and Run history** | **Not dead: it is reachable in the UI.** It needs `state.remote`, so today it always fails with "Open predictions needs an active remote session". This has been true since it was added (`1d9e63b`, 2026-10-30); no test covers it. **DECISION (Adarsh):** (a) re-point it to the `dataset_open` stream path, as a separate fix; or (b) hide the button until (a) is done. Removing the path must not make it worse silently. |
+| CLI `coperceive remote …`, `remote_serve.sbatch`, `tests/test_remote.py` (21 tests) | Kept, as decided. |
+
+## The CLI's own lease is never renewed either (proposed v0.1.2 fix, not built)
+
+- **No CLI command renews it automatically:**
+  - `coperceive remote start` submits the job and returns.
+  - `record_heartbeat` (`coperceive/remote/manager.py:197`) runs only from
+    `coperceive remote heartbeat`.
+  - The served viewer does not touch the heartbeat file.
+- **The docs never say to renew it:** `docs/reference/cli.md` has only the usage line.
+- **So:** a CLI viewer job stops about 600 s after it starts, whatever `--time` says,
+  unless its user runs `remote heartbeat` by hand.
+- **Unverified on the cluster:** whether `COPERCEIVE_HEARTBEAT_TIMEOUT=0` set in the
+  user's shell reaches the job. `start_session` passes its environment to `sbatch`, but
+  the cluster's export setting is unknown.
+- **Proposed fix:** have the server renew the lease while it serves requests, or document
+  the renewal. This is for the PM to route.
 
 ## What reopening costs today (the stream path)
 
 | Event | What happens | Code |
 |---|---|---|
-| Another scene, same dataset | The server and the connection are reused | `dataset_open`, `stream_key` = profile, cache, raw root |
+| Another scene, same dataset | Server and connection are reused | `dataset_open`, `stream_key` |
 | Viewer window closed | The local server stops, which ends its SSH stream | `on_window_event` › `sidecar.stop()` |
-| Reopen after closing | A new server starts, a new SSH connection opens, up to 60 s health wait | `wait_until_healthy(60 s)` |
-| App quit | The server stops | `RunEvent::Exit` |
-| SSH or VPN drop | The next request runs the SSH command again | `remote_view/client.py` › `StreamClient.submit` |
-| Disk cache | Kept, 2 GB cap (Settings → Cluster datasets) | `remote_view_cache_dir` |
+| Reopen after closing | A new server, a new SSH connection, up to 60 s health wait | `wait_until_healthy(60 s)` |
+| SSH or VPN drop | The next request runs the SSH command again | `StreamClient.submit` |
 
-**Reopen time is unavailable:** nobody has measured how long it takes from Open to the
-first frame after a close. Phase 0 of the implementation measures it on the fake harness
-and on Adarsh's cluster before anything is built.
+## Phase 0: measure reopen time (before anything is built)
 
-## Proposal: keep the viewer connected for a while after its window closes
+- **Mechanism, on the fake-SSH E2E:** a new flow opens a scene, closes the viewer window,
+  and opens it again. It asserts what happens today:
+  - a second `dataset-stream` line in the SSH log;
+  - a new origin.
 
-The rest applies only if that measurement shows reopening is slow enough to matter.
+  It prints Open → first frame for each open. Fake times measure the mechanism, not the
+  cluster.
+- **Real number: `scripts/bench/reopen_time.py`, which Adarsh runs once from his laptop.**
+  - It starts the same local server `dataset_open` starts, against a saved server profile
+    and a prepared split, five times.
+  - Each run records the time to healthy and the time to the first frame of one scene.
+  - It prints median, minimum and maximum.
+  - It submits no job, writes nothing on the cluster, and prints no token.
+- **Rule:** if the median reopen is short enough that waiting doesn't matter, the idle
+  timeout is not built. The threshold is Adarsh's call once the number is in.
 
-### 1. Lifetime
+## If the number justifies it: stay connected after closing
 
-- **Idle timeout:** after the viewer window closes, the local server and its SSH stream
-  stay up for an idle timeout.
-  - **Setting:** Settings → Cluster datasets → "Keep the viewer connected after closing".
-  - **Proposed default: 10 minutes.** It is the lease the old viewer job already uses
-    (600 s), and it covers closing and reopening a scene while costing no compute.
-  - **DECISION (Adarsh):** the default.
-- **Maximum lifetime:**
-  - There is no partition walltime to stay under, because there is no job.
-  - The bound is the app: quitting always disconnects.
-
-### 2. Reattach
-
-- **Within one app run:** the existing `stream_key` reuse covers it.
-- **Across app restarts:** not proposed. The server is a child of the app, and there is
-  nothing on the cluster to find.
-- **No orphan on the login node:** the streamer exits when its stdin closes.
-  `tests/test_stream_protocol.py` asserts "the streamer did not stop when stdin closed".
-  So when the local server stops, its SSH session ends and the streamer follows. This is
-  inferred from the pipe chain, not tested end to end.
-
-### 3. Security
-
-- **Token at rest:** the local server's token is a mode 0600 file in a per-process temp
-  directory, removed when the server stops (`sidecar.rs`).
-- **Reopening:** a kept server keeps its token in memory, and the reopened viewer window
-  gets it from the app. Nothing new is written.
-- **Fail closed:** once the server stops, its port closes and the token file is gone, so
-  a page holding an old token gets a refused connection.
-- **Every route:** the #182 checks still apply to every `/api` route: the token, and the
-  Host check on loopback.
-- **Unverified:** the temp directory's own mode. It is created with the default umask.
-
-### 4. Visibility
-
-- **Where:** the jobs indicator and the dataset view.
-- **What it shows:** "Viewer connected to <profile> · idle for 4 min · disconnects at
-  14:32", with a **Disconnect now** button.
-- **No job id:** there is no job. Prepare jobs keep their ids in the same indicator.
-
-### 5. Failure modes
-
-| Failure | Behaviour | Test coverage |
-|---|---|---|
-| VPN or SSH drops | Next request reconnects (`StreamClient.submit`) | **unverified**: no test found for this; add one |
-| Streamer or login node restarts | Same reconnect | as above |
-| Scheduler kills a job, node fails | Not applicable: no job | none |
-| Two app instances | Each has its own server and stream; the cluster side is read-only | **unverified**: both share `remote_view_cache_dir`; add a test |
-| App crash | `Drop` does not run, and `sidecar.rs` sets no parent-death signal, so the local server and its SSH stream can outlive the app | **unverified**: none; propose a parent-death check |
-
-### 6. Cost
-
-- **Compute:** 0 CPU-hours. Viewing submits no job.
-- **Login node:** one SSH session and one `coperceive dataset stream` process per
-  connected dataset.
-  - Extra process-hours per day ≤ N × T, where N is the number of closes per day that
-    are not followed by a quit, and T is the idle timeout.
-  - The streamer's idle CPU and memory are **unavailable**. Measure them with `ps` on the
-    login node during phase 0.
-- **The old viewer job, if kept (option b):**
-  - CPU-hours per day = `cpus_per_task` × Σ over jobs of min(run time, walltime).
-  - Today the run time ends at the 600 s lease.
-
-## Tests and acceptance, after approval
-
-- **Rust:**
-  - the server is kept for T after the window closes and stops at T;
-  - Disconnect now stops it;
-  - quitting stops it;
-  - the setting is clamped to its range.
-- **Python:** the stream reconnects after its process is killed.
-- **Fake-SSH E2E:** open, close, reopen within T (no new `dataset-stream` line in the
-  SSH log), then reopen after T (a new one).
-- **Adarsh, on the real cluster:**
-  - Time a reopen before and after.
-  - Check that `ps` shows no streamer after Disconnect now, or after a quit.
+- **Lifetime:**
+  - After the window closes, the server and its SSH stream stay up for T.
+  - T is a Settings value under Cluster datasets; proposed default 10 min.
+  - Quitting always disconnects.
+- **Reattach:** within one app run, reuse via `stream_key`. Across restarts there is
+  nothing to find, because the server is the app's child.
+- **Security:**
+  - The token stays in memory; nothing new is written.
+  - Once stopped, the port closes and the 0600 token file is removed, so an old page is
+    refused.
+  - The #182 token and Host checks apply to every `/api` route.
+  - **Unverified:** the mode of the temp directory.
+- **Visibility:** "Viewer connected to <profile> · idle 4 min · disconnects at 14:32",
+  with **Disconnect now**, in the jobs indicator and the dataset view.
+- **Failure modes:**
+  - SSH or VPN drop: reconnect on the next request (**unverified**; no test, add one).
+  - App crash: the server can outlive the app, because there is no parent-death signal
+    (**unverified**; propose a check).
+- **Cost:**
+  - 0 CPU-hours.
+  - One login-node SSH session and one streamer per connected dataset, ≤ N × T
+    process-hours per day.
+  - The streamer's idle CPU and memory are **unavailable**; phase 0 measures them with
+    `ps`.
+- **Tests:**
+  - Rust: kept for T, then stopped; Disconnect now stops it; quit stops it; the setting
+    is clamped.
+  - E2E: reopen within T opens no new `dataset-stream`; after T it opens a new one.
