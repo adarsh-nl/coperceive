@@ -1253,8 +1253,6 @@ mod tests {
 
     #[test]
     fn disconnect_with_timeout_kills_hanging_ssh_child() {
-        use std::os::unix::fs::PermissionsExt;
-
         let dir = std::env::temp_dir().join(format!(
             "coperceive-remote-timeout-{}",
             std::process::id()
@@ -1267,10 +1265,10 @@ mod tests {
             "#!/bin/sh\necho $$ > \"{}\"\nexec sleep 30\n",
             pid_file.display()
         );
-        fs::write(&fake_ssh, script).expect("write fake ssh script");
-        let mut perms = fs::metadata(&fake_ssh).expect("stat script").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&fake_ssh, perms).expect("chmod script");
+        // A complete, closed file is renamed into place before it is executed: writing the
+        // name that is about to be exec'd can fail with ETXTBSY on Linux (task #209).
+        crate::test_seams::write_executable_atomically(&fake_ssh, &script)
+            .expect("write fake ssh script");
 
         let client = RemoteClient::with_ssh_bin("hpc-alias", fake_ssh.to_str().unwrap());
         let mut session = RemoteSessionManager {
@@ -1287,7 +1285,7 @@ mod tests {
 
         let started = std::time::Instant::now();
         let err = session
-            .disconnect_with_timeout(Duration::from_secs(1))
+            .disconnect_with_timeout(Duration::from_secs(2))
             .expect_err("hanging ssh must time out");
         let elapsed = started.elapsed();
         assert!(
