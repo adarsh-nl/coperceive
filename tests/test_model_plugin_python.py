@@ -9,6 +9,7 @@ exactly as given, and recorded in ``run.json`` provenance.
 
 from __future__ import annotations
 
+import shlex
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -190,3 +191,26 @@ def test_the_slurm_job_carries_the_override_exactly_as_given(
     main(_run(scenes, tmp_path / "plain", *_slurm(tmp_path)))
     plain = capsys.readouterr().out
     assert "--plugin-python" not in plain
+
+
+def test_the_job_line_orders_protocol_and_override_the_same_way_every_time(
+    scenes: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --protocol (PR #211) follows --model; --plugin-python is the last flag. The order
+    # does not depend on the order the flags were given in.
+    other = _executable(tmp_path / "envs" / "opencood-official" / "bin" / "python")
+    given = (
+        ["--plugin-python", str(other), "--protocol", "legacy"],
+        ["--protocol", "legacy", "--plugin-python", str(other)],
+    )
+    lines: list[str] = []
+    for index, flags in enumerate(given):
+        main(_run(scenes, tmp_path / f"out{index}", *flags, *_slurm(tmp_path)))
+        script = capsys.readouterr().out
+        (line,) = [line for line in script.splitlines() if " -m coperceive model run " in line]
+        lines.append(line.replace(str(tmp_path / f"out{index}"), "OUT"))
+    assert lines[0] == lines[1]
+    words = lines[0].split()
+    assert words.index("--protocol") == words.index("--model") + 2
+    assert words[words.index("--protocol") + 1] == "legacy"
+    assert lines[0].endswith(f"--plugin-python {shlex.quote(str(other))}"), lines[0]
