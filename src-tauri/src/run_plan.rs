@@ -25,6 +25,14 @@ use crate::slurm_adapter::RemoteRunner;
 use crate::ssh::shell_quote;
 
 pub const RUN_PLAN_SCHEMA: &str = "coperceive-run-plan-1";
+/// The AP protocol used when a plan does not name one: the evaluator's default
+/// (per-frame ranking, connected-union ground truth within 70 m).
+pub const DEFAULT_EVAL_PROTOCOL: &str = "default";
+pub const EVAL_PROTOCOLS: [&str; 2] = ["default", "legacy"];
+
+fn default_eval_protocol() -> String {
+    DEFAULT_EVAL_PROTOCOL.to_string()
+}
 pub const PIPELINE_SPEC_FILE: &str = "coperceive-pipeline.json";
 pub const CONTRACT_CHECK_FRAMES: u32 = 3;
 
@@ -191,6 +199,9 @@ pub struct RunPlanRequest {
     /// A built-in model parameter the plan records as a path (Griffin's `ckpt_root`).
     #[serde(default)]
     pub ckpt_root: String,
+    /// The AP protocol the run is made for: `default` or `legacy`.
+    #[serde(default = "default_eval_protocol")]
+    pub eval_protocol: String,
     #[serde(default)]
     pub environment_override: Option<EnvironmentSetup>,
 }
@@ -289,6 +300,10 @@ pub struct RunPlan {
     /// for a custom pipeline and on plans saved before this field existed.
     #[serde(default)]
     pub model_options: Vec<String>,
+    /// The AP protocol the run was made for (`default` or `legacy`), recorded so a later
+    /// `coperceive eval run` uses it. A plan saved before this field is `default`.
+    #[serde(default = "default_eval_protocol")]
+    pub eval_protocol: String,
     /// Work directory (inside the run output) and the staging seconds the job
     /// measured. Empty/None on plans saved before these fields existed.
     #[serde(default)]
@@ -669,6 +684,7 @@ pub fn build_builtin_argv(
     raw_root: &str,
     media_root: &str,
     ckpt_root: &str,
+    eval_protocol: &str,
     work_dir: &str,
 ) -> Result<Vec<String>, String> {
     if plugin_manifest.trim().is_empty() {
@@ -715,6 +731,12 @@ pub fn build_builtin_argv(
     if !ckpt_root.trim().is_empty() {
         argv.push("--option".to_string());
         argv.push(format!("ckpt_root={}", ckpt_root.trim()));
+    }
+    // Record the AP protocol in the run so eval run can use it. The default is left
+    // out, exactly as the CLI's no-flag command leaves it out; the parity then holds.
+    if eval_protocol == "legacy" {
+        argv.push("--protocol".to_string());
+        argv.push("legacy".to_string());
     }
     if !work_dir.trim().is_empty() {
         argv.push("--work".to_string());
@@ -2192,6 +2214,13 @@ pub fn build_run_plan(
         None => default_eval_gres(entry),
     };
     if builtin {
+        let eval_protocol = request.eval_protocol.trim();
+        if !EVAL_PROTOCOLS.contains(&eval_protocol) {
+            return Err(format!(
+                "Choose the AP protocol for this run: one of {}.",
+                EVAL_PROTOCOLS.join(", ")
+            ));
+        }
         let raw = request.raw_root.trim();
         if raw.is_empty() {
             return Err("Choose the raw root on the cluster before checking the plan.".to_string());
@@ -2704,6 +2733,7 @@ pub fn build_run_plan(
                 request.raw_root.trim(),
                 request.media_root.trim(),
                 request.ckpt_root.trim(),
+                request.eval_protocol.trim(),
                 WORK_IN_SCRATCH,
             )?
         }
@@ -2767,6 +2797,7 @@ pub fn build_run_plan(
         media_root: if builtin { artifact_from_check_for_input(&request.media_root, "folder") } else { PlanArtifact::default() },
         ckpt_root: if builtin { artifact_from_check_for_input(&request.ckpt_root, "folder") } else { PlanArtifact::default() },
         model_options: builtin_choice.as_ref().map(|choice| choice.model.options.clone()).unwrap_or_default(),
+        eval_protocol: if builtin { request.eval_protocol.trim().to_string() } else { DEFAULT_EVAL_PROTOCOL.to_string() },
         work_dir: if builtin { WORK_IN_SCRATCH.to_string() } else { String::new() },
         staging_seconds: None,
         output_dir,
@@ -3710,6 +3741,17 @@ pub fn save_run_plan(
             _ => {}
         }
     }
+    let eval_protocol = if request.eval_protocol.trim().is_empty() {
+        plan.eval_protocol.trim()
+    } else {
+        request.eval_protocol.trim()
+    };
+    if save_pipeline.builtin.is_some() && !EVAL_PROTOCOLS.contains(&eval_protocol) {
+        return Err(format!(
+            "Choose the AP protocol for this run: one of {}.",
+            EVAL_PROTOCOLS.join(", ")
+        ));
+    }
     let argv: Vec<String> = if let Some(choice) = &save_pipeline.builtin {
         let model = request.model.trim();
         let raw = request.raw_root.trim();
@@ -3747,6 +3789,7 @@ pub fn save_run_plan(
             raw,
             media,
             ckpt_root,
+            eval_protocol,
             WORK_IN_SCRATCH,
         )?
     } else {
@@ -3850,6 +3893,11 @@ pub fn save_run_plan(
         .as_ref()
         .map(|choice| choice.model.options.clone())
         .unwrap_or_default();
+    validated.eval_protocol = if save_pipeline.source == "builtin" {
+        eval_protocol.to_string()
+    } else {
+        DEFAULT_EVAL_PROTOCOL.to_string()
+    };
     validated.work_dir = if save_pipeline.source == "builtin" {
         WORK_IN_SCRATCH.to_string()
     } else {
@@ -4154,6 +4202,7 @@ mod tests {
             raw_root: String::new(),
             media_root: String::new(),
             ckpt_root: String::new(),
+            eval_protocol: "default".to_string(),
             environment_override: None,
         }
     }
@@ -4347,6 +4396,7 @@ mod tests {
         req.raw_root = "/data/scenes/raw".to_string();
         req.media_root = "/data/scenes/raw".to_string();
         req.ckpt_root = "/data/scenes/ckpts".to_string();
+        req.eval_protocol = "default".to_string();
         req
     }
 
@@ -6293,7 +6343,7 @@ mod tests {
             "/data/scenes",
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
-            "", "", "", "", "",
+            "", "", "", "", "", "",
         )
         .expect("argv");
         assert_eq!(
@@ -6332,7 +6382,7 @@ mod tests {
             // vehicle-side declares no checkpoint option: the plan passes none.
             "",
             "/data/results/runs/plan-1790000000-aabbccddeeff",
-            "vehicle-side", "/data/raw", "/data/raw", "", "/data/results/runs/plan-1790000000-aabbccddeeff/work",
+            "vehicle-side", "/data/raw", "/data/raw", "", "default", "/data/results/runs/plan-1790000000-aabbccddeeff/work",
         )
         .expect("argv");
         for item in [
@@ -6391,7 +6441,7 @@ mod tests {
             "/data/scenes",
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
-            "", "", "", "", "",
+            "", "", "", "", "", "",
         )
         .expect("argv");
         assert_eq!(argv[0], "/home/bob/coperceive-app/.venv/bin/python");
@@ -6413,7 +6463,7 @@ mod tests {
             "/data/scenes",
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
-            "", "", "", "", "",
+            "", "", "", "", "", "",
         )
         .expect_err("empty manifest");
         assert!(error.contains("no pipeline manifest"), "{error}");
@@ -6534,6 +6584,44 @@ mod tests {
         let error = build_run_plan(&checked_runner(), &entry(), &req).expect_err("missing");
         assert!(error.contains("ckpt_root"), "{error}");
         assert!(error.contains("vehicle-side"), "{error}");
+    }
+
+    #[test]
+    fn a_legacy_plan_carries_the_protocol_and_an_old_plan_defaults() {
+        // The plan records the AP protocol and passes it to model run, which writes it
+        // into run.json for a later eval run. A plan saved before the field is default.
+        let mut req = griffin_request();
+        req.split = "/data/code/splits/test.txt".to_string();
+        req.raw_root = "/data/code/raw".to_string();
+        req.media_root = "/data/code/raw".to_string();
+        req.ckpt_root = "/data/code/ckpts".to_string();
+        req.eval_protocol = "legacy".to_string();
+        let plan = build_run_plan(&checked_runner(), &entry(), &req).expect("build");
+        assert_eq!(plan.eval_protocol, "legacy");
+        let at = plan
+            .argv
+            .iter()
+            .position(|word| word == "--protocol")
+            .expect("--protocol");
+        assert_eq!(plan.argv[at + 1], "legacy");
+        let mut echo = EchoRunner::new();
+        echo.model_list = Some(MODEL_LIST_JSON.to_string());
+        let saved = save_run_plan(&echo, &entry(), &plan, &req).expect("save");
+        assert_eq!(saved.eval_protocol, "legacy");
+        assert!(saved.argv.iter().any(|word| word == "legacy"));
+
+        let mut json = serde_json::to_value(&plan).unwrap();
+        json.as_object_mut().unwrap().remove("eval_protocol");
+        let old: RunPlan = serde_json::from_value(json).unwrap();
+        assert_eq!(old.eval_protocol, DEFAULT_EVAL_PROTOCOL);
+    }
+
+    #[test]
+    fn a_builtin_plan_refuses_an_unknown_evaluation_protocol() {
+        let mut req = griffin_request();
+        req.eval_protocol = "v0.1.1".to_string();
+        let error = build_run_plan(&checked_runner(), &entry(), &req).expect_err("bad protocol");
+        assert!(error.contains("AP protocol"), "{error}");
     }
 
     #[test]

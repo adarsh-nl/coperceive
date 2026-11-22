@@ -143,6 +143,7 @@ def _cli_script(case: dict[str, Any], tmp_path: Path, *, with_ckpt_root: bool = 
     # Griffin's ckpt_root has no manifest default, so every case gives the worker one.
     ckpt = ["--option", f"ckpt_root={ckpt_root}"]
     options = [word for extra in case.get("extras", []) for word in ("--option", extra)]
+    protocol = case.get("eval_protocol")
     args = [
         "model",
         "run",
@@ -150,6 +151,7 @@ def _cli_script(case: dict[str, Any], tmp_path: Path, *, with_ckpt_root: bool = 
         str(manifest),
         "--model",
         case["model"],
+        *(["--protocol", str(protocol)] if protocol is not None else []),
         "--scenes",
         str(scenes),
         "--raw-root",
