@@ -331,6 +331,9 @@ coperceive serve ... --model <plugin> [--model-name NAME] [--manifest FILE] [--e
 | 2 | argparse. | |
 | 3 | Protocol violation or child exit before `bye`; the run is `partial`. | Any non-zero exit before `bye` is reported as 3 by the parent. |
 | 4 | Timeout or cancel; the run is `partial`. | |
+| 5 | With `--evaluate` only: every selected scene complete, but scoring the run failed (`evaluation.json` `status` is `errors` or `failed`). | |
+
+With `--evaluate`, the model's own code always wins: a run that exits 1, 3 or 4 keeps that code whether or not scoring succeeded, and a partial run (3, 4) is still scored on its finished scenes. Scoring runs only when the run wrote `run.json`. A run that does nothing (every selected scene already written, no `--force`) exits 1 and is not scored. In a Slurm job the same rule is applied by the job script: `RC=5` only when the model's `RC` is 0 and the scoring step's is not.
 
 ## Live session
 

@@ -66,6 +66,9 @@ EXIT_OK = 0
 EXIT_USER = 1
 EXIT_PROTOCOL = 3
 EXIT_TIMEOUT = 4
+# ``--evaluate``: every selected scene complete, but scoring the run failed. A model
+# failure (1, 3, 4) is never replaced by it (docs/spec/model-plugin.md, §Exit codes).
+EXIT_EVAL = 5
 
 TimedResult = tuple[int, Result]  # (time_us, the child's result for that frame)
 
@@ -96,6 +99,11 @@ class RunOptions:
     # The evaluation protocol to record for this run, so a later eval run uses it
     # by default (docs/guides/evaluate.md). None means "do not record one".
     eval_protocol: str | None = None
+    # ``--evaluate``: score the run after it (``eval run``'s scoring), and the
+    # ``--eval-config`` file for it. run_batch ignores both; the command and the Slurm
+    # job act on them.
+    evaluate: bool = False
+    eval_config: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -979,6 +987,7 @@ def _await_result(
 
 
 __all__ = [
+    "EXIT_EVAL",
     "EXIT_OK",
     "EXIT_PROTOCOL",
     "EXIT_TIMEOUT",

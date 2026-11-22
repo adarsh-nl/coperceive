@@ -10,6 +10,7 @@ Every rule a result depends on is in this document or in the config copied into 
 <predictions root>/
   <run_id>/
     run.json
+    evaluation.json          written by `coperceive eval run` and `model run --evaluate`
     <scene_id>/
       boxes.parquet          written by the model or by `coperceive predictions import`
       matches.parquet        written by `coperceive eval run`
@@ -36,6 +37,25 @@ One UTF-8 JSON object.
 | `provenance` | object, optional | Written by `coperceive model run` (model-plugin spec §Provenance): plugin, model, manifest digest, environment, status `complete` or `partial`, timings, and `eval_protocol` when `model run --protocol` recorded the AP protocol the run was made for. `coperceive eval run` uses `eval_protocol` when neither `--protocol` nor the config file chooses one. Readers that do not know it ignore it. |
 
 Unknown keys are ignored. A missing required key, a different `format` or `format_version`, or a `run_id` that does not match the directory is an error.
+
+## `evaluation.json`
+
+One UTF-8 JSON object in the run directory, written each time the run is scored (`coperceive eval run`, or `coperceive model run --evaluate`). It records that scoring ran and how; the numbers stay in each scene's `metrics.json`. It is written on failure as well, so a record never outlives a rerun. Readers that do not know it ignore it.
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `format` | string | `coperceive-evaluation`. |
+| `format_version` | int | `1`. |
+| `run_id` | string | Equal to the directory name. |
+| `command` | string | `eval run` or `model run --evaluate`. A Slurm job's scoring step is `eval run`. |
+| `created_utc` | string | ISO 8601, `Z`. The `created_utc` of the `metrics.json` files it wrote. |
+| `status` | string | `ok` (every scene scored or skipped), `errors` (some scenes failed, listed in `errors`), or `failed` (scoring did not run: `error` says why). |
+| `error` | string or null | Why scoring failed, when `status` is `failed`. |
+| `protocol` | string or null | The protocol line `eval report` prints (`docs/eval-spec.md` A.12). |
+| `ranking_scope`, `gt_scope` | string or null | The resolved config's values. |
+| `config_sha256` | string or null | SHA-256 of the resolved config as `metrics.json` writes it under `config`, serialised as JSON with sorted keys and no spaces. |
+| `config_file`, `config_file_sha256` | string or null | The config file given (`--config`, `--eval-config`) and the SHA-256 of its bytes; null without one. |
+| `evaluated`, `skipped`, `errors` | list of string | As `eval run` prints them: scene ids, and `"<scene_id>: <message>"` lines. |
 
 ## `boxes.parquet`
 

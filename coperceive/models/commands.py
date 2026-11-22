@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+import traceback
 from collections.abc import Callable, Generator, Mapping
 from pathlib import Path
 from typing import cast
@@ -17,9 +18,20 @@ from typing import cast
 import yaml
 
 from coperceive.adapters.paths import PathError, Template
+from coperceive.evaluation.commands import EVAL_USER_ERRORS, print_scoring
+from coperceive.evaluation.config import ConfigError
 from coperceive.evaluation.predictions import PredictionError
+from coperceive.evaluation.scoring import resolve_config, score_run
 from coperceive.model import Scene
-from coperceive.models.batch import BatchError, BatchReport, RunOptions, run_batch, utc_now
+from coperceive.models.batch import (
+    EXIT_EVAL,
+    EXIT_OK,
+    BatchError,
+    BatchReport,
+    RunOptions,
+    run_batch,
+    utc_now,
+)
 from coperceive.models.cache import CacheError, prune
 from coperceive.models.check import check_plugin, render_check
 from coperceive.models.inputs import InputError
@@ -118,6 +130,21 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
             "eval run without --protocol or a config protocol uses it. default: per-frame "
             "ranking, connected-union ground truth (70 m). legacy: the v0.1.1 rules."
         ),
+    )
+    run.add_argument(
+        "--evaluate",
+        action="store_true",
+        help=(
+            "After the run (complete or partial), score it as 'eval run <run-id>' would and "
+            "write metrics.json and evaluation.json. With --slurm, inside the same job. "
+            "Exit 5: the run completed but scoring failed; a model failure keeps its code."
+        ),
+    )
+    run.add_argument(
+        "--eval-config",
+        default=None,
+        metavar="PATH",
+        help="Evaluation config YAML for --evaluate (as eval run --config). Default: the spec.",
     )
     run.add_argument("--frame-timeout", type=float, default=None)
     run.add_argument("--run-timeout", type=float, default=None)
@@ -393,6 +420,7 @@ def _run(args: argparse.Namespace) -> None:
     args.run_id = _check_run_id(str(args.run_id))
     manifest = _manifest(args)
     options = _run_options(args)
+    _check_evaluate(options)
     out = Path(args.out)
     if args.slurm:
         _emit_slurm(args, manifest, options, out)
@@ -416,9 +444,62 @@ def _run(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         raise SystemExit(1)
-    if report.exit_code != 0:
+    code = report.exit_code
+    if code != 0:
         print(f"run {report.status}: {report.reason}", file=sys.stderr)
-        raise SystemExit(report.exit_code)
+    if options.evaluate:
+        scored = _evaluate(Path(args.scenes), out, str(args.run_id), options)
+        code = combined_exit_code(code, scored)
+    if code != 0:
+        raise SystemExit(code)
+
+
+def _check_evaluate(options: RunOptions) -> None:
+    """``--eval-config`` needs ``--evaluate``; the config (and its agreement with
+    ``--protocol``) is checked now, so a bad one fails before the model runs or a job is
+    written. The run's recorded protocol is ``--protocol`` itself, so nothing is missing."""
+    if options.eval_config is not None and not options.evaluate:
+        raise BatchError("--eval-config needs --evaluate")
+    if not options.evaluate:
+        return
+    try:
+        resolve_config(options.eval_config, options.eval_protocol)
+    except (ConfigError, OSError) as exc:
+        raise BatchError(f"--evaluate: {exc}") from None
+
+
+def _evaluate(scenes: Path, out: Path, run_id: str, options: RunOptions) -> bool:
+    """Score the run as ``eval run`` does; True when every scene scored. Never raises a
+    user error: a scoring failure is reported, recorded in evaluation.json, and returned."""
+    try:
+        scoring = score_run(
+            scenes,
+            out,
+            run_id,
+            config_path=options.eval_config,
+            protocol=options.eval_protocol,
+            scene_ids=None,
+            created_utc=utc_now(),
+            command="model run --evaluate",
+        )
+    except EVAL_USER_ERRORS as exc:
+        print(f"evaluate failed: {exc}", file=sys.stderr)
+        return False
+    except Exception:
+        # Not a user error: a bug. Print it, but keep the model's own exit code.
+        print("evaluate failed:", file=sys.stderr)
+        traceback.print_exc()
+        return False
+    print_scoring(scoring.report)
+    return scoring.ok
+
+
+def combined_exit_code(model_code: int, scored: bool) -> int:
+    """``model run --evaluate``'s exit code (docs/spec/model-plugin.md, §Exit codes): the
+    model's own non-zero code always wins; a complete run whose scoring failed is 5."""
+    if model_code != EXIT_OK:
+        return model_code
+    return EXIT_OK if scored else EXIT_EVAL
 
 
 def _emit_slurm(
@@ -496,6 +577,8 @@ def _run_options(args: argparse.Namespace) -> RunOptions:
         staging_seconds=args.staging_seconds,
         perturbation=load_perturbation(args.perturb) if isinstance(args.perturb, str) else None,
         eval_protocol=args.protocol if isinstance(args.protocol, str) else None,
+        evaluate=bool(args.evaluate),
+        eval_config=Path(args.eval_config) if args.eval_config else None,
     )
 
 

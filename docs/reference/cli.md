@@ -644,11 +644,12 @@ options:
 usage: coperceive model run [-h] [--manifest MANIFEST] --scenes SCENES --out OUT --run-id RUN_ID
        [--model MODEL] [--agents AGENTS] [--source SOURCE] [--scene-ids SCENE_IDS] [--raw-root
        RAW_ROOT] [--media-root MEDIA_ROOT] [--artifacts ARTIFACTS] [--no-auto-dependencies]
-       [--option K=V] [--protocol {default,legacy}] [--frame-timeout FRAME_TIMEOUT] [--run-timeout
-       RUN_TIMEOUT] [--no-cache] [--hash-inputs] [--work WORK] [--force] [--perturb PERTURB]
-       [--staging-seconds STAGING_SECONDS] [--slurm] [--submit] [--slurm-python SLURM_PYTHON]
-       [--slurm-partition SLURM_PARTITION] [--slurm-logs SLURM_LOGS] [--slurm-results SLURM_RESULTS]
-       [--slurm-scratch-template SLURM_SCRATCH_TEMPLATE] [plugin]
+       [--option K=V] [--protocol {default,legacy}] [--evaluate] [--eval-config PATH]
+       [--frame-timeout FRAME_TIMEOUT] [--run-timeout RUN_TIMEOUT] [--no-cache] [--hash-inputs]
+       [--work WORK] [--force] [--perturb PERTURB] [--staging-seconds STAGING_SECONDS] [--slurm]
+       [--submit] [--slurm-python SLURM_PYTHON] [--slurm-partition SLURM_PARTITION] [--slurm-logs
+       SLURM_LOGS] [--slurm-results SLURM_RESULTS] [--slurm-scratch-template SLURM_SCRATCH_TEMPLATE]
+       [plugin]
 
 positional arguments:
   plugin                Plugin name (entry point).
@@ -675,6 +676,12 @@ options:
                         eval run without --protocol or a config protocol uses it. default: per-
                         frame ranking, connected-union ground truth (70 m). legacy: the v0.1.1
                         rules.
+  --evaluate  After the run (complete or partial), score it as 'eval run <run-id>' would
+                        and write metrics.json and evaluation.json. With --slurm, inside the same
+                        job. Exit 5: the run completed but scoring failed; a model failure keeps
+                        its code.
+  --eval-config PATH  Evaluation config YAML for --evaluate (as eval run --config). Default: the
+                        spec.
   --frame-timeout FRAME_TIMEOUT
   --run-timeout RUN_TIMEOUT
   --no-cache

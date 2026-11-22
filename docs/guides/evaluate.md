@@ -20,6 +20,23 @@ Put a model's boxes beside schema 1 scenes, match them to the ground truth, and 
 
 3. Compare two to four run ids with `coperceive eval compare`. The help text says two runs keep the b − a table.
 
+## Score a model run in one step
+
+`coperceive model run` writes `run.json` and `boxes.parquet`; on its own it does not score. Add `--evaluate` and it scores the run as step 2's `eval run` would, on the same scenes and predictions, under the run's protocol:
+
+```bash
+coperceive model run <plugin> --scenes /path/to/scenes --out /path/to/predictions \
+  --run-id my-run --protocol default --evaluate
+coperceive eval report my-run --root /path/to/scenes --predictions /path/to/predictions
+```
+
+- `--eval-config PATH` passes an evaluation config (as `eval run --config`). Its `protocol` must agree with `--protocol`; a disagreement or a config that does not load is an error before the model runs.
+- With `--slurm`, scoring is a step of the same job, after the run has been copied home, on the scenes the job staged; `metrics.json` comes home with the predictions.
+- The run directory gains `evaluation.json`: that scoring ran, the protocol, and the SHA-256 of the config it used ([Predictions, `evaluation.json`](../spec/predictions.md#evaluationjson)). `eval run` writes the same file.
+- Exit codes: the model's own (`0`, `1`, `3`, `4`) always wins; `5` means the run completed and scoring failed ([model-plugin spec §Exit codes](../spec/model-plugin.md#exit-codes)). A partial run is still scored on its finished scenes.
+
+The app does not pass `--evaluate` yet.
+
 ## AP protocol
 
 The same predictions score differently under different AP protocols, so the protocol is chosen **per run and recorded with it**. There are two:
