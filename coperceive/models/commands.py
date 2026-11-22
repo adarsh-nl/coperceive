@@ -469,7 +469,8 @@ def _check_evaluate(options: RunOptions) -> None:
 
 
 def _evaluate(scenes: Path, out: Path, run_id: str, options: RunOptions) -> bool:
-    """Score the run as ``eval run`` does; True when every scene scored. Never raises a
+    """Score the run as ``eval run --scenes <the run's scenes>`` does; True when every scene
+    scored. Never raises a
     user error: a scoring failure is reported, recorded in evaluation.json, and returned."""
     try:
         scoring = score_run(
@@ -478,7 +479,8 @@ def _evaluate(scenes: Path, out: Path, run_id: str, options: RunOptions) -> bool
             run_id,
             config_path=options.eval_config,
             protocol=options.eval_protocol,
-            scene_ids=None,
+            # The run's own selection, as the job's staged scenes are: eval run --scenes.
+            scene_ids=options.scene_ids,
             created_utc=utc_now(),
             command="model run --evaluate",
         )

@@ -391,3 +391,14 @@ def test_eval_run_scores_the_files_a_job_stages_as_it_scores_the_full_scenes(
         path.unlink()
     main(["eval", "run", "r1", "--root", str(staged), "--predictions", str(copy)])
     assert _without_time(_metrics(copy, "r1")) == _without_time(_metrics(out, "r1"))
+
+
+def test_a_run_over_some_scenes_is_scored_on_those_scenes(scenes: Path, tmp_path: Path) -> None:
+    # As in the job, which stages only the selected scenes: the other directory is not
+    # scored, skipped or counted as missing.
+    write_scene(replace(cooperative_scene(), scene_id="coop2"), scenes / "coop2")
+    out = tmp_path / "predictions"
+    assert _code(_run(scenes, out, "r1", "--scene-ids", "coop", "--evaluate")) == EXIT_OK
+    record = read_record(out, "r1")
+    assert record is not None
+    assert record["evaluated"] == ["coop"] and record["skipped"] == []
