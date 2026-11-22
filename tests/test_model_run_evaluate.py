@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from dataclasses import replace
@@ -20,9 +21,10 @@ from coperceive.cli import main
 from coperceive.evaluation import scoring
 from coperceive.evaluation.config import DEFAULT_CONFIG, load_config
 from coperceive.evaluation.evaluate import RunReport
+from coperceive.evaluation.predictions import read_run_meta, write_run
 from coperceive.evaluation.report import config_protocol_label
 from coperceive.evaluation.scoring import EVALUATION_FILE, config_sha256, read_record
-from coperceive.models import slurm
+from coperceive.models import commands, slurm
 from coperceive.models.batch import EXIT_EVAL, EXIT_OK, EXIT_PROTOCOL, EXIT_TIMEOUT, RunOptions
 from coperceive.models.commands import combined_exit_code
 from coperceive.store import write_scene
@@ -324,3 +326,68 @@ def test_the_jobs_exit_code_combines_as_the_local_one(
     done = subprocess.run(["bash", "-c", script], env=env, check=False, capture_output=True)
     assert done.returncode == expected, done.stderr
     assert (target / "run.json").is_file()  # the run directory came home again
+
+
+def test_a_partial_run_scores_its_finished_scenes(
+    scenes: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The fake plugin has no fault that stops one scene of two, so the real run writes
+    # both and the stand-in turns it into a partial one (spec §Partial runs): coop2's
+    # boxes removed, run.json status partial, exit 3. Scoring scores coop.
+    write_scene(replace(cooperative_scene(), scene_id="coop2"), scenes / "coop2")
+    out = tmp_path / "predictions"
+    real = commands.run_batch
+
+    def partial(manifest: Any, root: Path, out_root: Path, run_id: str, *a: Any, **k: Any) -> Any:
+        report = real(manifest, root, out_root, run_id, *a, **k)
+        (out_root / run_id / "coop2" / "boxes.parquet").unlink()
+        meta = read_run_meta(out_root, run_id)
+        assert meta.provenance is not None
+        provenance = {**meta.provenance, "status": "partial", "reason": "plugin_error: test"}
+        write_run(out_root, run_id, replace(meta, provenance=provenance), [], force=True)
+        return replace(report, status="partial", reason="plugin_error: test")
+
+    monkeypatch.setattr(commands, "run_batch", partial)
+    assert _code(_run(scenes, out, "r1", "--evaluate")) == EXIT_PROTOCOL
+    record = read_record(out, "r1")
+    assert record is not None and record["status"] == "ok"
+    assert record["evaluated"] == ["coop"] and record["skipped"] == ["coop2"]
+    metrics = _metrics(out, "r1")
+    assert metrics["run_status"] == "partial" and metrics["missing_scenes"] == ["coop2"]
+
+
+def test_the_protocol_scored_under_is_the_one_this_run_recorded(
+    scenes: Path, tmp_path: Path
+) -> None:
+    # A rerun without --protocol records none: it is scored under the default, not under
+    # the protocol an earlier run of the same id recorded.
+    out = tmp_path / "predictions"
+    assert _code(_run(scenes, out, "r1", "--protocol", "legacy", "--evaluate")) == EXIT_OK
+    assert _scored_scopes(out, "r1") == ("pooled", "ego_only")
+    assert _code(_run(scenes, out, "r1", "--force", "--evaluate")) == EXIT_OK
+    run_json = json.loads((out / "r1" / "run.json").read_text(encoding="utf-8"))
+    assert "eval_protocol" not in run_json["provenance"]
+    assert _scored_scopes(out, "r1") == ("per_frame", "connected_union")
+
+
+def test_eval_run_scores_the_files_a_job_stages_as_it_scores_the_full_scenes(
+    scenes: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The job scores on $SCRATCH/scenes, which holds only the files in <run>.scenes.txt
+    # (no image bytes; no points.bin for a model without lidar). The numbers must be the
+    # ones the full scene directories give.
+    out = tmp_path / "predictions"
+    assert _code(_run(scenes, out, "r1", "--evaluate")) == EXIT_OK
+    main([*_run(scenes, tmp_path / "plan", "r1", "--evaluate"), *_slurm(tmp_path)])
+    capsys.readouterr()
+    listed = (tmp_path / "plan" / ".slurm" / "r1.scenes.txt").read_text(encoding="utf-8")
+    staged = tmp_path / "staged"
+    for name in listed.splitlines():
+        (staged / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(scenes / name, staged / name)
+    copy = tmp_path / "scratch-out"
+    shutil.copytree(out, copy)
+    for path in copy.rglob("metrics.json"):
+        path.unlink()
+    main(["eval", "run", "r1", "--root", str(staged), "--predictions", str(copy)])
+    assert _without_time(_metrics(copy, "r1")) == _without_time(_metrics(out, "r1"))
