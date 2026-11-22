@@ -561,11 +561,12 @@ def test_the_cli_takes_each_input_the_app_refuses(name: str, tmp_path: Path) -> 
         assert done.returncode == 0, (name, done.stderr)
 
 
-def _pending_names() -> list[str]:
-    return [case["name"] for case in CASES.get("pending_app", [])]
+def _pending_plugin_python_names() -> list[str]:
+    # Only the --plugin-python cases: another pending case checks its own difference.
+    return [case["name"] for case in CASES.get("pending_app", []) if "plugin_python" in case]
 
 
-@pytest.mark.parametrize("name", _pending_names())
+@pytest.mark.parametrize("name", _pending_plugin_python_names())
 def test_the_cli_carries_the_plugin_python_override_the_app_does_not_yet(
     name: str, tmp_path: Path
 ) -> None:
