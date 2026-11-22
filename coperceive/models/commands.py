@@ -297,6 +297,9 @@ def _plugin_json(row: PluginInfo) -> dict[str, object]:
             "seconds_per_sample": spec.resources.seconds_per_sample,
             "staging_seconds": spec.resources.staging_seconds,
             "conversion_seconds": spec.resources.conversion_seconds,
+            # True when inputs.raw is non-empty: the model reads files under --raw-root.
+            # An empty list (OpenCOOD CoBEVT, the fake plugin) does not.
+            "raw_inputs": bool(spec.inputs.raw),
         }
         for key, spec in manifest.models.items()
     }

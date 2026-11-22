@@ -131,17 +131,32 @@ def _cli_script(case: dict[str, Any], tmp_path: Path, *, with_ckpt_root: bool = 
     # coperceive_root (this checkout, mapped back to code_root by _logical), so the CLI's
     # own PYTHONPATH is checked end to end.
     patched: contextlib.AbstractContextManager[object] = contextlib.nullcontext()
-    manifest = GRIFFIN
+    manifest_path = REPO / case.get(
+        "manifest", "plugins/griffin/coperceive_griffin_model/model.yaml"
+    )
+    manifest = manifest_path
     if "code_root" in case:
         code = _under(tmp_path, case["code_root"])
-        manifest = code / GRIFFIN.relative_to(REPO)
+        manifest = code / manifest_path.relative_to(REPO)
         if not manifest.is_file():
-            shutil.copytree(GRIFFIN.parent, manifest.parent)
+            shutil.copytree(manifest_path.parent, manifest.parent)
         patched = mock.patch.object(slurm, "coperceive_root", return_value=code)
     media = ["--media-root", str(raw)] if case.get("media_root", True) else []
-    ckpt_root = _under(tmp_path, case.get("ckpt_root", f"{case['root']}/ckpts"))
-    # Griffin's ckpt_root has no manifest default, so every case gives the worker one.
-    ckpt = ["--option", f"ckpt_root={ckpt_root}"]
+    raw_args = [] if case.get("raw_root", True) is False else ["--raw-root", str(raw)]
+    # Griffin's ckpt_root has no manifest default, so a Griffin case gives the worker one.
+    # `"ckpt_root": false` is a model that does not declare it (OpenCOOD CoBEVT).
+    if case.get("ckpt_root", True) is False or not with_ckpt_root:
+        ckpt: list[str] = []
+    else:
+        ckpt_root = _under(tmp_path, case.get("ckpt_root", f"{case['root']}/ckpts"))
+        ckpt = ["--option", f"ckpt_root={ckpt_root}"]
+    checkpoint_args: list[str] = []
+    checkpoint = case.get("checkpoint")
+    if isinstance(checkpoint, str) and checkpoint:
+        src = _under(tmp_path, checkpoint)
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_bytes(b"checkpoint\n")
+        checkpoint_args = ["--option", f"checkpoint={src}"]
     options = [word for extra in case.get("extras", []) for word in ("--option", extra)]
     protocol = case.get("eval_protocol")
     args = [
@@ -154,10 +169,10 @@ def _cli_script(case: dict[str, Any], tmp_path: Path, *, with_ckpt_root: bool = 
         *(["--protocol", str(protocol)] if protocol is not None else []),
         "--scenes",
         str(scenes),
-        "--raw-root",
-        str(raw),
+        *raw_args,
         *media,
         *(ckpt if with_ckpt_root else []),
+        *checkpoint_args,
         *options,
         "--out",
         str(out),
@@ -326,7 +341,16 @@ def _parse(line: str, runtime: dict[str, str]) -> tuple[str, str, argparse.Names
     else:
         assert words[0].endswith("/coperceive"), words[:1]
         program, python, rest = words[0], words[0].removesuffix("coperceive") + "python", words[1:]
-    argv = [runtime.get(word, word) for word in rest]
+
+    def apply(word: str) -> str:
+        if word in runtime:
+            return runtime[word]
+        for key in sorted(runtime, key=len, reverse=True):
+            if key in word:
+                return word.replace(key, runtime[key])
+        return word
+
+    argv = [apply(word) for word in rest]
     errors = io.StringIO()
     try:
         with contextlib.redirect_stderr(errors):
@@ -391,6 +415,9 @@ def test_the_app_and_the_cli_write_the_same_griffin_job(name: str, tmp_path: Pat
         "$SCRATCH/work": "<SCRATCH>/work",
         "$STAGING": "0",
     }
+    checkpoint = case.get("checkpoint")
+    if isinstance(checkpoint, str) and checkpoint:
+        staged[f"$SCRATCH/checkpoints/checkpoint/{Path(checkpoint).name}"] = checkpoint
     _, py_cli, ns_cli = _parse(_run_line(cli), staged)
     program, py_app, ns_app = _parse(_run_line(app), {"$SCRATCH_DIR/work": "<SCRATCH>/work"})
     assert py_app == py_cli == case["python"]
@@ -527,6 +554,33 @@ def test_the_app_reads_what_model_list_json_prints_for_griffin(
     printed = json.loads(_logical(capsys.readouterr().out, Path("/nonexistent")))
     committed = json.loads((PARITY / CASES["model_list"]).read_text(encoding="utf-8"))
     assert printed == committed
+
+
+def test_the_app_reads_what_model_list_json_prints_for_opencood(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``model_list_no_raw.json`` is the CLI's listing of the OpenCOOD plugin, including
+    ``raw_inputs: false`` for CoBEVT (its manifest declares no ``inputs.raw``)."""
+
+    class _OpenCOOD:
+        name = "opencood"
+        group = "coperceive.models"
+        value = "coperceive_opencood_model:MANIFEST"
+
+        def load(self) -> object:
+            return REPO / "plugins/opencood/coperceive_opencood_model/model.yaml"
+
+    def entry_points(**_kwargs: object) -> list[_OpenCOOD]:
+        return [_OpenCOOD()]
+
+    monkeypatch.setattr(metadata, "entry_points", entry_points)
+    registry.clear_cache()
+    main(["model", "list", "--json"])
+    registry.clear_cache()
+    printed = json.loads(_logical(capsys.readouterr().out, Path("/nonexistent")))
+    committed = json.loads((PARITY / "model_list_no_raw.json").read_text(encoding="utf-8"))
+    assert printed == committed
+    assert printed["plugins"][0]["models"]["cobevt-lidar-v2xset"]["raw_inputs"] is False
 
 
 def _refusal_names() -> list[str]:

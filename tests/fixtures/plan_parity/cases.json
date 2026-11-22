@@ -325,6 +325,41 @@
       "coperceive_root": "/opt/coperceive",
       "samples": 1490,
       "media_root": false
+    },
+    {
+      "name": "no_raw_root",
+      "about": "OpenCOOD CoBEVT on prepared V2XSet scenes. The manifest declares no inputs.raw, so both scripts leave --raw-root out. The checkpoint archive is still required and the CLI stages it into scratch. There is no ckpt_root and no media root.",
+      "root": "/data/v2xset",
+      "model": "cobevt-lidar-v2xset",
+      "plugin": "opencood",
+      "manifest": "plugins/opencood/coperceive_opencood_model/model.yaml",
+      "model_list": "model_list_no_raw.json",
+      "profile": {
+        "partition": "gpu-a40",
+        "discovered_gpu_types": [
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [
+          "python/3.9.18"
+        ],
+        "coperceive_command": [
+          "/opt/venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules"
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/opt/venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490,
+      "raw_root": false,
+      "media_root": false,
+      "ckpt_root": false,
+      "checkpoint": "/data/v2xset/checkpoints/cobevt.zip"
     }
   ],
   "refusals": [
