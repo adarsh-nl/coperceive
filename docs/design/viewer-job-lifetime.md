@@ -32,6 +32,8 @@ cited from `release/v0.1.3`. Anything the code does not settle is marked **unver
     `coperceive remote start` › `sbatch scripts/desktop/remote_serve.sbatch`.
   - `state.remote` is set only by `remote_connect` (`main.rs:4318`).
   - No TypeScript file in the history has ever contained `remote_connect` (`git log -S`).
+    Until `803386a` (2026-11-03), `dataset_open` itself called it
+    (`803386a^:src-tauri/src/main.rs:2694`).
 - **Its lease is never renewed:**
   - `remote_serve.sbatch` stops the server once its heartbeat file is 600 s old
     (`COPERCEIVE_HEARTBEAT_TIMEOUT`, watchdog at lines 212–221).
@@ -44,13 +46,14 @@ cited from `release/v0.1.3`. Anything the code does not settle is marked **unver
 | Test controller command `"remote_connect"` (`main.rs:4042`) | Test-only. Its only users are the two E2E steps below. Removed with them. |
 | E2E Flow I, step CD-15: a slow-starting viewer job is attached, not refused | The app no longer attaches to jobs. The status rule stays tested for the CLI: `test_a_running_job_without_its_session_file_yet_is_starting_not_stopped` (`tests/test_remote.py`). |
 | E2E Flow F step 3, CD-19: `remote_connect`, then a local scene sends `remote stop` and clears the header | Steps 1–2 of the same flow stay: `dataset_open` streaming, then `start_local` clears "Streaming over SSH". With no remote session there is nothing to stop. (The script also labels the camera-preview flow, CD-11–13, as "Flow F".) |
-| `remote.rs` tests of `RemoteSessionManager`: queued/attach, cancel, reattach, `disconnect_with_timeout` | Removed with the manager. The command quoting, injection and token-redaction tests stay while `remote_status` or anything else uses `RemoteClient`. If nothing does, the CLI's own tests cover the same rules (`tests/test_remote.py`). |
+| `remote.rs` tests of `RemoteSessionManager`: queued/attach, cancel, reattach, `disconnect_with_timeout` | Removed with the manager. The command quoting, injection and token-redaction tests stay while anything still uses `RemoteClient`. Whether `tests/test_remote.py` covers the same rules for the CLI is **unverified**; the removal PR checks it before deleting any of them. |
+| Static upload `remote_static::prepare_remote_static` (`main.rs:4222`, inside `remote_connect`) and the E2E `FAKE_SCP` | Removed with the path. `set_resource_dir` and `OsLayout` in the same module stay: Python resolution uses them (`main.rs:160`, `platform/linux.rs:172`). |
 | `controller.rs` test `…allowed_origin_for_remote_connect` | Kept and renamed. It checks `open_viewer_window`'s origin sync, which `dataset_open` also uses. |
-| Disconnect on window close and quit (`main.rs:5559`, `5592`, `5633`); `disconnect_remote_in_background` (`829`, `1852`, `3854`) | Removed with `state.remote`. The sidecar stop next to each one stays. |
+| Disconnect on window close and quit (`main.rs:5559`, `5592`, `5633`); `disconnect_remote_in_background` (`829`, `1852`); the inline `disconnect()` in `dataset_open` (`3854`) | Removed with `state.remote`. The sidecar stop next to each one stays. |
 | `state.json` `viewer_sessions` (`state.rs:423`) | Removed. `AppPersistentState` does not deny unknown fields, so an old file still loads; add a test. |
-| Viewer job badge: `Viewer.tsx` › `getViewerJob` › `viewer_get_job` and `/viewer-session` › `viewer_session_status` (`main.rs:1050`) | Always empty in the app today, because nothing sets `state.remote`. Remove it with the path. |
+| Viewer job badge: `Viewer.tsx` › `getViewerJob` › `viewer_get_job` and `/viewer-session` › `viewer_session_status` (`main.rs:1050`) | Always empty in the app today, because nothing sets `state.remote`. Remove it with the path, together with the tests that reach it: `controller.rs:1543–1555` (`/viewer-session`), `web/src/desktop/ctrlGate.test.ts` (`viewer_get_job`), and the mock in `tests/test_viewer_layout.py:146`. |
 | Commands `remote_status`, `remote_disconnect` | No web caller. Remove them. |
-| **`open_predictions` (`main.rs:3313`), reached from Job watch and Run history** | **Not dead: it is reachable in the UI.** It needs `state.remote`, so today it always fails with "Open predictions needs an active remote session". This has been true since it was added (`1d9e63b`, 2026-10-30); no test covers it. **DECISION (Adarsh):** (a) re-point it to the `dataset_open` stream path, as a separate fix; or (b) hide the button until (a) is done. Removing the path must not make it worse silently. |
+| **`open_predictions` (`main.rs:3313`), reached from Job watch and Run history** | **Not dead: it is reachable in the UI.** It needs `state.remote`. That worked while `dataset_open` started the viewer job. Since `803386a` (2026-11-03; in the v0.1.0 and v0.1.1 tags) nothing sets it, so the call always fails with "Open predictions needs an active remote session". This is a regression from the switch to the stream path, and no test covers it. Nothing hides the button: `is_remote_enabled` is never called (only defined, `local.ts:175`); Run history is an HPC workspace tab and Job watch is part of New evaluation. **DECISION (Adarsh):** (a) re-point it to the `dataset_open` stream path, as a separate fix; or (b) hide the button until (a) is done. Removing the path must not make it worse silently. |
 | CLI `coperceive remote …`, `remote_serve.sbatch`, `tests/test_remote.py` (21 tests) | Kept, as decided. |
 
 ## The CLI's own lease is never renewed either (proposed v0.1.2 fix, not built)
@@ -59,10 +62,12 @@ cited from `release/v0.1.3`. Anything the code does not settle is marked **unver
   - `coperceive remote start` submits the job and returns.
   - `record_heartbeat` (`coperceive/remote/manager.py:197`) runs only from
     `coperceive remote heartbeat`.
-  - The served viewer does not touch the heartbeat file.
+  - The served viewer does not touch the heartbeat file. `remote status` only reads its
+    age (`manager.py:652–658`), and `remote stop` deletes it (`manager.py:813`).
 - **The docs never say to renew it:** `docs/reference/cli.md` has only the usage line.
-- **So:** a CLI viewer job stops about 600 s after it starts, whatever `--time` says,
-  unless its user runs `remote heartbeat` by hand.
+- **So, inferred from the code and unverified on the cluster:** a CLI viewer job stops
+  about 600 s after it starts, whatever `--time` says, unless its user runs
+  `remote heartbeat` by hand.
 - **Unverified on the cluster:** whether `COPERCEIVE_HEARTBEAT_TIMEOUT=0` set in the
   user's shell reaches the job. `start_session` passes its environment to `sbatch`, but
   the cluster's export setting is unknown.
