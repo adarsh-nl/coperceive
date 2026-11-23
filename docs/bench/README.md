@@ -4,7 +4,7 @@ Phase 0 of [ADR 0020](../adr/0020-viewer-at-real-scale.md). These scripts measur
 
 ## Prerequisites
 
-- The dev environment: `pip install -e '.[dev]'` (this installs Playwright).
+- The app and dev extras: `pip install -e '.[app,dev]'` (`coperceive serve` needs `app`; `dev` installs Playwright).
 - A Chromium build for Playwright: `python -m playwright install chromium`. On Linux CI, `python -m playwright install --with-deps chromium`.
 - The web bundle: `bash scripts/build_web_static.sh` writes `coperceive/app/static`, which is not committed. To use another build, set `COPERCEIVE_WEB_DIST` to a vite build directory, as the browser tests do.
 
@@ -25,7 +25,7 @@ The script writes one schema-1 scene through the store's own writer into `OUT/<s
 
 The same arguments and `--seed` write the same bytes. A target inside this repository is refused. The script prints the bytes written to stderr, and a JSON summary as the last line on stdout.
 
-At the defaults the points alone are 4 × 160,000 × 12 B × 100 = 768 MB (arithmetic). The script's JSON summary reports the bytes it wrote and its run time on your machine.
+At the defaults the points alone are 4 × 160,000 × 16 B × 100 = 1,024 MB on disk (xyz and intensity; arithmetic), of which the server sends 12 B per point. The script's JSON summary reports the bytes it wrote and its run time on your machine.
 
 ## Browser benchmark: `scripts/bench/viewer_bench.py`
 
@@ -34,7 +34,7 @@ python scripts/bench/viewer_bench.py                       # generate the defaul
 python scripts/bench/viewer_bench.py --quick               # CI shape: 4 x 160k x 16 x 30 samples, short window
 python scripts/bench/viewer_bench.py --fixture /tmp/coperceive-scale --measure-s 7
 python scripts/bench/viewer_bench.py --json-out /tmp/viewer-bench.json
-python scripts/bench/viewer_bench.py --quick --gl default   # on a Mac: hardware WebGL
+python scripts/bench/viewer_bench.py --quick --headed       # on a Mac; check browser.renderer
 ```
 
 The bench runs these steps:
@@ -53,9 +53,9 @@ The JSON report goes to stdout (last line) and a table to stderr.
 | --- | --- | --- |
 | `measured.frame_time_ms` | p50/p95/max between animation frames | a `requestAnimationFrame` loop injected by the bench |
 | `measured.samples` | samples drawn per second against the scene rate, and dropped samples | applied entries in `__COPERCEIVE_FRAME_STATS__` |
-| `measured.phases_ms` | `load` (frame document, all samples), `points` (wait for the sweeps), `draw`, `render`: p50/p95 over applied samples | `__COPERCEIVE_FRAME_STATS__` |
-| `measured.io_ms` | per kind (`frame`, `points`, `image`): `wait` (request to response), `read` (body), `parse` (frame JSON), `decode` (camera images) | the bench's init-script wrapper around `fetch`, `Response.json`/`arrayBuffer`/`blob`, `createImageBitmap` |
-| `measured.decode_ms` | `frame_json_parse`, `image_decode`; `points` is null: sweeps are raw float32, and their colour fill and GPU upload are inside `draw` | from `io_ms` |
+| `measured.phases_ms` | `load` (frame document, all samples); over applied samples: `points` (wait for the sweeps), `draw` (that wait, colour fill, CPU buffer copy), `render` (GPU upload, both composer passes): p50/p95 | `__COPERCEIVE_FRAME_STATS__` |
+| `measured.io_ms`, `measured.io_all_ms` | per scene route (`frame`, `points`, `image`): `wait` (request to response), `read` (body), `parse` (frame JSON); in the window, and over the whole run | the bench's init-script wrapper around `fetch` and `Response.json`/`arrayBuffer`/`blob` |
+| `measured.decode_ms` | `frame_json_parse`; `image_decode` is null (the camera strip decodes in a Web Worker, which the wrapper cannot reach); `points` is null (raw float32) | from `io_ms` |
 | `measured.buffering` | "Buffering…" events and time after warm-up; stream-buffer stalls | `.clock .buffering`, `__COPERCEIVE_BUFFER_STATS__` |
 | `measured.playhead` | samples the playhead advanced per second; whether it looped | `__COPERCEIVE_PLAYBACK_STATE__` |
 | `measured.memory` | JS heap; server peak RSS (`server_rss_peak_bytes`, Linux) or RSS at the end (`server_rss_end_bytes`, elsewhere); GPU **estimate**: visible points × 24 B | `performance.memory`, `/proc/<pid>/status` VmHWM or `ps`, `__COPERCEIVE_SCENE_COUNTS__` |
@@ -69,7 +69,7 @@ The app has no per-frame timing metric yet; ADR 0020 phase 2 adds one. Until the
 
 ### Without WebGL
 
-When the page cannot start WebGL, the viewer shows its `.webgl-missing` notice. The bench then prints `rendering skipped: no WebGL` and reports only the fetch side: load and points phases, buffering, network, heap. It reports no frame time, draw, render, samples drawn or GPU numbers.
+When the page cannot start WebGL, the viewer shows its `.webgl-missing` notice. The bench then prints `rendering skipped: no WebGL` and reports only the fetch side: the `load` phase, the I/O, buffering, network and heap. The `points` phase stays empty (count 0), because the viewer fetches sweeps only to draw them. It reports no frame time, draw, render, samples drawn or GPU numbers.
 
 `web/src/viewer/capabilities.ts` describes what a scene can show (viewpoints, cameras). It does not report WebGL.
 

@@ -17,8 +17,9 @@ What the code does today:
   - The sensor-to-world transform runs per request, uncached (`viewdata.py:181-228`), on
     the event loop (`server.py:754`).
 - **Frame documents** are JSON, rebuilt per request by linear scans (`viewdata.py:141-178`).
-- **Requests:** a sample costs 1 frame document, 4 points requests and up to 16 images, with
-  at most 6 in flight (`streamBuffer.ts`).
+- **Requests:** a sample costs 1 frame document, 4 points requests and up to 16 images.
+  At most 6 frame and points requests are in flight (`streamBuffer.ts`). The camera strip
+  fetches its images separately (`cameras.tsx`) and decodes them in a Web Worker.
 - **Server memory:** a local scene holds every sweep from open (`store.py:211, 391-416`).
   That is about 10 MB per sample, or 10 GB for 1000 samples.
 - **Client, main thread, per sample:**
@@ -47,21 +48,27 @@ before and after. A change that moves no budgeted number is dropped.
   - writes an N agents × P points × C cameras × F samples scene with the store's writer;
   - writes only outside the repository: a repo target is refused, and nothing is
     committed;
-  - defaults to 4 × 160,000 × 16 × 100 at 10 Hz, about 0.8 GB of points;
+  - defaults to 4 × 160,000 × 16 × 100 at 10 Hz: about 1 GB of points on disk (16 B per
+    point, xyz and intensity), 768 MB of them served (12 B per point);
   - camera PNGs are 160×120 by default (`--image-size`).
 - **`scripts/bench/viewer_bench.py`** plays the fixture in headless Chromium against
   `coperceive serve`. It reports (details in `docs/bench/README.md`):
   - frame time p50/p95/max;
   - samples drawn per second;
-  - **load**, **points** wait, **draw** and **render**, from the app's
-    `__COPERCEIVE_FRAME_STATS__`. Draw and render count applied samples only.
+  - from the app's `__COPERCEIVE_FRAME_STATS__`, over applied samples:
+    - **load:** the frame document;
+    - **points:** the wait for the sweeps;
+    - **draw:** that wait, the colour fill and the CPU buffer copy;
+    - **render:** the GPU upload and both composer passes.
   - **I/O and decode** per request kind, from a bench-only wrapper around the page's
-    `fetch`, body reads and `createImageBitmap`. Points need no decode (raw float32), and
-    their colour fill and upload sit inside draw.
+    `fetch` and body reads:
+    - the wait, the body read and the frame JSON parse;
+    - points need no decode, being raw float32;
+    - image decode runs in the camera worker, out of reach, so it is reported as null.
   - **memory:** JS heap, server peak RSS, and **estimated** GPU bytes;
   - **the machine:** CPU, cores, RAM, OS and WebGL renderer.
 
-  Without WebGL it reports no render numbers and says so.
+  Without WebGL it reports only `load` and the I/O, and says so.
 - **`scripts/bench/stream_bench.py`:** server-side streaming at a chosen shape, with the same
   machine record.
 - **Baseline:** the first measured numbers go into the PR before any phase 1 change. None
@@ -73,12 +80,14 @@ before and after. A change that moves no budgeted number is dropped.
     lists `tests/test_scale_fixture.py` there, so the bench test stops skipping in CI.
   - (b) A CPU job on the cluster that you submit, with the fixture in `/local`. This is
     also SwiftShader.
-  - (c) A run on your Mac, the only option with hardware WebGL.
+  - (c) A run on your Mac. Whether headless Chromium gets hardware WebGL there is
+    unverified; the report's renderer string shows it (`--headed` if not).
   - Recommended: (a) for every PR, and (c) once for the hardware number.
-- **DECISION (Adarsh) 2: a measurement-only hook in `Viewer.tsx`.**
-  - Splitting the colour fill and the GPU upload out of `draw` needs timing marks in agy's
-    file.
-  - Without it, `draw` stays one number.
+- **DECISION (Adarsh) 2: measurement-only hooks in agy's files.**
+  - Timing marks in `Viewer.tsx` would split the points wait, colour fill and buffer copy
+    in `draw`, and the upload in `render`.
+  - A timing message in the `cameras.tsx` worker would measure image decode.
+  - Without them, those stay combined or unmeasured.
 
 ### Phase 1: server (unowned files)
 
@@ -119,7 +128,8 @@ before and after. A change that moves no budgeted number is dropped.
   - no page errors;
   - the bench completes at real shape.
 - **DECISION (Adarsh) 6: where "p95 under 100 ms" is asserted.**
-  - (a) a hardware-backed macOS runner, if its WebGL is (unverified);
+  - (a) the macOS CI runner, if its WebGL is hardware-backed (unverified; it reports an
+    "Apple M1 (Virtual)" CPU);
   - (b) a recorded run on your Mac per phase;
   - (c) transport and decode budgets only.
 - **DECISION (Adarsh) 7: the target rate and image size.**
@@ -128,8 +138,7 @@ before and after. A change that moves no budgeted number is dropped.
 
 ## Consequences
 
-- One request per sample instead of 5–21, and no per-sample allocation of about 15 MB on the
-  main thread.
+- One points request per sample instead of 4 (2–18 requests with the frame and images), and
+  no per-sample allocation of about 15 MB on the main thread.
 - New viewer code in agy's files, gated on the PM's routing.
-- Full-size fixtures are about 0.8 GB of points plus small images, generated at run time
-  and never committed.
+- Full-size fixtures are about 1 GB, generated at run time and never committed.

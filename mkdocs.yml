@@ -108,6 +108,7 @@ nav:
       - "OpenCOOD's AP, read by room A": notes/opencood-ap-behaviour.md
       - Security review: security/review-2026-11.md
       - Updates: desktop/updates.md
+      - Viewer benchmarks: bench/README.md
       - Decisions:
           - Data model: adr/0001-data-model.md
           - On-disk format: adr/0002-on-disk-format.md
@@ -127,5 +128,6 @@ nav:
           - Cluster profiles: adr/0015-cluster-profiles-scheduler-adapter.md
           - Plan parity: adr/0018-plan-parity.md
           - Security review: adr/0019-security-review.md
+          - Viewer at real scale (proposed): adr/0020-viewer-at-real-scale.md
           - App runs follow the CLI job: adr/0021-app-model-runs-follow-the-cli-slurm-job.md
           - Drop macOS Intel: adr/0022-drop-macos-intel.md
