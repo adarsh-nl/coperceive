@@ -1160,10 +1160,11 @@ export async function onTownMapProgress(
 }
 
 export interface DesktopUpdateCheckResult {
-  status: "available" | "uptodate" | "error";
+  status: "available" | "uptodate" | "unsupported" | "error";
   version?: string;
   notes?: string;
   pub_date?: string;
+  message?: string;
   error?: string;
   is_network?: boolean;
 }
