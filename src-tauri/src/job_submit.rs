@@ -399,16 +399,19 @@ pub fn render_run_script(
     } else {
         format!("{} --output-dir \"$OUT_DIR\"", quoted_command(&command))
     };
+    let container_image = match plan.environment.kind {
+        EnvironmentKind::Container => plan
+            .environment
+            .container_image
+            .as_deref()
+            .filter(|image| !image.is_empty()),
+        _ => None,
+    };
     let run_line = match plan.environment.kind {
         EnvironmentKind::Container => {
-            let image = plan
-                .environment
-                .container_image
-                .as_deref()
-                .filter(|image| !image.is_empty())
-                .ok_or_else(|| {
-                    "This plan uses a container environment but has no image path.".to_string()
-                })?;
+            let image = container_image.ok_or_else(|| {
+                "This plan uses a container environment but has no image path.".to_string()
+            })?;
             format!(
                 "apptainer exec --cleanenv --bind \"$SCRATCH_DIR\" --bind \"$OUT_DIR\" {} {run_command}",
                 shell_quote(image)
@@ -444,6 +447,15 @@ pub fn render_run_script(
             "rsync -a {} \"$SCRATCH_DIR/work/\" \"$OUT_DIR/work/\"",
             work_copy_filter(plan)?.join(" ")
         ));
+        if plan.evaluate {
+            lines.extend(evaluate_lines(plan, &|command| match container_image {
+                Some(image) => format!(
+                    "apptainer exec --cleanenv --bind \"$SCRATCH_DIR\" --bind \"$OUT_DIR\" {} {command}",
+                    shell_quote(image)
+                ),
+                None => command,
+            })?);
+        }
         lines.push("if [ \"$RC\" -ne 0 ]; then exit \"$RC\"; fi".to_string());
         lines.push(String::new());
         // What `model run` writes: <out>/<run_id>/run.json and one
@@ -732,6 +744,60 @@ fn capture_interpreter(plan: &RunPlan) -> Result<(String, Option<String>), Strin
 /// output directory, `--run-id` its id and `--work` the job's scratch. The post-run
 /// checks and the results views rely on it, so a saved plan that says otherwise (stale
 /// or edited) is refused, as `--output-dir` is.
+/// "Score the run after it finishes": the job's scoring step, as the CLI's
+/// `model run --evaluate --slurm` job writes it (`coperceive/models/slurm.py`
+/// `evaluate_lines`): `eval run` on the run's scenes and predictions, guarded by its
+/// `run.json` (none = a failure, never a silent skip), and `RC=5` only when the model
+/// exited 0 and scoring did not. The model's own non-zero code always wins. Unlike the
+/// CLI's job, the app's run writes straight to `$OUT_DIR` and reads its scenes in place,
+/// so there is nothing to stage or copy home. `wrap` puts a container's
+/// `apptainer exec` in front, as on the run line.
+fn evaluate_lines(plan: &RunPlan, wrap: &dyn Fn(String) -> String) -> Result<Vec<String>, String> {
+    let start = plan
+        .argv
+        .windows(2)
+        .position(|pair| pair[0] == "model" && pair[1] == "run")
+        .ok_or_else(|| "This saved built-in plan does not run coperceive model run.".to_string())?;
+    let scenes = plan.argv[start + 2..]
+        .windows(2)
+        .find(|pair| pair[0] == "--scenes")
+        .map(|pair| pair[1].clone())
+        .ok_or_else(|| {
+            "This saved built-in plan's run line names no --scenes to score. Rebuild this plan \
+             before submitting."
+                .to_string()
+        })?;
+    let mut words: Vec<String> = plan.argv[..start].to_vec();
+    words.extend(
+        ["eval", "run", plan.id.as_str(), "--root", scenes.as_str(), "--predictions", "$OUT_DIR"]
+            .map(str::to_string),
+    );
+    // The run's AP protocol, passed only when not the default, as on the run line.
+    if plan.eval_protocol.trim() == "legacy" {
+        words.extend(["--protocol".to_string(), "legacy".to_string()]);
+    }
+    let score = wrap(quoted_command_with(&words, &[("--predictions", "\"$OUT_DIR\"")]));
+    let run_json = format!("\"$OUT_DIR/{}/run.json\"", plan.id);
+    Ok(vec![
+        String::new(),
+        "# Score the run after it finishes: as 'eval run' does, on the run's scenes.".to_string(),
+        "EVAL_RC=0".to_string(),
+        format!("if [ -f {run_json} ]; then"),
+        "  set +e".to_string(),
+        format!("  {score}"),
+        "  EVAL_RC=$?".to_string(),
+        "  set -e".to_string(),
+        "  echo \"eval run exit $EVAL_RC\"".to_string(),
+        "else".to_string(),
+        "  # No run.json means nothing to score: a failure, never a silent skip.".to_string(),
+        format!("  echo \"eval run skipped: no run.json for {}\" >&2", plan.id),
+        "  EVAL_RC=1".to_string(),
+        "fi".to_string(),
+        "# The model's own failure wins; a complete run whose scoring failed exits 5.".to_string(),
+        "if [ \"$RC\" -eq 0 ] && [ \"$EVAL_RC\" -ne 0 ]; then RC=5; fi".to_string(),
+    ])
+}
+
 fn check_builtin_run_words(plan: &RunPlan) -> Result<(), String> {
     let Some(start) = plan
         .argv
@@ -1041,6 +1107,7 @@ mod tests {
             model_options: Vec::new(),
             eval_protocol: "default".to_string(),
             work_dir: String::new(),
+            evaluate: false,
             staging_seconds: None,
             checkpoint: crate::run_plan::PlanArtifact {
                 path: "/data/code/checkpoints/model.pt".to_string(),
@@ -1332,6 +1399,125 @@ mod tests {
             .expect_err("missing ckpt_root");
         assert!(error.contains("ckpt_root"), "{error}");
         assert!(error.contains("Rebuild this plan"), "{error}");
+    }
+
+    const EXIT_LINE: &str = "if [ \"$RC\" -ne 0 ]; then exit \"$RC\"; fi";
+
+    #[test]
+    fn a_scored_plan_scores_after_the_work_copy_and_before_the_exit() {
+        let profile = profile("ps");
+        let plain = render_run_script(&profile, &builtin_plan(&profile), &SubmitOptions::default())
+            .expect("unscored");
+        assert!(!plain.script.contains("eval run") && !plain.script.contains("EVAL_RC"));
+        let mut plan = builtin_plan(&profile);
+        plan.evaluate = true;
+        let script = render_run_script(&profile, &plan, &SubmitOptions::default())
+            .expect("scored")
+            .script;
+        let lines: Vec<&str> = script.lines().collect();
+        let at = |needle: &str| {
+            lines.iter().position(|line| line.contains(needle)).unwrap_or_else(|| panic!("{needle}\n{script}"))
+        };
+        let (run, work, score, rc5, exit) = (
+            at(" model run --manifest "),
+            at("\"$SCRATCH_DIR/work/\" \"$OUT_DIR/work/\""),
+            at(" eval run "),
+            at("then RC=5; fi"),
+            lines.iter().position(|line| *line == EXIT_LINE).expect("exit line"),
+        );
+        assert!(run < work && work < score && score < rc5 && rc5 + 1 == exit, "{script}");
+        // The run's own scenes and predictions, the default protocol left out as on the run line.
+        assert_eq!(
+            lines[score],
+            format!(
+                "  /opt/venv/bin/python -m coperceive eval run {id} --root /data/scenes/val \
+                 --predictions \"$OUT_DIR\"",
+                id = plan.id
+            )
+        );
+        assert!(script.contains(&format!("if [ -f \"$OUT_DIR/{}/run.json\" ]; then", plan.id)));
+        assert!(script.contains(&format!("  echo \"eval run skipped: no run.json for {}\" >&2", plan.id)));
+        // The run line itself is unchanged: scoring is a step of the job, not a flag.
+        assert_eq!(lines[run], plain.script.lines().find(|l| l.contains(" model run --manifest ")).unwrap());
+        // A legacy run is scored legacy.
+        plan.eval_protocol = "legacy".to_string();
+        plan.argv.extend(["--protocol".to_string(), "legacy".to_string()]);
+        let legacy = render_run_script(&profile, &plan, &SubmitOptions::default()).expect("legacy");
+        let score = legacy.script.lines().find(|line| line.contains(" eval run ")).unwrap();
+        assert!(score.ends_with("--predictions \"$OUT_DIR\" --protocol legacy"), "{score}");
+    }
+
+    #[test]
+    fn a_container_plan_scores_inside_the_same_container() {
+        let profile = profile("ps");
+        let mut plan = builtin_plan(&profile);
+        plan.evaluate = true;
+        plan.environment.kind = EnvironmentKind::Container;
+        plan.environment.container_image = Some("/data/images/coperceive.sif".to_string());
+        let preview = render_run_script(&profile, &plan, &SubmitOptions::default()).expect("container");
+        let score = preview.script.lines().find(|line| line.contains(" eval run ")).expect("score");
+        assert!(
+            score.starts_with("  apptainer exec --cleanenv --bind \"$SCRATCH_DIR\" --bind \"$OUT_DIR\" /data/images/coperceive.sif "),
+            "{score}"
+        );
+    }
+
+    /// The scoring step and the exit after it, run in bash with a stand-in interpreter
+    /// that exits `eval_rc`: the same combinations as the CLI's job test.
+    #[cfg(unix)]
+    #[test]
+    fn the_scored_jobs_exit_code_combines_as_the_clis() {
+        let profile = profile("ps");
+        let root = std::env::temp_dir().join(format!("coperceive-app-evaluate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("root");
+        let fake = root.join("python");
+        for (model_rc, eval_rc, has_run_json, expected, skipped) in [
+            (0, 0, true, 0, false),
+            (0, 1, true, 5, false),
+            (3, 0, true, 3, false),
+            (3, 1, true, 3, false),
+            (4, 1, true, 4, false),
+            (1, 0, true, 1, false),
+            // The model exited 0 without run.json: never scored silently.
+            (0, 0, false, 5, true),
+            (3, 0, false, 3, true),
+        ] {
+            std::fs::write(&fake, format!("#!/bin/sh\nexit {eval_rc}\n")).expect("fake");
+            std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).expect("chmod");
+            let mut plan = builtin_plan(&profile);
+            plan.evaluate = true;
+            plan.argv[0] = fake.display().to_string();
+            let script = render_run_script(&profile, &plan, &SubmitOptions::default()).expect("render").script;
+            let lines: Vec<&str> = script.lines().collect();
+            let start = lines.iter().position(|line| line.starts_with("# Score the run after")).expect("block");
+            let exit = lines.iter().position(|line| *line == EXIT_LINE).expect("exit");
+            let out = root.join("out");
+            let _ = std::fs::remove_dir_all(&out);
+            std::fs::create_dir_all(out.join(&plan.id)).expect("run dir");
+            if has_run_json {
+                std::fs::write(out.join(&plan.id).join("run.json"), "{}").expect("run.json");
+            }
+            let tail = [
+                "set -euo pipefail".to_string(),
+                format!("RC={model_rc}"),
+                format!("OUT_DIR={}", shell_quote(&out.display().to_string())),
+            ]
+            .into_iter()
+            .chain(lines[start..=exit].iter().map(|line| line.to_string()))
+            .chain(["exit 0".to_string()])
+            .collect::<Vec<_>>()
+            .join("\n");
+            let done = std::process::Command::new("/bin/bash").arg("-c").arg(&tail).output().expect("bash");
+            let stderr = String::from_utf8_lossy(&done.stderr);
+            assert_eq!(done.status.code(), Some(expected), "{model_rc}/{eval_rc}/{has_run_json}: {stderr}");
+            assert_eq!(
+                stderr.contains(&format!("eval run skipped: no run.json for {}", plan.id)),
+                skipped,
+                "{stderr}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

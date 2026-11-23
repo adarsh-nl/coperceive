@@ -272,6 +272,8 @@ fn render(cases: &Value, case: &Value, entry: &ServerEntry) -> Result<String, St
         // The AP protocol the plan records; a legacy case also puts it in the run line.
         eval_protocol: case["eval_protocol"].as_str().unwrap_or("default").to_string(),
         environment_override: None,
+        // New evaluation's "Score the run after it finishes".
+        evaluate: case["evaluate"].as_bool().unwrap_or(false),
     };
     let plan = build_run_plan(&cluster, entry, &request).map_err(|e| format!("build_run_plan: {e}"))?;
     let saved = save_run_plan(&cluster, entry, &plan, &request).map_err(|e| format!("save_run_plan: {e}"))?;

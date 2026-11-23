@@ -3,6 +3,8 @@ import test from "node:test";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import {
+  scoringSummary,
+  type EvaluationRecord,
   collectValues,
   emptyEnvironmentOverride,
   environmentKindLabel,
@@ -543,4 +545,72 @@ test("a walltime over the partition's discovered limit is refused before the pre
   assert.match(walltimeProblem("48:00:00", plan) ?? "", /1-00:00:00/);
   // No discovered limit: nothing to refuse.
   assert.strictEqual(walltimeProblem("7-00:00:00", { time_estimate: "01:00:00", partition_max_time: null }), null);
+});
+
+const record = (over: Partial<EvaluationRecord> = {}): EvaluationRecord => ({
+  status: "ok",
+  error: null,
+  protocol: "default (ranking per_frame, GT connected_union)",
+  config_sha256: "ab12",
+  created_utc: "2026-11-23T12:00:00Z",
+  command: "eval run",
+  evaluated: ["coop", "coop2"],
+  skipped: [],
+  errors: [],
+  ...over,
+});
+
+test("a scored job's result: exit 5 is the model finished and scoring failed, never a model failure", () => {
+  // Not a scored plan, or still running: nothing about scoring.
+  assert.equal(scoringSummary({ evaluate: false, state: "completed", exitCode: 0, record: record() }), null);
+  assert.equal(scoringSummary({ evaluate: true, state: "running", record: undefined }), null);
+  assert.equal(scoringSummary({ evaluate: true, state: "completed", exitCode: 0, record: undefined })?.headline,
+    "Reading the scoring record…");
+
+  const ok = scoringSummary({ evaluate: true, state: "completed", exitCode: 0, record: record() });
+  assert.equal(ok?.headline, "Scored.");
+  assert.equal(ok?.failed, false);
+  // The protocol always comes with the result; no AP number is shown without it.
+  assert.ok(ok?.detail.includes("AP protocol: default (ranking per_frame, GT connected_union)"), ok?.detail.join("\n"));
+  assert.ok(ok?.detail.includes("2 scenes scored"));
+
+  const failed = scoringSummary({
+    evaluate: true,
+    state: "failed",
+    exitCode: 5,
+    record: record({ status: "failed", error: "KeyError: 'ap'", evaluated: [] }),
+  });
+  assert.equal(failed?.headline, "Model finished, scoring failed.");
+  assert.equal(failed?.modelFinished, true);
+  assert.equal(failed?.detail[0], "KeyError: 'ap'");
+  assert.ok(failed?.detail.some((line) => line.startsWith("AP protocol: ")));
+
+  // Exit 5 without a record: the run left no run.json; the stderr tail explains.
+  const norecord = scoringSummary({ evaluate: true, state: "failed", exitCode: 5, record: null });
+  assert.equal(norecord?.headline, "Model finished, scoring failed.");
+  assert.match(norecord?.detail[0] ?? "", /no run\.json/);
+
+  // Scene errors under exit 5 list the failing scenes.
+  const errors = scoringSummary({
+    evaluate: true,
+    state: "failed",
+    exitCode: 5,
+    record: record({ status: "errors", errors: ["coop2: ValueError"], evaluated: ["coop"] }),
+  });
+  assert.deepEqual(errors?.detail.slice(0, 2), ["Scoring status: errors.", "coop2: ValueError"]);
+
+  // A model failure keeps its own panel: a partial run (exit 3) scored on its finished scenes,
+  // a timeout or a model failure with no record is "not scored", not "scoring failed".
+  const partial = scoringSummary({ evaluate: true, state: "failed", exitCode: 3, record: record({ skipped: ["coop2"] }) });
+  assert.equal(partial?.modelFinished, false);
+  assert.equal(partial?.headline, "The model's finished scenes were scored.");
+  assert.ok(partial?.detail.includes("2 scenes scored, 1 skipped"));
+  for (const [state, exitCode] of [["timeout", null], ["failed", 1], ["out_of_memory", null]] as const) {
+    const summary = scoringSummary({ evaluate: true, state, exitCode, record: null });
+    assert.equal(summary?.modelFinished, false, state);
+    assert.equal(summary?.failed, false, state);
+    assert.match(summary?.headline ?? "", /^Not scored: the model did not finish/);
+  }
+  // A completed job that left no record is reported, not silently passed.
+  assert.equal(scoringSummary({ evaluate: true, state: "completed", exitCode: 0, record: null })?.failed, true);
 });

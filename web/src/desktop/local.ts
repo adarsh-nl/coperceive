@@ -18,6 +18,7 @@ import type {
   JobLogTail,
   JobSubmitOutcome,
   JobWatchStatus,
+  EvaluationRecord,
   MetricsReport,
   PipelineEntry,
   PredictionTail,
@@ -1079,6 +1080,15 @@ export async function runMetrics(profileId: string, planId: string): Promise<Met
     return await invoke<MetricsReport | null>("run_metrics", { profileId, planId });
   }
   throw new Error("The run report is only available in the desktop app.");
+}
+
+/** A scored built-in run's evaluation.json, or null when it was not scored (yet). */
+export async function runEvaluation(profileId: string, planId: string): Promise<EvaluationRecord | null> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<EvaluationRecord | null>("run_evaluation", { profileId, planId });
+  }
+  throw new Error("The scoring record is only available in the desktop app.");
 }
 
 /** Imports the run's predictions and opens the viewer on the stored run. */

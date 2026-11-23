@@ -616,38 +616,74 @@ def test_the_cli_takes_each_input_the_app_refuses(name: str, tmp_path: Path) -> 
         assert done.returncode == 0, (name, done.stderr)
 
 
-def _pending_evaluate_names() -> list[str]:
-    return [case["name"] for case in CASES.get("pending_app", []) if case.get("evaluate")]
+# The scoring step's lines both jobs write word for word (the CLI's ``evaluate_lines``,
+# the app's ``job_submit::evaluate_lines``): the guard's shape, the indented strict-mode
+# toggles that keep ``_run_block``'s counts, and the combined exit code.
+SCORING_SHARED = (
+    "EVAL_RC=0",
+    "  set +e",
+    "  EVAL_RC=$?",
+    "  set -e",
+    '  echo "eval run exit $EVAL_RC"',
+    "else",
+    "  EVAL_RC=1",
+    "fi",
+    'if [ "$RC" -eq 0 ] && [ "$EVAL_RC" -ne 0 ]; then RC=5; fi',
+)
 
 
-@pytest.mark.parametrize("name", _pending_evaluate_names())
-def test_the_cli_scores_after_the_run_the_app_does_not_yet(name: str, tmp_path: Path) -> None:
-    """A CLI-only case: the app half is pending (allowed_differences.json
-    ``pending_app_cases``, with the follow-up named). The CLI's script is the base case's
-    with one block added after the run's copy home: the ``eval run`` scoring step on the
-    staged scenes, the second copy home and the combined exit code. The run line is the
-    base case's, word for word."""
-    (case,) = [case for case in CASES["pending_app"] if case["name"] == name]
-    assert name not in _case_names(), name
-    assert not (PARITY / "app" / f"{name}.sbatch").exists(), name
-    (pending,) = [e for e in LEDGER["pending_app_cases"] if e["case"] == name]
-    for key in ("follow_up", "why", "cite"):
-        assert pending[key].strip() and case.get("follow_up", "").strip(), (name, key)
-    cli = _cli_script(case, tmp_path / "evaluate")
-    base = _cli_script(_case("base"), tmp_path / "base")
-    assert _run_line(cli) == _run_line(base)
-    a, b = _lines(cli), _lines(base)
+def _scoring_block(scored: str, base: str) -> tuple[list[str], str]:
+    """The lines ``scored`` adds to ``base`` (one inserted block) and the line after it."""
+    a, b = _lines(scored), _lines(base)
     opcodes = difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes()
     changed = [op for op in opcodes if op[0] != "equal"]
-    assert [op[0] for op in changed] == ["delete"], changed  # lines only the CLI script has
+    assert [op[0] for op in changed] == ["delete"], changed  # lines only the scored job has
     (_, i1, i2, _, _) = changed[0]
-    block = a[i1:i2]
-    assert (
-        block[0] == "" and block[-1] == 'if [ "$RC" -eq 0 ] && [ "$EVAL_RC" -ne 0 ]; then RC=5; fi'
+    return a[i1:i2], a[i2]
+
+
+def test_both_jobs_score_after_the_run_and_change_nothing_else(tmp_path: Path) -> None:
+    """``evaluate_after_run``: each side's job is its base case's plus one scoring block
+    after the run's copy home (CLI) or work copy (app), ending with the ``RC=5`` line
+    right before the side's exit; the run line is the base case's, word for word."""
+    case = _case("evaluate_after_run")
+    assert case["evaluate"] is True
+    assert "evaluate_after_run" not in [c["name"] for c in CASES.get("pending_app", [])]
+    assert "evaluate_after_run" not in [e["case"] for e in LEDGER["pending_app_cases"]]
+    sides = {
+        "cli": (
+            _cli_script(case, tmp_path / "evaluate"),
+            _cli_script(_case("base"), tmp_path / "base"),
+        ),
+        "app": (_app_script("evaluate_after_run"), _app_script("base")),
+    }
+    after = {"cli": 'echo "done:"', "app": EXIT_WITH_RC["app"]}
+    blocks: dict[str, list[str]] = {}
+    for side, (scored, base) in sides.items():
+        assert _run_line(scored) == _run_line(base), side
+        block, following = _scoring_block(scored, base)
+        assert block[0] == "" and block[-1] == SCORING_SHARED[-1], (side, block)
+        assert following.startswith(after[side]), (side, following)
+        for line in SCORING_SHARED:
+            assert block.count(line) == 1, (side, line)
+        blocks[side] = block
+    # The scoring lines: ``eval run`` on the run, its scenes and its predictions.
+    cli_score, app_score = (
+        next(line for line in blocks[side] if " -m coperceive eval run " in line)
+        for side in ("cli", "app")
     )
-    (score,) = [line for line in block if " -m coperceive eval run " in line]
-    assert '"$RUN_ID" --root "$SCRATCH/scenes" --predictions "$SCRATCH/out"' in score
-    assert a[i2].startswith('echo "done:"'), a[i2]
+    assert '"$RUN_ID" --root "$SCRATCH/scenes" --predictions "$SCRATCH/out"' in cli_score
+    assert app_score.split()[1:3] == ["-m", "coperceive"], app_score
+    assert app_score.split()[3:] == [
+        "eval",
+        "run",
+        CASES["run_id"],
+        "--root",
+        f"{case['root']}/scenes",
+        "--predictions",
+        '"$OUT_DIR"',
+    ], app_score
+    assert cli_score.split()[0] == app_score.split()[0] == case["python"]
 
 
 def _pending_plugin_python_names() -> list[str]:
