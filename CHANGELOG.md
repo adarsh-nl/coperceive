@@ -124,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - macOS Intel (x86_64) builds are discontinued; v0.1.2 is the last Intel release.
+- Intel Mac users on v0.1.1: download v0.1.2 manually from the [v0.1.2 release page](https://github.com/adarsh-nl/coperceive/releases/tag/v0.1.2).
 
 ## [0.1.1] - 2026-11-19
 
