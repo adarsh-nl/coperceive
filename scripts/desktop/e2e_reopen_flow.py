@@ -1,7 +1,7 @@
 """Open, close and reopen a cluster dataset in one running app, and time each step.
 
-Step CD-20 of ``e2e_cluster_datasets_app.sh`` (feature C, phase 0 in
-``docs/design/viewer-job-lifetime.md``). It drives an app that the shell script
+Step CD-20 of ``e2e_cluster_datasets_app.sh`` (feature C, phase 0 of the viewer
+lifetime design note, PR #222). It drives an app that the shell script
 started in test mode against the fake cluster, through the loopback test
 controller, and asserts what reopening does today:
 
@@ -31,6 +31,7 @@ import urllib.request
 from typing import Any, cast
 
 POLL_S = 0.05
+EVAL_RESOLUTION_S = 1  # the controller's shortest /eval timeout
 FRAME_POLL_SCRIPT = (
     "(() => { const stats = window.__COPERCEIVE_FRAME_STATS__ || []; "
     "const applied = stats.filter((s) => s.result === 'applied'); "
@@ -168,44 +169,55 @@ def open_dataset(ctrl: Controller, args: dict[str, Any], scenes: list[str]) -> d
     raise FlowError(f"no frame was applied in the viewer within 60 s; last poll {last}")
 
 
+def server_answers(origin: str) -> bool:
+    """False once the viewer server refuses connections; a slow answer still counts."""
+    try:
+        with urllib.request.urlopen(f"{origin}/api/health", timeout=2):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except urllib.error.URLError as error:
+        return isinstance(error.reason, TimeoutError)
+    except TimeoutError:
+        return True
+    except OSError:  # connection refused or reset
+        return False
+
+
 def close_viewer(ctrl: Controller, origin: str) -> dict[str, int]:
-    """Close the viewer window, then wait until it is gone and its server refuses connections."""
+    """Close the viewer window; time its server stopping, then the window going.
+
+    The app stops the server first and then destroys the window
+    (``CloseRequested`` in ``main.rs``), and while it does so a script sent to the
+    window is never answered. So the server is polled first, with plain HTTP,
+    and the window is polled only after that, with the shortest ``/eval``
+    timeout; ``window_gone_ms`` is accurate to that timeout.
+    """
     t0 = time.monotonic()
     status, _ = ctrl.post("/close-window", {}, timeout=10)
     if status != 200:
         raise FlowError(f"/close-window answered HTTP {status}")
     deadline = t0 + 20
+    stopped = None
+    while time.monotonic() < deadline:
+        if not server_answers(origin):
+            stopped = time.monotonic()
+            break
+        time.sleep(POLL_S)
+    if stopped is None:
+        raise FlowError("the closed viewer's server still answered 20 s after /close-window")
     gone = None
     while time.monotonic() < deadline:
-        status, _ = ctrl.eval("viewer", "(() => 1)()", timeout_s=2)
+        status, _ = ctrl.eval("viewer", "(() => 1)()", timeout_s=EVAL_RESOLUTION_S)
         if status == 502:  # the dispatcher found no "viewer" window
             gone = time.monotonic()
             break
         time.sleep(POLL_S)
     if gone is None:
         raise FlowError("the viewer window was still open 20 s after /close-window")
-    refused = None
-    while time.monotonic() < deadline:
-        try:
-            with urllib.request.urlopen(f"{origin}/api/health", timeout=2):
-                pass
-        except urllib.error.HTTPError:
-            pass  # still answering
-        except urllib.error.URLError as error:
-            if not isinstance(error.reason, TimeoutError):  # a slow answer is not a stopped server
-                refused = time.monotonic()
-                break
-        except TimeoutError:
-            pass
-        except OSError:  # connection refused or reset
-            refused = time.monotonic()
-            break
-        time.sleep(POLL_S)
-    if refused is None:
-        raise FlowError("the closed viewer's server still answered 20 s after /close-window")
     return {
+        "server_stopped_ms": round((stopped - t0) * 1000),
         "window_gone_ms": round((gone - t0) * 1000),
-        "server_stopped_ms": round((refused - t0) * 1000),
     }
 
 
@@ -290,7 +302,8 @@ def main() -> int:
     print(
         "Step CD-20 verified: open -> close -> reopen in one app. "
         f"Open: dataset_open {o['returned_ms']} ms, first frame {o['first_frame_ms']} ms. "
-        f"Close: window gone {c['window_gone_ms']} ms, server stopped {c['server_stopped_ms']} ms. "
+        f"Close: server stopped {c['server_stopped_ms']} ms, window gone {c['window_gone_ms']} ms "
+        f"(to within {EVAL_RESOLUTION_S} s). "
         f"Reopen: dataset_open {r['returned_ms']} ms, first frame {r['first_frame_ms']} ms. "
         f"A new viewer server each time (new token; origin changed: {result['origin_changed']}), "
         f"{result['ssh_streams']} ssh streams, no Slurm job. "
