@@ -315,6 +315,27 @@ export async function readCustomPipeline(
   throw new Error("Reading a pipeline registration is only available in the desktop app.");
 }
 
+/** Settings → Model runs: a server's default plugin interpreter (null = none). */
+export async function getPluginPythonSetting(profileId: string): Promise<string | null> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string | null>("get_plugin_python_setting", { profileId });
+  }
+  return null;
+}
+
+/** Sets (or, with null, clears) a server's default plugin interpreter. */
+export async function setPluginPythonSetting(
+  profileId: string,
+  path: string | null,
+): Promise<string | null> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string | null>("set_plugin_python_setting", { profileId, path });
+  }
+  throw new Error("Server settings are only available in the desktop app.");
+}
+
 /**
  * Builds and checks a run plan (read-only remote checks). Nothing is submitted.
  */

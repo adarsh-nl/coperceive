@@ -206,6 +206,11 @@ pub struct RunPlanRequest {
     /// The AP protocol the run is made for: `default` or `legacy`.
     #[serde(default = "default_eval_protocol")]
     pub eval_protocol: String,
+    /// The plugin's interpreter for a built-in model (`--plugin-python`): a full path on
+    /// the cluster, or empty for the manifest's `environment`. New evaluation fills it
+    /// from the server's default (Settings → Model runs) and the user may change it.
+    #[serde(default)]
+    pub plugin_python: String,
     #[serde(default)]
     pub environment_override: Option<EnvironmentSetup>,
     /// New evaluation's "Score the run after it finishes" (built-in models): the job
@@ -317,6 +322,10 @@ pub struct RunPlan {
     /// completed but scoring failed). Built-in models only; false on older plans.
     #[serde(default)]
     pub evaluate: bool,
+    /// The plugin's interpreter the run line passes as `--plugin-python`, exactly as
+    /// given; empty when the manifest's `environment` decides (and on older plans).
+    #[serde(default)]
+    pub plugin_python: String,
     /// Work directory (inside the run output) and the staging seconds the job
     /// measured. Empty/None on plans saved before these fields existed.
     #[serde(default)]
@@ -679,6 +688,51 @@ fn artifact_from_check_for_input(path: &str, kind: &str) -> PlanArtifact {
         kind: kind.to_string(),
         ..PlanArtifact::default()
     }
+}
+
+/// The flag `coperceive model run` takes for the plugin's interpreter.
+pub const PLUGIN_PYTHON_FLAG: &str = "--plugin-python";
+
+/// Checks a plugin interpreter path as `coperceive model run --plugin-python` will on the
+/// cluster, before anything is saved or submitted. Empty means no override. The path is
+/// never resolved or rewritten (the job passes it exactly as given), so it must be a full
+/// path; the check is a leading `/`, the cluster's form on every client OS. A line break
+/// or another control character is refused: the path goes into a job script.
+pub fn validate_plugin_python(path: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Ok(());
+    }
+    if path.chars().any(char::is_control) {
+        return Err(format!(
+            "{PLUGIN_PYTHON_FLAG}: the interpreter path contains a line break or another control \
+             character."
+        ));
+    }
+    if !path.starts_with('/') {
+        return Err(format!("{PLUGIN_PYTHON_FLAG}: give a full path (got {path})"));
+    }
+    Ok(())
+}
+
+/// The plugin interpreter a request names: empty (or only spaces) is no override;
+/// anything else is kept exactly as typed and checked.
+fn requested_plugin_python(value: &str) -> Result<String, String> {
+    if value.trim().is_empty() {
+        return Ok(String::new());
+    }
+    validate_plugin_python(value)?;
+    Ok(value.to_string())
+}
+
+/// Appends `--plugin-python <path>` last, as the CLI's job line ends with it
+/// (`coperceive/models/slurm.py`); nothing for no override, so the line is unchanged.
+pub fn push_plugin_python(argv: &mut Vec<String>, plugin_python: &str) -> Result<(), String> {
+    validate_plugin_python(plugin_python)?;
+    if !plugin_python.is_empty() {
+        argv.push(PLUGIN_PYTHON_FLAG.to_string());
+        argv.push(plugin_python.to_string());
+    }
+    Ok(())
 }
 
 /// Built-in argv for an installed model plugin: `coperceive model run` with its own
@@ -2233,6 +2287,7 @@ pub fn build_run_plan(
         Some(choice) => choice.gres(entry)?,
         None => default_eval_gres(entry),
     };
+    let plugin_python = if builtin { requested_plugin_python(&request.plugin_python)? } else { String::new() };
     if builtin {
         let eval_protocol = request.eval_protocol.trim();
         if !EVAL_PROTOCOLS.contains(&eval_protocol) {
@@ -2763,7 +2818,8 @@ pub fn build_run_plan(
                 request.ckpt_root.trim(),
                 request.eval_protocol.trim(),
                 WORK_IN_SCRATCH,
-            )?
+            )
+            .and_then(|mut argv| push_plugin_python(&mut argv, &plugin_python).map(|()| argv))?
         }
         _ => build_pipeline_argv(&pipeline, &request.values, &output_dir)?,
     };
@@ -2826,6 +2882,7 @@ pub fn build_run_plan(
         ckpt_root: if builtin { artifact_from_check_for_input(&request.ckpt_root, "folder") } else { PlanArtifact::default() },
         model_options: builtin_choice.as_ref().map(|choice| choice.model.options.clone()).unwrap_or_default(),
         eval_protocol: if builtin { request.eval_protocol.trim().to_string() } else { DEFAULT_EVAL_PROTOCOL.to_string() },
+        plugin_python,
         work_dir: if builtin { WORK_IN_SCRATCH.to_string() } else { String::new() },
         evaluate: builtin && request.evaluate,
         staging_seconds: None,
@@ -3775,6 +3832,14 @@ pub fn save_run_plan(
     } else {
         request.eval_protocol.trim()
     };
+    // The form's value; a request without one (an older client) keeps the plan's.
+    let plugin_python = if save_pipeline.builtin.is_none() {
+        String::new()
+    } else if request.plugin_python.trim().is_empty() {
+        requested_plugin_python(&plan.plugin_python)?
+    } else {
+        requested_plugin_python(&request.plugin_python)?
+    };
     if save_pipeline.builtin.is_some() && !EVAL_PROTOCOLS.contains(&eval_protocol) {
         return Err(format!(
             "Choose the AP protocol for this run: one of {}.",
@@ -3822,7 +3887,8 @@ pub fn save_run_plan(
             ckpt_root,
             eval_protocol,
             WORK_IN_SCRATCH,
-        )?
+        )
+        .and_then(|mut argv| push_plugin_python(&mut argv, &plugin_python).map(|()| argv))?
     } else {
         // A custom pipeline follows the output contract: force the output directory
         // pair to the recomputed value.
@@ -3930,6 +3996,7 @@ pub fn save_run_plan(
         DEFAULT_EVAL_PROTOCOL.to_string()
     };
     validated.evaluate = save_pipeline.source == "builtin" && request.evaluate;
+    validated.plugin_python = plugin_python;
     validated.work_dir = if save_pipeline.source == "builtin" {
         WORK_IN_SCRATCH.to_string()
     } else {
@@ -4235,6 +4302,7 @@ mod tests {
             media_root: String::new(),
             ckpt_root: String::new(),
             eval_protocol: "default".to_string(),
+            plugin_python: String::new(),
             environment_override: None,
             evaluate: false,
         }
@@ -4449,6 +4517,58 @@ mod tests {
             // The work directory is the job's scratch (the CLI's `--work "$SCRATCH/work"`).
             assert_eq!(at("--work"), Some("$SCRATCH_DIR/work".to_string()));
         }
+    }
+
+    #[test]
+    fn a_plugin_interpreter_is_recorded_and_passed_last_on_build_and_save() {
+        let cluster = GriffinCluster::new();
+        // No override: the run line names none, as before.
+        let plain = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        assert!(!plain.argv.iter().any(|word| word == "--plugin-python"), "{:?}", plain.argv);
+        assert!(plain.plugin_python.is_empty());
+        let mut req = griffin_request();
+        req.plugin_python = "/opt/envs/opencood official/bin/python".to_string();
+        let built = build_run_plan(&cluster, &entry(), &req).expect("build");
+        let saved = save_run_plan(&cluster, &entry(), &built, &req).expect("save");
+        for plan in [&built, &saved] {
+            assert_eq!(plan.plugin_python, req.plugin_python);
+            // Last, exactly as given, as the CLI's job line ends.
+            assert_eq!(
+                &plan.argv[plan.argv.len() - 2..],
+                ["--plugin-python", "/opt/envs/opencood official/bin/python"]
+            );
+        }
+        // An older client's save request without the field keeps the plan's value.
+        let mut older = req.clone();
+        older.plugin_python = String::new();
+        let kept = save_run_plan(&cluster, &entry(), &built, &older).expect("save");
+        assert_eq!(kept.plugin_python, req.plugin_python);
+        // Blank is no override.
+        req.plugin_python = "   ".to_string();
+        let blank = build_run_plan(&cluster, &entry(), &req).expect("blank");
+        assert!(blank.plugin_python.is_empty() && !blank.argv.contains(&"--plugin-python".to_string()));
+    }
+
+    #[test]
+    fn a_relative_or_multi_line_plugin_interpreter_is_refused_before_a_plan_exists() {
+        let cluster = GriffinCluster::new();
+        for (path, message) in [
+            ("envs/opencood/bin/python", "--plugin-python: give a full path (got envs/opencood/bin/python)"),
+            ("~/envs/opencood/bin/python", "--plugin-python: give a full path"),
+            ("/opt/envs/x\n/bin/python", "line break"),
+            ("/opt/envs/x\r/bin/python", "line break"),
+            ("/opt/envs/x\u{0}/bin/python", "control"),
+        ] {
+            let mut req = griffin_request();
+            req.plugin_python = path.to_string();
+            let error = build_run_plan(&cluster, &entry(), &req).expect_err(path);
+            assert!(error.contains(message), "{path:?}: {error}");
+        }
+        // The save path checks the plan it is sent back too.
+        let mut built = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        built.plugin_python = "relative/python".to_string();
+        let error = save_run_plan(&cluster, &entry(), &built, &griffin_request()).expect_err("save");
+        assert!(error.contains("give a full path"), "{error}");
     }
 
     #[test]

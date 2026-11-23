@@ -362,6 +362,36 @@
       "checkpoint": "/data/v2xset/checkpoints/cobevt.zip"
     },
     {
+      "name": "plugin_python_override",
+      "about": "The base case with the plugin's interpreter overridden (`--plugin-python`, docs/models.md): New evaluation's Plugin interpreter field. Both run lines end with the flag and the path exactly as given, and nothing else in either script changes.",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "profile": {
+        "partition": "gpu-a40",
+        "discovered_gpu_types": [
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [
+          "nvidia/cuda-11.8",
+          "nvidia/cuda-11.x_cudnn-8.6"
+        ],
+        "coperceive_command": [
+          "/opt/venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules"
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/opt/venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490,
+      "plugin_python": "/opt/envs/opencood-official/bin/python"
+    },
+    {
       "name": "evaluate_after_run",
       "about": "The base case with scoring after the run (New evaluation's \"Score the run after it finishes\"; the CLI's `--evaluate`, docs/guides/evaluate.md): the run line is unchanged, and after it each job runs `eval run` on the run, guarded by its run.json, then sets RC=5 when the model exited 0 and scoring did not. The CLI scores the staged copy and copies the run home again; the app's run is already in place.",
       "root": "/data/griffin",
@@ -426,37 +456,5 @@
       "cite": "CHANGELOG.md Unreleased/Security (results folder); src-tauri/src/hpc.rs validate_sbatch_path; coperceive/models/slurm.py validate_logs_dir"
     }
   ],
-  "pending_app": [
-    {
-      "name": "plugin_python_override",
-      "about": "The base case with the plugin's interpreter overridden (`--plugin-python`, docs/models.md): the CLI's run line carries the flag with the path exactly as given, and nothing else in the script changes. CLI half only: the app does not pass the override yet (pending_app).",
-      "root": "/data/griffin",
-      "model": "vehicle-side",
-      "profile": {
-        "partition": "gpu-a40",
-        "discovered_gpu_types": [
-          "a40"
-        ],
-        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
-        "results_root": "/home/tester/results",
-        "modules": [
-          "nvidia/cuda-11.8",
-          "nvidia/cuda-11.x_cudnn-8.6"
-        ],
-        "coperceive_command": [
-          "/opt/venv/bin/python",
-          "-m",
-          "coperceive"
-        ],
-        "kind": "modules"
-      },
-      "cli_logs": "/home/tester/logs",
-      "python": "/opt/venv/bin/python",
-      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
-      "coperceive_root": "/opt/coperceive",
-      "samples": 1490,
-      "plugin_python": "/opt/envs/opencood-official/bin/python",
-      "follow_up": "App side, laptop agent after PR #213: the app's model-run plan takes the override and its job script passes --plugin-python; then this case moves to `cases` with an app render from src-tauri/tests/plan_parity.rs."
-    }
-  ]
+  "pending_app": []
 }

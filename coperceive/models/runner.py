@@ -146,10 +146,13 @@ PLUGIN_PYTHON_FLAG = "--plugin-python"
 
 
 def check_plugin_python(path: Path) -> Path:
-    """``path`` as given, when it is an executable file; else a ``ModelSpecError`` naming the flag.
+    """``path`` as given, when it is an absolute executable file; else a ``ModelSpecError``.
 
-    The path is not resolved or rewritten: a Slurm job receives exactly what was given.
+    The path is not resolved or rewritten: a Slurm job receives exactly what was given, so
+    a relative path is refused (the compute node would resolve it against another cwd).
     """
+    if not path.is_absolute():
+        raise ModelSpecError(f"{PLUGIN_PYTHON_FLAG}: give a full path (got {path})")
     if not path.is_file():
         raise ModelSpecError(f"{PLUGIN_PYTHON_FLAG}: no interpreter at {path}")
     if not os.access(path, os.X_OK):

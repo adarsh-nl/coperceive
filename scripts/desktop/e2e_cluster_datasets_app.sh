@@ -346,6 +346,11 @@ print(f"Step CD-4 verified: wrong hash ({wrong['error']!r}) and confirmed:false 
       f"({unconfirmed['error']!r}) submit nothing; no sbatch in the fake-ssh log")
 PY
 
+# Status and viewing read the cache split the index named (cache.relative_path);
+# the app never computes it from the raw root.
+CACHE_RELATIVE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["steps"][0]["value"]["cache"]["relative_path"])' "${TMP_DIR}/preview-result.json")"
+DATASET_ARGS="${DATASET_ARGS}, \"cacheRelative\": \"${CACHE_RELATIVE}\""
+
 # --- Flow B: confirmed submit of one scene, status, partial open --------------
 run_flow one "[
   {\"command\": \"dataset_prepare\", \"args\": {${DATASET_ARGS}, \"scenes\": [\"scene_0000\"], \"workers\": 1}},
@@ -371,6 +376,22 @@ assert states == {"scene_0000": "ready", "scene_0001": "not_prepared", "scene_00
 print(f"Step CD-6 verified: dataset_status -> {states}")
 served = json.load(open(f"{tmp}/one-served.json", encoding="utf-8"))
 assert served == ["scene_0000"], served
+PY
+
+# --- Flow P: the same cache whatever spelling of the raw root -----------------
+# A trailing slash used to give another cache hash in the app than on the
+# server, so the prepared scene read as not prepared.
+run_flow slash "[
+  {\"command\": \"dataset_status\", \"args\": {$(profile_args), \"adapter\": \"opv2v\", \"rawRoot\": \"${RAW_ROOT}/\", \"split\": \"test\", \"cacheRelative\": \"${CACHE_RELATIVE}\"}}
+]"
+check slash <<'PY'
+import json, sys
+result, ssh_log, tmp, raw = sys.argv[1:5]
+(step,) = json.load(open(result, encoding="utf-8"))["steps"]
+assert step["ok"], step
+states = {scene["scene_id"]: scene["state"] for scene in step["value"]["scenes"]}
+assert states["scene_0000"] == "ready", states
+print(f"Step CD-P verified: dataset_status with the raw root spelled with a trailing slash -> {states}")
 PY
 
 # --- Flow R: "Prepare remaining" previews only the scenes not prepared yet -----
@@ -461,10 +482,10 @@ python3 - "${TMP_DIR}" <<'PY'
 import glob, sys
 tmp = sys.argv[1]
 files = sorted(glob.glob(f"{tmp}/*-request.json") + glob.glob(f"{tmp}/*-result.json"))
-# Exactly the flows run so far: detect, preview, one (A-B), remaining (R) and all (C).
+# Exactly the flows run so far: detect, preview, one (A-B), slash (P), remaining (R) and all (C).
 expected = sorted(
     f"{tmp}/{flow}-{kind}.json"
-    for flow in ("detect", "preview", "one", "remaining", "all")
+    for flow in ("detect", "preview", "one", "slash", "remaining", "all")
     for kind in ("request", "result")
 )
 assert files == expected, files
@@ -603,6 +624,10 @@ PY
 # with no viewer job; the scenes still preparing are not served.
 TRAIN_ARGS="${DATASET_ARGS/\"split\": \"test\"/\"split\": \"train\"}"
 [ "${TRAIN_ARGS}" != "${DATASET_ARGS}" ] || fail "could not derive the train split arguments"
+# Both splits share the raw root, so the train cache is the test one's sibling.
+TRAIN_RELATIVE="${CACHE_RELATIVE%/test}/train"
+TRAIN_ARGS="${TRAIN_ARGS/\"cacheRelative\": \"${CACHE_RELATIVE}\"/\"cacheRelative\": \"${TRAIN_RELATIVE}\"}"
+case "${TRAIN_ARGS}" in *"${TRAIN_RELATIVE}"*) ;; *) fail "could not derive the train cache path" ;; esac
 run_flow trainone "[
   {\"command\": \"dataset_prepare\", \"args\": {${TRAIN_ARGS}, \"scenes\": [\"train_0000\"], \"workers\": 1}},
   {\"command\": \"dataset_prepare_submit\", \"args\": {$(profile_args), \"previewHash\": \"@last_preview_hash\", \"confirmed\": true}}
