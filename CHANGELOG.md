@@ -122,6 +122,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A class named `mean` or `mean_model` is refused by `eval run` (PR #165). The `ap` table of `metrics.json` holds one entry per class beside those two keys, so a class with one of those names had its AP overwritten by the mean and was then averaged into `mean_model` as that mean. The scene now fails with a message that names the class. **Numbers that change:** none for any other class name. **On the demo run:** no change.
 - An evaluation config with `criterion: centre` and no `thresholds` is refused (PR #165). It used to take the default `[0.5, 0.7]`, which are IoU values: the run was scored at a centre distance of 0.5 m and 0.7 m, an increasing list the centre rule itself forbids, and the report still read `mAP@0.5` and `mAP@0.7`. **Numbers that change:** none for a config that names its thresholds. **On the demo run:** no change.
 
+### Removed
+- macOS Intel (x86_64) builds are discontinued; v0.1.2 is the last Intel release.
+
 ## [0.1.1] - 2026-11-19
 
 ### Added
