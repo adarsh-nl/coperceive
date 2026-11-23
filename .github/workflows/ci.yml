@@ -126,7 +126,15 @@ jobs:
       # virtualenv, so strict mode treated TestClient.get as unknown. The app
       # extra is required because tests/test_hdmap.py imports FastAPI.
       - run: python -m venv .venv
-      - run: .venv/bin/pip install -e ".[app,dev,viewer]"
+      # Lint against the versions uv.lock pins, not whatever PyPI published last
+      # night: unpinned type stubs (types-pyyaml/types-shapely 2026-11-22) once
+      # turned every PR's pyright red with no code change.
+      - name: Constraints from uv.lock
+        run: |
+          .venv/bin/pip install uv
+          .venv/bin/uv export --frozen --all-extras --no-hashes --no-emit-project \
+            --format requirements-txt -o "$RUNNER_TEMP/constraints.txt" > /dev/null
+      - run: .venv/bin/pip install -c "$RUNNER_TEMP/constraints.txt" -e ".[app,dev,viewer]"
       - run: .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: .venv/bin/ruff check .
       - run: .venv/bin/ruff format --check .
