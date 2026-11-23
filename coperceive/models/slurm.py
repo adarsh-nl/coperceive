@@ -32,7 +32,7 @@ from typing import cast
 from coperceive.errors import CoperceiveError
 from coperceive.evaluation.predictions import list_runs, read_run_meta
 from coperceive.model import Scene
-from coperceive.models.batch import RunOptions, select_agents
+from coperceive.models.batch import EXIT_EVAL, RunOptions, select_agents
 from coperceive.models.inputs import raw_files, selected_sensors
 from coperceive.models.spec import (
     Manifest,
@@ -680,6 +680,11 @@ def plan_sbatch(
                     f"{shlex.quote(str(out_root.resolve() / f'{run_id}-{member.key}'))}/",
                 )
             ],
+            *(
+                evaluate_lines(python, options, results=results, target=target)
+                if options.evaluate
+                else []
+            ),
             # The path is its own shell word: a quoted word inside "..." would not be.
             f'echo "done:" {shlex.quote(str(target))} "(exit $RC)"',
             'exit "$RC"',
@@ -704,6 +709,54 @@ def plan_sbatch(
         estimate_source=source,
         checkpoints=checkpoints,
     )
+
+
+def evaluate_lines(python: Path, options: RunOptions, *, results: Path, target: Path) -> list[str]:
+    """``--evaluate`` in the job: score the run after it has come home.
+
+    The model's run line is unchanged. Its output is copied home first (above), so a
+    scoring step stopped by ``--time`` or memory never costs a finished run. Then
+    ``eval run`` scores it on the scenes this job staged, and the run directory, now with
+    ``metrics.json`` and ``evaluation.json``, is copied home again. A run without
+    ``run.json`` counts as a scoring failure, not a skip. A model failure keeps its code;
+    a complete run whose scoring failed exits 5 (spec §Exit codes).
+    """
+    argv = [
+        shlex.quote(str(python)),
+        "-m",
+        "coperceive",
+        "eval",
+        "run",
+        '"$RUN_ID"',
+        "--root",
+        '"$SCRATCH/scenes"',
+        "--predictions",
+        '"$SCRATCH/out"',
+    ]
+    if options.eval_protocol is not None:
+        argv.extend(["--protocol", shlex.quote(options.eval_protocol)])
+    if options.eval_config is not None:
+        argv.extend(["--config", shlex.quote(str(options.eval_config.resolve()))])
+    return [
+        "",
+        "# --evaluate: score the run, as 'eval run' does, on the scenes staged above.",
+        "EVAL_RC=0",
+        'if [ -f "$SCRATCH/out/$RUN_ID/run.json" ]; then',
+        "  set +e",
+        "  " + " ".join(argv),
+        "  EVAL_RC=$?",
+        "  set -e",
+        '  echo "eval run exit $EVAL_RC"',
+        f'  rsync -a "$SCRATCH/out/" {shlex.quote(str(results))}/"$SLURM_JOB_ID"/',
+        f'  rsync -a "$SCRATCH/out/$RUN_ID/" {shlex.quote(str(target))}/',
+        "else",
+        "  # No run.json means nothing to score: a failure, never a silent skip.",
+        '  echo "eval run skipped: no run.json for $RUN_ID" >&2',
+        "  EVAL_RC=1",
+        "fi",
+        "# The model's own failure wins; a complete run whose scoring failed exits 5.",
+        f'if [ "$RC" -eq 0 ] && [ "$EVAL_RC" -ne 0 ]; then RC={EXIT_EVAL}; fi',
+    ]
 
 
 def _run_command(

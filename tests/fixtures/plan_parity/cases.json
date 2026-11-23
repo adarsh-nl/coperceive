@@ -427,6 +427,37 @@
       "samples": 1490,
       "plugin_python": "/opt/envs/opencood-official/bin/python",
       "follow_up": "App side, laptop agent after PR #213: the app's model-run plan takes the override and its job script passes --plugin-python; then this case moves to `cases` with an app render from src-tauri/tests/plan_parity.rs."
+    },
+    {
+      "name": "evaluate_after_run",
+      "about": "The base case with `--evaluate` (docs/guides/evaluate.md, 'Score a model run in one step'): the run line is unchanged, and after the run has been copied home the job scores it with `eval run` on the staged scenes, copies the run directory home again and exits 5 when the model completed but scoring failed. CLI half only: the app does not pass --evaluate yet (pending_app).",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "profile": {
+        "partition": "gpu-a40",
+        "discovered_gpu_types": [
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [
+          "nvidia/cuda-11.8",
+          "nvidia/cuda-11.x_cudnn-8.6"
+        ],
+        "coperceive_command": [
+          "/opt/venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules"
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/opt/venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490,
+      "evaluate": true,
+      "follow_up": "App side, Cursor after PR agent/claude-model-run-evaluate: the app's model-run plan takes --evaluate and its job script carries the same scoring step; then this case moves to `cases` with an app render from src-tauri/tests/plan_parity.rs."
     }
   ]
 }
