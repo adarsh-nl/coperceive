@@ -209,10 +209,74 @@ def test_pages_workflow_builds_docs_and_validates_dist() -> None:
     build_steps = cast(list[dict[str, Any]], cast(dict[str, Any], jobs["build"])["steps"])
     run_cmds = "\n".join(str(s.get("run", "")) for s in build_steps)
     assert "npm run build" in run_cmds
-    assert "pip install -r requirements-docs.txt" in run_cmds
+    assert 'pip install -c "$RUNNER_TEMP/constraints.txt" -r requirements-docs.txt' in run_cmds
     assert "mkdocs build --strict -d site/dist/docs" in run_cmds
     assert run_cmds.index("npm run build") < run_cmds.index(
         "mkdocs build --strict -d site/dist/docs"
     )
     assert "docs/index.html" in run_cmds
     assert "docs/search/search_index.json" in run_cmds
+
+
+def test_all_workflow_pip_installs_are_constrained_by_uv_lock() -> None:
+    """Every pip install in .github/workflows/*.yml must use uv.lock constraints."""
+    workflows_dir = _repo_root() / ".github" / "workflows"
+    workflow_files = sorted(workflows_dir.glob("*.yml"))
+    assert workflow_files, f"No workflow files found under {workflows_dir}"
+
+    uv_install_re = re.compile(r"^(?:\.venv/bin/|python3?\s+-m\s+)?pip\d*\s+install\s+uv$")
+    torch_cpu_re = re.compile(
+        r"^(?:\.venv/bin/|python3?\s+-m\s+)?pip\d*\s+install\s+torch"
+        r"\s+--index-url\s+https://download\.pytorch\.org/whl/cpu$"
+    )
+    pip_install_re = re.compile(r"\b(?:pip\d*|python3?\s+-m\s+pip)\s+install\b")
+    constraint_flag = '-c "$RUNNER_TEMP/constraints.txt"'
+
+    checked_workflows: set[str] = set()
+    for wf_path in workflow_files:
+        with open(wf_path, encoding="utf-8") as f:
+            data = cast(dict[str, Any] | None, yaml.safe_load(f)) or {}
+        jobs = cast(dict[str, Any], data.get("jobs", {}))
+        for job_name, job_raw in jobs.items():
+            job = cast(dict[str, Any], job_raw)
+            defaults_run = cast(
+                dict[str, Any], cast(dict[str, Any], job.get("defaults", {})).get("run", {})
+            )
+            default_shell = str(defaults_run.get("shell", ""))
+            is_windows = "windows" in str(job.get("runs-on", "")).lower()
+            exported_constraints = False
+
+            for step in cast(list[dict[str, Any]], job.get("steps", [])):
+                run_text = str(step.get("run", ""))
+                if not run_text:
+                    continue
+                if "uv export --frozen" in run_text and '-o "$RUNNER_TEMP/constraints.txt"' in (
+                    run_text
+                ):
+                    exported_constraints = True
+                if is_windows and "$RUNNER_TEMP/constraints.txt" in run_text:
+                    step_shell = str(step.get("shell") or default_shell)
+                    assert step_shell == "bash", (
+                        f"{wf_path.name}:{job_name} uses $RUNNER_TEMP/constraints.txt "
+                        f"on Windows without shell: bash (got {step_shell!r})"
+                    )
+
+                logical_lines = re.sub(r"\\\n\s*", " ", run_text).splitlines()
+                for line in logical_lines:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#"):
+                        continue
+                    if not pip_install_re.search(stripped):
+                        continue
+                    if uv_install_re.fullmatch(stripped) or torch_cpu_re.fullmatch(stripped):
+                        continue
+                    assert constraint_flag in stripped, (
+                        f"{wf_path.name}:{job_name} has unconstrained pip install: {stripped}"
+                    )
+                    assert exported_constraints, (
+                        f"{wf_path.name}:{job_name} installs with {constraint_flag} "
+                        "before exporting constraints.txt from uv.lock"
+                    )
+                    checked_workflows.add(wf_path.name)
+
+    assert {"ci.yml", "release.yml", "pages.yml"}.issubset(checked_workflows)
