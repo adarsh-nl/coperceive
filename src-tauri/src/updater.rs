@@ -22,6 +22,9 @@ pub enum UpdateCheckOutcome {
     UpToDate {
         current_version: String,
     },
+    Unsupported {
+        message: String,
+    },
     Error {
         error: String,
         is_network: bool,
@@ -48,6 +51,22 @@ pub fn resolve_update_endpoint_override(override_url_opt: Option<&str>) -> Optio
         crate::test_seams::test_env_active(),
         std::env::var("COPERCEIVE_UPDATE_URL").ok().as_deref(),
     )
+}
+
+pub const INTEL_MAC_LAST_RELEASE_NOTICE: &str =
+    "Coperceive v0.1.2 is the last version for Intel Macs.";
+
+/// When the updater manifest has a newer release that omits the running platform
+/// (`TargetNotFound` / `TargetsNotFound`), Intel Macs receive a plain last-release
+/// notice instead of surfacing the raw updater error string.
+pub fn missing_target_check_outcome(is_intel_mac: bool) -> Option<UpdateCheckOutcome> {
+    if is_intel_mac {
+        Some(UpdateCheckOutcome::Unsupported {
+            message: INTEL_MAC_LAST_RELEASE_NOTICE.to_string(),
+        })
+    } else {
+        None
+    }
 }
 
 pub const DEB_UPDATE_NOTICE: &str = "In-app updates are supported when running from AppImage. On Debian/Ubuntu (.deb), update using your package manager or download the latest .deb from GitHub Releases.";
@@ -211,6 +230,34 @@ mod tests {
         let json_err = serde_json::to_value(&error).unwrap();
         assert_eq!(json_err["status"], "error");
         assert_eq!(json_err["is_network"], true);
+
+        let unsupported = UpdateCheckOutcome::Unsupported {
+            message: INTEL_MAC_LAST_RELEASE_NOTICE.into(),
+        };
+        let json_unsupported = serde_json::to_value(&unsupported).unwrap();
+        assert_eq!(json_unsupported["status"], "unsupported");
+        assert_eq!(
+            json_unsupported["message"],
+            "Coperceive v0.1.2 is the last version for Intel Macs."
+        );
+    }
+
+    #[test]
+    fn test_missing_target_check_outcome_for_intel_mac() {
+        assert_eq!(
+            missing_target_check_outcome(true),
+            Some(UpdateCheckOutcome::Unsupported {
+                message: INTEL_MAC_LAST_RELEASE_NOTICE.to_string(),
+            })
+        );
+        assert_eq!(missing_target_check_outcome(false), None);
+
+        let main = include_str!("main.rs");
+        let checker = &main[main.find("fn run_updater_check(").expect("run_updater_check")..];
+        let checker = &checker[..checker.find("fn run_updater_install(").unwrap_or(checker.len())];
+        assert!(checker.contains("Error::TargetNotFound"));
+        assert!(checker.contains("Error::TargetsNotFound"));
+        assert!(checker.contains("missing_target_check_outcome"));
     }
 
     #[test]

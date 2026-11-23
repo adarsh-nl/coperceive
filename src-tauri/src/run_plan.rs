@@ -98,6 +98,10 @@ pub struct BuiltinModel {
     pub staging_seconds: Option<serde_json::Number>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversion_seconds: Option<serde_json::Number>,
+    /// True when the manifest's `inputs.raw` is non-empty. None from a listing that does
+    /// not carry it (older coperceive): the raw root stays required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_inputs: Option<bool>,
 }
 
 /// What a built-in model's manifest asks of the job, recorded in the plan from the
@@ -1897,6 +1901,13 @@ impl BuiltinChoice {
         self.model.options.iter().any(|option| option == "ckpt_root")
     }
 
+    /// Whether the model reads raw files. `model list --json` reports `raw_inputs` from
+    /// the manifest's `inputs.raw`. A listing that omits the field keeps the raw root
+    /// required, which is what every plan did before that field existed.
+    fn needs_raw_root(&self) -> bool {
+        self.model.raw_inputs.unwrap_or(true)
+    }
+
     /// Model options exactly as the manifest declares them: a checkpoint only when the
     /// model has a `checkpoint` option, and every extra `K=V` a declared key. The CLI's
     /// `check_options` would refuse anything else on the node, after the job queued.
@@ -2222,10 +2233,18 @@ pub fn build_run_plan(
             ));
         }
         let raw = request.raw_root.trim();
-        if raw.is_empty() {
+        let needs_raw = builtin_choice
+            .as_ref()
+            .map(|choice| choice.needs_raw_root())
+            .unwrap_or(true);
+        if needs_raw && raw.is_empty() {
             return Err("Choose the raw root on the cluster before checking the plan.".to_string());
         }
-        validate_path_in_roots(profile, raw, "raw root")?;
+        // Optional when the model declares no inputs.raw: an empty one leaves --raw-root
+        // out of the job script, as the CLI does. A given path is still confined.
+        if !raw.is_empty() {
+            validate_path_in_roots(profile, raw, "raw root")?;
+        }
         // The media root is optional, as the CLI's repeatable --media-root is: an empty
         // one leaves the flag out of the job script instead of passing an empty path.
         let media = request.media_root.trim();
@@ -3761,13 +3780,15 @@ pub fn save_run_plan(
         } else {
             plan.ckpt_root.path.trim()
         };
-        if model.is_empty() || raw.is_empty() {
+        if model.is_empty() || (choice.needs_raw_root() && raw.is_empty()) {
             return Err(
                 "This plan predates the model/raw fields; rebuild this plan before saving."
                     .to_string(),
             );
         }
-        validate_path_in_roots(profile, raw, "raw root")?;
+        if !raw.is_empty() {
+            validate_path_in_roots(profile, raw, "raw root")?;
+        }
         // Optional, as the CLI's --media-root is; when empty build_builtin_argv writes no
         // --media-root at all.
         if !media.is_empty() {

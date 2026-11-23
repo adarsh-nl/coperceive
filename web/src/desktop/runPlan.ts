@@ -38,6 +38,11 @@ export interface BuiltinModel {
   gpu: boolean;
   /** The `--option` keys the model's manifest declares. */
   options: string[];
+  /**
+   * True when the manifest's `inputs.raw` is non-empty. Absent on a listing from an
+   * older coperceive: the raw root stays required.
+   */
+  raw_inputs?: boolean;
   cpus?: number | null;
   memory_gb?: number | null;
   transient_artifacts?: string[];
@@ -324,6 +329,16 @@ export function sameEvalProtocol(
   return evalProtocolConfigLabel(a) === evalProtocolConfigLabel(b);
 }
 
+/**
+ * Whether a built-in model reads raw files (`inputs.raw` in its manifest). The cluster's
+ * model list reports that as `raw_inputs`. A listing that omits the field, or a model it
+ * does not name, keeps the raw root required.
+ */
+export function pipelineNeedsRawRoot(entry: PipelineEntry | null, model: string): boolean {
+  if (!entry || entry.source !== "builtin") return false;
+  return entry.builtin?.models[model.trim()]?.raw_inputs !== false;
+}
+
 /** A built-in model always runs over its scenes; a custom pipeline when it declares one. */
 export function pipelineNeedsSplit(entry: PipelineEntry | null): boolean {
   if (!entry) return false;
@@ -332,16 +347,20 @@ export function pipelineNeedsSplit(entry: PipelineEntry | null): boolean {
 }
 
 /**
- * Why a built-in model's plan inputs cannot be checked, or null. The model key and the raw
- * root are required; the media root is optional, exactly as the CLI's repeatable
- * `--media-root` is (the job script then leaves the flag out).
+ * Why a built-in model's plan inputs cannot be checked, or null. The model key is required.
+ * The raw root is required only when the model declares raw inputs (`needsRawInputs`,
+ * from `inputs.raw`); omitted means required, as an older listing does. The media root is
+ * optional, exactly as the CLI's repeatable `--media-root` is (the job script then leaves
+ * the flag out).
  */
 export function builtinPlanInputProblem(input: {
   model: string;
   rawRoot: string;
   mediaRoot: string;
+  needsRawInputs?: boolean;
 }): string | null {
-  if (!input.model.trim() || !input.rawRoot.trim()) {
+  const needsRaw = input.needsRawInputs !== false;
+  if (!input.model.trim() || (needsRaw && !input.rawRoot.trim())) {
     return "Choose the model key and raw root for this built-in model.";
   }
   // input.mediaRoot is deliberately not checked: it is optional.

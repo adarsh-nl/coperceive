@@ -830,6 +830,9 @@ def _run_command(
         argv.append("--force")
     if options.perturbation is not None:
         argv.extend(["--perturb", shlex.quote(options.perturbation.canonical())])
+    if options.plugin_python is not None:
+        # Exactly as given: the node sees the path the user checked on the login node.
+        argv.extend(["--plugin-python", shlex.quote(str(options.plugin_python))])
     return argv
 
 

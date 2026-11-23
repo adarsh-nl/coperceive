@@ -27,6 +27,7 @@ import {
   builtinPlanInputProblem,
   pipelineNeedsCheckpoint,
   pipelineNeedsCkptRoot,
+  pipelineNeedsRawRoot,
   pipelineNeedsSplit,
   DEFAULT_EVAL_PROTOCOL,
   EVAL_PROTOCOL_CHOICES,
@@ -212,6 +213,51 @@ test("a built-in plan requires the model and raw root but not a media root", () 
   assert.strictEqual(builtinPlanInputProblem({ ...base, rawRoot: " " }), message);
 });
 
+test("a model with no raw inputs allows an empty raw root, and Griffin still requires one", () => {
+  const message = "Choose the model key and raw root for this built-in model.";
+  const griffin = griffinEntry();
+  griffin.builtin!.models["vehicle-side"].raw_inputs = true;
+  assert.strictEqual(pipelineNeedsRawRoot(griffin, "vehicle-side"), true);
+  assert.strictEqual(
+    builtinPlanInputProblem({
+      model: "vehicle-side",
+      rawRoot: "",
+      mediaRoot: "",
+      needsRawInputs: pipelineNeedsRawRoot(griffin, "vehicle-side"),
+    }),
+    message,
+  );
+  // An older listing omits the field: the raw root stays required.
+  assert.strictEqual(pipelineNeedsRawRoot(griffinEntry(), "vehicle-side"), true);
+
+  const cobevt = griffinEntry();
+  cobevt.builtin!.models["cobevt-lidar-v2xset"] = {
+    gpu: true,
+    options: ["checkpoint"],
+    raw_inputs: false,
+  };
+  assert.strictEqual(pipelineNeedsRawRoot(cobevt, "cobevt-lidar-v2xset"), false);
+  assert.strictEqual(
+    builtinPlanInputProblem({
+      model: "cobevt-lidar-v2xset",
+      rawRoot: " ",
+      mediaRoot: "",
+      needsRawInputs: pipelineNeedsRawRoot(cobevt, "cobevt-lidar-v2xset"),
+    }),
+    null,
+  );
+  // The model key is still required.
+  assert.notStrictEqual(
+    builtinPlanInputProblem({
+      model: " ",
+      rawRoot: "",
+      mediaRoot: "",
+      needsRawInputs: false,
+    }),
+    null,
+  );
+});
+
 test("a built-in model needs a checkpoint root only when its manifest declares ckpt_root", () => {
   // Griffin's released checkpoints root is a required parameter with no default.
   assert.strictEqual(pipelineNeedsCkptRoot(griffinEntry(), "vehicle-side"), true);
@@ -226,6 +272,8 @@ test("the New evaluation panel shows the declared checkpoint root next to the ra
   assert.ok(source.includes("pipelineNeedsCkptRoot(selectedPipeline, model)"), "ckpt_root rule");
   assert.ok(source.includes('id="plan-ckpt-root"'), "ckpt_root field");
   assert.ok(source.includes('ckpt_root: selectedPipeline.source === "builtin" && needsCkptRoot'), "request field");
+  assert.ok(source.includes("pipelineNeedsRawRoot(selectedPipeline, model)"), "raw root rule");
+  assert.ok(source.includes("needsRawInputs: needsRawRoot"), "raw root reaches the check");
 });
 
 test("the AP protocol choice defaults to OpenCOOD-style and records legacy when chosen", () => {
