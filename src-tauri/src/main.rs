@@ -3641,15 +3641,19 @@ async fn dataset_status(
     adapter: String,
     raw_root: String,
     split: Option<String>,
+    cache_relative: String,
 ) -> Result<serde_json::Value, String> {
+    // The cache split is the one the index named (`cache.relative_path`), as the
+    // prepare job writes it; `raw_root` no longer decides the path.
+    let _ = raw_root;
     tauri::async_runtime::spawn_blocking(move || {
         let entry = find_server_entry(&profile_id)?;
         let runner = plan_runner(&entry)?;
-        let cache = coperceive_desktop::dataset_jobs::cache_absolute(
+        let cache = coperceive_desktop::dataset_jobs::cache_dir(
             &entry.profile,
             &adapter,
-            &raw_root,
             split.as_deref(),
+            &cache_relative,
         )?;
         coperceive_desktop::cluster_datasets::status_once(&runner, &entry.profile, &cache, false)
             .map_err(|failure| {
@@ -3709,6 +3713,23 @@ fn last_cluster_dataset() -> serde_json::Value {
                 .map(|dataset| serde_json::json!({ "profile_id": id, "dataset": dataset }))
         })
         .unwrap_or(serde_json::Value::Null)
+}
+
+/// Settings → Model runs → "Plugin interpreter": the server's default for New
+/// evaluation's field (null when the manifest's environment decides).
+#[tauri::command]
+fn get_plugin_python_setting(profile_id: String) -> Option<String> {
+    state::load_state().plugin_python(&profile_id)
+}
+
+/// Sets (or, with `path: null` or an empty path, clears) a server's default plugin
+/// interpreter. Plans already saved keep the interpreter they record.
+#[tauri::command]
+fn set_plugin_python_setting(profile_id: String, path: Option<String>) -> Result<Option<String>, String> {
+    let mut persistent = state::load_state();
+    persistent.set_plugin_python(&profile_id, path.as_deref())?;
+    state::save_state(&persistent).map_err(|error| format!("Could not save the setting: {error}"))?;
+    Ok(persistent.plugin_python(&profile_id))
 }
 
 /// Settings → Cluster datasets → "Camera images when preparing".
@@ -3807,14 +3828,16 @@ async fn dataset_open(
     adapter: String,
     raw_root: String,
     split: Option<String>,
+    cache_relative: String,
     scene_id: Option<String>,
 ) -> Result<SessionPayload, String> {
     let entry = find_server_entry(&profile_id)?;
-    let cache = coperceive_desktop::dataset_jobs::cache_absolute(
+    // The cache split the index named, as for `dataset_status`.
+    let cache = coperceive_desktop::dataset_jobs::cache_dir(
         &entry.profile,
         &adapter,
-        &raw_root,
         split.as_deref(),
+        &cache_relative,
     )?;
     let target = entry.ssh_target()?;
     let key = format!("stream|{profile_id}|{cache}|{raw_root}");
@@ -4037,7 +4060,17 @@ fn run_dataset_flow_probe(
                     arg_text(&args, "adapter")?,
                     arg_text(&args, "rawRoot")?,
                     optional_text(&args, "split"),
+                    arg_text(&args, "cacheRelative")?,
                 )),
+                "get_plugin_python_setting" => serde_json::to_value(get_plugin_python_setting(
+                    arg_text(&args, "profileId")?,
+                ))
+                .map_err(|error| error.to_string()),
+                "set_plugin_python_setting" => set_plugin_python_setting(
+                    arg_text(&args, "profileId")?,
+                    optional_text(&args, "path"),
+                )
+                .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string())),
                 "get_camera_images_setting" => serde_json::to_value(get_camera_images_setting(
                     optional_text(&args, "profileId"),
                 ))
@@ -4074,6 +4107,7 @@ fn run_dataset_flow_probe(
                     arg_text(&args, "adapter")?,
                     arg_text(&args, "rawRoot")?,
                     optional_text(&args, "split"),
+                    arg_text(&args, "cacheRelative")?,
                     optional_text(&args, "sceneId"),
                 ))
                 .and_then(|payload| {
@@ -4497,6 +4531,8 @@ fn main() {
             dataset_open,
             get_camera_images_setting,
             set_camera_images_setting,
+            get_plugin_python_setting,
+            set_plugin_python_setting,
             set_viewer_dataset_scenes,
             remember_cluster_dataset,
             last_cluster_dataset,

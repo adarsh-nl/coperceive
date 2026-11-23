@@ -87,6 +87,11 @@ export interface RunPlanRequest {
   ckpt_root: string;
   /** The AP protocol the run is made for: `default` or `legacy`. */
   eval_protocol: string;
+  /**
+   * The plugin's interpreter for a built-in model (`--plugin-python`): a full path on
+   * the cluster, or empty for the manifest's environment.
+   */
+  plugin_python?: string;
   environment_override: EnvironmentSetup | null;
 }
 
@@ -139,6 +144,8 @@ export interface RunPlan {
   model_options?: string[];
   /** The AP protocol recorded with the plan; old plans are `default`. */
   eval_protocol: string;
+  /** The `--plugin-python` the run line passes; empty or absent = the manifest's environment. */
+  plugin_python?: string;
   work_dir: string;
   staging_seconds: number | null;
   output_dir: string;
@@ -288,6 +295,28 @@ export const EVAL_PROTOCOL_CHOICES: ReadonlyArray<{
     description: "for numbers comparable to v0.1.1",
   },
 ];
+
+/**
+ * Why a plugin interpreter path cannot be used, or null when it can (empty = none).
+ * The same rules as the app's Rust check and `coperceive model run --plugin-python`:
+ * a full path (the job passes it exactly as given, so a relative one would resolve
+ * against the compute node's directory) and no line break or other control character.
+ */
+export function pluginPythonProblem(value: string): string | null {
+  if (value.trim() === "") return null;
+  // Control characters (U+0000–U+001F, U+007F–U+009F): a job-script line must stay one line.
+  const isControl = (code: number) => code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+  if ([...value].some((char) => isControl(char.codePointAt(0) ?? 0))) {
+    return "--plugin-python: the interpreter path contains a line break or another control character.";
+  }
+  if (!value.startsWith("/")) return `--plugin-python: give a full path (got ${value})`;
+  return null;
+}
+
+/** The plan review's line for the plugin interpreter. */
+export function pluginPythonLabel(value: string | null | undefined): string {
+  return value && value.trim() !== "" ? value : "From the model's manifest (environment)";
+}
 
 /** One line for the plan review, the run history and the job watch. */
 export function evalProtocolLabel(value: string | null | undefined): string {

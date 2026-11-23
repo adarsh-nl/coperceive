@@ -417,6 +417,12 @@ pub struct AppPersistentState {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub camera_images_by_profile: HashMap<String, String>,
 
+    /// Settings → Model runs: the plugin interpreter (`--plugin-python`) New evaluation
+    /// starts with for a built-in model, per server profile id. Absent = the manifest's
+    /// `environment`. There is no app-wide value: an interpreter path is a cluster's.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub plugin_python_by_profile: HashMap<String, String>,
+
     /// Remote viewer sessions to reattach to after a restart, by what they
     /// serve (server, cache directory, media roots) → session id.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -755,6 +761,27 @@ pub struct CameraImagesSetting {
 }
 
 impl AppPersistentState {
+    /// A server's default plugin interpreter for New evaluation, if one is set.
+    pub fn plugin_python(&self, profile_id: &str) -> Option<String> {
+        self.plugin_python_by_profile.get(profile_id).cloned()
+    }
+
+    /// Set (or, with `None` or an empty path, clear) a server's default plugin
+    /// interpreter. Checked as a run's is: a full path, no line break.
+    pub fn set_plugin_python(&mut self, profile_id: &str, path: Option<&str>) -> Result<(), String> {
+        match path.filter(|path| !path.trim().is_empty()) {
+            Some(path) => {
+                crate::run_plan::validate_plugin_python(path)?;
+                self.plugin_python_by_profile
+                    .insert(profile_id.to_string(), path.to_string());
+            }
+            None => {
+                self.plugin_python_by_profile.remove(profile_id);
+            }
+        }
+        Ok(())
+    }
+
     pub fn camera_images(&self, profile_id: Option<&str>) -> CameraImagesSetting {
         let valid = |mode: &String| CAMERA_IMAGE_MODES.contains(&mode.as_str());
         let default = self
@@ -834,6 +861,7 @@ impl Default for AppPersistentState {
             recent_roots: Vec::new(),
             camera_images_default: None,
             camera_images_by_profile: HashMap::new(),
+            plugin_python_by_profile: HashMap::new(),
             viewer_sessions: HashMap::new(),
             auto_next_scene: false,
             last_cluster_datasets: HashMap::new(),
@@ -1244,6 +1272,10 @@ pub mod tests {
             recent_roots: vec!["/path/to/data".into(), "/path/to/prev".into()],
             camera_images_default: Some("previews".into()),
             camera_images_by_profile: HashMap::from([("cluster-a".into(), "originals".into())]),
+            plugin_python_by_profile: HashMap::from([(
+                "cluster-a".into(),
+                "/opt/envs/opencood-official/bin/python".into(),
+            )]),
             viewer_sessions: HashMap::from([("alias|p|/r|".into(), "abc123".into())]),
             auto_next_scene: true,
             last_cluster_datasets: HashMap::from([("p".into(), serde_json::json!({"path": "/d/opv2v/test"}))]),
@@ -1263,6 +1295,35 @@ pub mod tests {
         let json = serde_json::to_string(&state).expect("serialize");
         let deserialized: AppPersistentState = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(state, deserialized);
+    }
+
+    #[test]
+    fn a_servers_plugin_interpreter_default_is_set_checked_and_cleared() {
+        let mut state = AppPersistentState::default();
+        assert_eq!(state.plugin_python("cluster-a"), None);
+        state
+            .set_plugin_python("cluster-a", Some("/opt/envs/opencood official/bin/python"))
+            .expect("a full path");
+        assert_eq!(
+            state.plugin_python("cluster-a").as_deref(),
+            Some("/opt/envs/opencood official/bin/python")
+        );
+        // Another server has its own (none here); an interpreter path is a cluster's.
+        assert_eq!(state.plugin_python("cluster-b"), None);
+        for bad in ["envs/opencood/bin/python", "/opt/envs/x\n/bin/python"] {
+            let error = state.set_plugin_python("cluster-a", Some(bad)).expect_err(bad);
+            assert!(error.starts_with("--plugin-python: "), "{error}");
+        }
+        // A refused value leaves the saved one as it was.
+        assert_eq!(
+            state.plugin_python("cluster-a").as_deref(),
+            Some("/opt/envs/opencood official/bin/python")
+        );
+        state.set_plugin_python("cluster-a", Some("  ")).expect("blank clears");
+        assert_eq!(state.plugin_python("cluster-a"), None);
+        state.set_plugin_python("cluster-a", Some("/usr/bin/python3")).expect("set");
+        state.set_plugin_python("cluster-a", None).expect("clear");
+        assert!(state.plugin_python_by_profile.is_empty());
     }
 
     #[test]

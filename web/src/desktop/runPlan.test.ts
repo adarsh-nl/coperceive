@@ -3,6 +3,8 @@ import test from "node:test";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import {
+  pluginPythonLabel,
+  pluginPythonProblem,
   collectValues,
   emptyEnvironmentOverride,
   environmentKindLabel,
@@ -543,4 +545,31 @@ test("a walltime over the partition's discovered limit is refused before the pre
   assert.match(walltimeProblem("48:00:00", plan) ?? "", /1-00:00:00/);
   // No discovered limit: nothing to refuse.
   assert.strictEqual(walltimeProblem("7-00:00:00", { time_estimate: "01:00:00", partition_max_time: null }), null);
+});
+
+test("a plugin interpreter must be a full path on one line, as model run --plugin-python checks", () => {
+  // Empty or blank: no override, the manifest's environment decides.
+  assert.equal(pluginPythonProblem(""), null);
+  assert.equal(pluginPythonProblem("   "), null);
+  // Full paths pass as typed: spaces, quotes and $(...) are quoted by the job script, not refused.
+  for (const path of [
+    "/opt/envs/opencood-official/bin/python",
+    "/opt/envs/opencood official/bin/python",
+    "/opt/envs/it's \"x\"/bin/python",
+    "/opt/envs/$(touch pwned)/bin/python",
+  ]) {
+    assert.equal(pluginPythonProblem(path), null, path);
+  }
+  // A relative path would resolve against the compute node's directory.
+  assert.equal(
+    pluginPythonProblem("envs/opencood/bin/python"),
+    "--plugin-python: give a full path (got envs/opencood/bin/python)",
+  );
+  assert.match(pluginPythonProblem("~/envs/x/bin/python") ?? "", /give a full path/);
+  // A line break (or any control character) would split the job-script line.
+  for (const path of ["/opt/envs/x\n/bin/python", "/opt/envs/x\r/bin/python", "/opt/envs/x\u0000/python"]) {
+    assert.match(pluginPythonProblem(path) ?? "", /line break or another control character/, JSON.stringify(path));
+  }
+  assert.equal(pluginPythonLabel(""), "From the model's manifest (environment)");
+  assert.equal(pluginPythonLabel("/opt/envs/a/bin/python"), "/opt/envs/a/bin/python");
 });
