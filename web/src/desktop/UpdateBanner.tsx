@@ -9,6 +9,7 @@ import {
   isTauriEnvironment,
   isViewerWindow,
   showLibrary,
+  type DesktopUpdateCheckResult,
 } from "./local";
 import { parseUpdateManifest } from "./updateManifest";
 import { errorText } from "./errors";
@@ -51,7 +52,54 @@ export interface UpdateInfo {
   url?: string;
 }
 
-type CheckState = "idle" | "checking" | "uptodate" | "downloading" | "ready" | "error";
+type CheckState = "idle" | "checking" | "uptodate" | "unsupported" | "downloading" | "ready" | "error";
+
+export interface DesktopCheckTransition {
+  checkState: CheckState;
+  noticeMessage: string | null;
+  errorMessage: string | null;
+  clearUpdate: boolean;
+}
+
+/** Maps a desktop updater IPC response to banner/toast state. */
+export function desktopCheckTransition(
+  resp: DesktopUpdateCheckResult,
+  isManual: boolean,
+): DesktopCheckTransition | null {
+  if (resp.status === "uptodate") {
+    return {
+      checkState: isManual ? "uptodate" : "idle",
+      noticeMessage: null,
+      errorMessage: null,
+      clearUpdate: true,
+    };
+  }
+  if (resp.status === "unsupported") {
+    return {
+      checkState: isManual ? "unsupported" : "idle",
+      noticeMessage: resp.message || null,
+      errorMessage: null,
+      clearUpdate: true,
+    };
+  }
+  if (resp.status === "error") {
+    if (isManual || resp.is_network) {
+      return {
+        checkState: "error",
+        noticeMessage: null,
+        errorMessage: resp.error || "Could not check for updates. Check the network and try again.",
+        clearUpdate: false,
+      };
+    }
+    return {
+      checkState: "idle",
+      noticeMessage: null,
+      errorMessage: null,
+      clearUpdate: false,
+    };
+  }
+  return null;
+}
 
 function manifestUrl(): string {
   const override = window.__COPERCEIVE_UPDATE_URL__;
@@ -73,6 +121,7 @@ export interface Updater {
   manual: boolean;
   /** Where the last error came from: a check, or installing the update. */
   errorFrom: "check" | "install";
+  noticeMessage: string | null;
   errorMessage: string | null;
   currentVersion: string;
   showNotes: boolean;
@@ -92,6 +141,7 @@ export function useUpdater(): Updater {
   const [showNotes, setShowNotes] = useState<boolean>(false);
   const [checkState, setCheckState] = useState<CheckState>("idle");
   const [manual, setManual] = useState<boolean>(false);
+  const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [errorFrom, setErrorFrom] = useState<"check" | "install">("check");
   const [currentVersion, setCurrentVersion] = useState<string>("");
@@ -110,6 +160,7 @@ export function useUpdater(): Updater {
 
     setCheckState("checking");
     setManual(isManual);
+    setNoticeMessage(null);
     setErrorMessage(null);
     setErrorFrom("check");
 
@@ -123,18 +174,12 @@ export function useUpdater(): Updater {
           setCheckState("ready");
           return;
         }
-        if (resp.status === "uptodate") {
-          setUpdate(null);
-          setCheckState(isManual ? "uptodate" : "idle");
-          return;
-        }
-        if (resp.status === "error") {
-          if (isManual || resp.is_network) {
-            setErrorMessage(resp.error || "Could not check for updates. Check the network and try again.");
-            setCheckState("error");
-          } else {
-            setCheckState("idle");
-          }
+        const transition = desktopCheckTransition(resp, isManual);
+        if (transition) {
+          if (transition.clearUpdate) setUpdate(null);
+          setNoticeMessage(transition.noticeMessage);
+          setErrorMessage(transition.errorMessage);
+          setCheckState(transition.checkState);
           return;
         }
       } catch (err) {
@@ -297,6 +342,7 @@ export function useUpdater(): Updater {
     checkState,
     manual,
     errorFrom,
+    noticeMessage,
     errorMessage,
     currentVersion,
     showNotes,
@@ -325,6 +371,13 @@ function toastFor(u: Updater): JSX.Element | null {
     return (
       <div role="status" aria-live="polite" className="update-status update-toast">
         You're up to date{u.currentVersion && u.currentVersion !== "0.0.0" ? ` (${u.currentVersion})` : ""}.
+      </div>
+    );
+  }
+  if (u.checkState === "unsupported" && u.manual && u.noticeMessage) {
+    return (
+      <div role="status" aria-live="polite" className="update-status update-toast">
+        {u.noticeMessage}
       </div>
     );
   }

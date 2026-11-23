@@ -5,6 +5,8 @@ import {
   groupScenes,
   isDatasetGrouping,
   MANIFEST_CHANGED,
+  RAW_CHECK_INCOMPLETE,
+  rawCheckNotice,
   recordingTime,
   staleExplanation,
   type SceneRowState,
@@ -109,4 +111,16 @@ test("a stale scene says which change made it stale", () => {
   const raw = staleExplanation("raw dataset fingerprint changed");
   assert.match(raw, /^The raw files changed since this scene was prepared \(raw dataset fingerprint changed\)/);
   assert.match(staleExplanation(null), /\(fingerprint changed\)/);
+});
+
+test("an incomplete raw check shows a note; a complete or skipped one does not", () => {
+  const note = rawCheckNotice({ state: "incomplete", reason: RAW_CHECK_INCOMPLETE });
+  assert.ok(note);
+  assert.match(note, /^Raw check incomplete/);
+  assert.match(note, /prepared scenes stay ready/);
+  assert.equal(rawCheckNotice({ state: "complete", reason: null }), null);
+  assert.equal(rawCheckNotice({ state: "not_run", reason: null }), null);
+  // A cluster running an older Coperceive sends no raw_check.
+  assert.equal(rawCheckNotice(undefined), null);
+  assert.equal(rawCheckNotice(null), null);
 });

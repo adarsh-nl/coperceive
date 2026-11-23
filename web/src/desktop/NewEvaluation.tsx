@@ -13,6 +13,7 @@ import IdentifierInput from "./IdentifierInput";
 import JobWatch from "./JobWatch";
 import {
   buildRunPlan,
+  getPluginPythonSetting,
   listPipelineOptions,
   listServerProfiles,
   previewSubmission,
@@ -39,7 +40,14 @@ import {
   artifactFingerprintText,
   pipelineNeedsCheckpoint,
   pipelineNeedsCkptRoot,
+  pipelineNeedsRawRoot,
   pipelineNeedsSplit,
+  EVAL_PROTOCOL_CHOICES,
+  DEFAULT_EVAL_PROTOCOL,
+  evalProtocolLabel,
+  type EvalProtocol,
+  pluginPythonLabel,
+  pluginPythonProblem,
   planSummary,
   jobStateLabel,
   validateArgumentForm,
@@ -174,6 +182,10 @@ export default function NewEvaluation() {
   const [rawRoot, setRawRoot] = useState("");
   const [mediaRoot, setMediaRoot] = useState("");
   const [ckptRoot, setCkptRoot] = useState("");
+  const [evalProtocol, setEvalProtocol] = useState<EvalProtocol>(DEFAULT_EVAL_PROTOCOL);
+  // The plugin's interpreter (--plugin-python); starts from the server's default
+  // (Settings → Model runs), empty = the manifest's environment.
+  const [pluginPython, setPluginPython] = useState("");
   const [overrideEnv, setOverrideEnv] = useState(false);
   const [environment, setEnvironment] = useState<EnvironmentSetup>(emptyEnvironmentOverride());
   const [plan, setPlan] = useState<RunPlan | null>(null);
@@ -198,6 +210,7 @@ export default function NewEvaluation() {
   // own typed arguments are the complete input set.
   const needsCheckpoint = pipelineNeedsCheckpoint(selectedPipeline, model);
   const needsCkptRoot = pipelineNeedsCkptRoot(selectedPipeline, model);
+  const needsRawRoot = pipelineNeedsRawRoot(selectedPipeline, model);
   const needsSplit = pipelineNeedsSplit(selectedPipeline);
   const seeded = useRef(false);
   const stepArguments = (selectedPipeline?.spec.arguments ?? []).filter(
@@ -242,6 +255,22 @@ export default function NewEvaluation() {
     return () => window.removeEventListener("coperceive-test-evaluation-seed", handleSeed);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Each server starts New evaluation with its own default interpreter, if one is set.
+  useEffect(() => {
+    if (!profileId) return;
+    let current = true;
+    void getPluginPythonSetting(profileId)
+      .then((value) => {
+        if (current) setPluginPython(typeof value === "string" ? value : "");
+      })
+      .catch(() => {
+        if (current) setPluginPython("");
+      });
+    return () => {
+      current = false;
+    };
+  }, [profileId]);
 
   useEffect(() => {
     if (!profileId || seeded.current) return;
@@ -397,9 +426,19 @@ export default function NewEvaluation() {
       return;
     }
     if (selectedPipeline.source === "builtin") {
-      const inputProblem = builtinPlanInputProblem({ model, rawRoot, mediaRoot });
+      const inputProblem = builtinPlanInputProblem({
+        model,
+        rawRoot,
+        mediaRoot,
+        needsRawInputs: needsRawRoot,
+      });
       if (inputProblem) {
         setError(inputProblem);
+        return;
+      }
+      const interpreterProblem = pluginPythonProblem(pluginPython);
+      if (interpreterProblem) {
+        setError(interpreterProblem);
         return;
       }
     }
@@ -427,6 +466,9 @@ export default function NewEvaluation() {
         raw_root: selectedPipeline.source === "builtin" ? rawRoot.trim() : "",
         media_root: selectedPipeline.source === "builtin" ? mediaRoot.trim() : "",
         ckpt_root: selectedPipeline.source === "builtin" && needsCkptRoot ? ckptRoot.trim() : "",
+        eval_protocol: evalProtocol,
+        // Exactly as typed (the job passes it as given); blank = the manifest's environment.
+        plugin_python: selectedPipeline.source === "builtin" && pluginPython.trim() ? pluginPython : "",
         environment_override: overrideEnv ? environment : null,
       };
       const built = await buildRunPlan(selectedProfile.id, request);
@@ -513,6 +555,12 @@ export default function NewEvaluation() {
                     ) : null}
                     <dt>Media root</dt>
                     <dd className="c-mono">{mediaRoot.trim() || "—"}</dd>
+                    <dt>AP protocol</dt>
+                    <dd>{evalProtocolLabel(evalProtocol)}</dd>
+                    <dt>Plugin interpreter</dt>
+                    <dd className={pluginPython.trim() ? "c-mono" : undefined}>
+                      {pluginPythonLabel(pluginPython)}
+                    </dd>
                   </>
                 ) : null}
                 <dt>Environment</dt>
@@ -646,6 +694,11 @@ export default function NewEvaluation() {
                             onChange={(event) => setRawRoot(event.target.value)}
                             placeholder="/data/griffin-release"
                           />
+                          {needsRawRoot ? null : (
+                            <span className="c-step-note">
+                              Optional: this model declares no raw inputs. Leave it empty and the job passes no --raw-root.
+                            </span>
+                          )}
                         </div>
                         {needsCkptRoot ? (
                           <div style={field}>
@@ -675,6 +728,47 @@ export default function NewEvaluation() {
                           />
                           <span className="c-step-note">
                             Optional: leave it empty and the job passes no --media-root, as the CLI does.
+                          </span>
+                        </div>
+                        <div style={field} role="radiogroup" aria-label="AP protocol">
+                          <span style={labelStyle}>AP protocol</span>
+                          {EVAL_PROTOCOL_CHOICES.map((choice) => (
+                            <label
+                              key={choice.value}
+                              style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", fontSize: "0.82rem", color: "var(--text)" }}
+                            >
+                              <input
+                                type="radio"
+                                name="plan-eval-protocol"
+                                value={choice.value}
+                                checked={evalProtocol === choice.value}
+                                onChange={() => setEvalProtocol(choice.value)}
+                              />
+                              <span>
+                                <strong>{choice.label}</strong>: {choice.description}
+                              </span>
+                            </label>
+                          ))}
+                          <span className="c-step-note">
+                            Recorded with the run; a later eval run uses it unless told otherwise.
+                          </span>
+                        </div>
+                        <div style={field}>
+                          <label style={labelStyle} htmlFor="plan-plugin-python">
+                            Plugin interpreter (optional)
+                          </label>
+                          <input
+                            id="plan-plugin-python"
+                            className="c-path-input"
+                            value={pluginPython}
+                            onChange={(event) => setPluginPython(event.target.value)}
+                            placeholder="/path/to/envs/<env>/bin/python"
+                            aria-invalid={pluginPythonProblem(pluginPython) ? true : undefined}
+                            spellCheck={false}
+                          />
+                          <span className="c-step-note">
+                            {pluginPythonProblem(pluginPython) ??
+                              "A full path on the cluster, passed as --plugin-python. Empty: the model's manifest environment. The default is per server (Settings → Model runs)."}
                           </span>
                         </div>
                       </>
@@ -1113,6 +1207,7 @@ export default function NewEvaluation() {
                         profileId={profileId}
                         planId={plan.id}
                         initialOutcome={submitOutcome}
+                        evalProtocol={plan.eval_protocol}
                       />
                     </div>
                   ) : null}

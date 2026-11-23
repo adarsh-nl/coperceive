@@ -4,11 +4,11 @@ Griffin is a simulated aerial-ground dataset: the catalog describes it as cooper
 
 ## Licence, citation and download
 
-**Licence.** Data licence: MIT, as declared in the [authors dataset card](https://huggingface.co/datasets/wjh-svm/Griffin/blob/main/README.md). Code is separately MIT under [LICENSE.txt](https://github.com/wang-jh18-SVM/Griffin/blob/main/LICENSE.txt).
+**Licence.** Data licence: MIT, as declared in the [authors' dataset card](https://huggingface.co/datasets/wjh-svm/Griffin/blob/main/README.md). Code is separately MIT under [LICENSE.txt](https://github.com/wang-jh18-SVM/Griffin/blob/main/LICENSE.txt).
 
 **Citation.** Use the canonical source and single BibTeX block in [Citation](#citation) below.
 
-**Download.** [Hugging Face](https://huggingface.co/datasets/wjh-svm/Griffin) or the Baidu link in the [authors preparation guide](https://github.com/wang-jh18-SVM/Griffin/blob/main/docs/Dataset_Preparation.md).
+**Download.** [Hugging Face](https://huggingface.co/datasets/wjh-svm/Griffin) or the Baidu link in the [authors' preparation guide](https://github.com/wang-jh18-SVM/Griffin/blob/main/docs/Dataset_Preparation.md).
 
 The current arXiv record in Citation is canonical here; the README citation is older. Upstream asset terms have not been checked.
 

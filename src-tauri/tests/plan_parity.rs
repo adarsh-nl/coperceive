@@ -219,7 +219,8 @@ fn render(cases: &Value, case: &Value, entry: &ServerEntry) -> Result<String, St
     let root = text(case, "root");
     let scenes = format!("{root}/scenes");
     // The cluster's `model list --json` names the manifest under the case's code root.
-    let model_list = fs::read_to_string(parity_dir().join(text(cases, "model_list")))
+    let list_name = case["model_list"].as_str().unwrap_or_else(|| text(cases, "model_list"));
+    let model_list = fs::read_to_string(parity_dir().join(list_name))
         .unwrap()
         .replace(text(cases, "code_root"), code_root(cases, case));
     let cluster = FakeCluster {
@@ -234,10 +235,12 @@ fn render(cases: &Value, case: &Value, entry: &ServerEntry) -> Result<String, St
         written: Mutex::new(None),
     };
     let profile = &entry.profile;
-    let pipeline = list_builtin_pipelines(&cluster, profile)
-        .into_iter()
-        .next()
-        .ok_or_else(|| "list_builtin_pipelines: no built-in model was listed".to_string())?;
+    let pipelines = list_builtin_pipelines(&cluster, profile);
+    let pipeline = match case["plugin"].as_str() {
+        Some(name) => pipelines.into_iter().find(|item| item.name == name),
+        None => pipelines.into_iter().next(),
+    }
+    .ok_or_else(|| "list_builtin_pipelines: no built-in model was listed".to_string())?;
     // The model's options, as the form's extras (the CLI's --option k=v).
     let mut values = BTreeMap::new();
     let extras = strings(&case["extras"]);
@@ -252,15 +255,24 @@ fn render(cases: &Value, case: &Value, entry: &ServerEntry) -> Result<String, St
         registration_path: pipeline.registration_path.clone(),
         plugin_manifest: pipeline.plugin_manifest.clone(),
         values,
-        checkpoint: String::new(),
+        checkpoint: case["checkpoint"].as_str().unwrap_or("").to_string(),
         split: scenes,
         model: text(case, "model").to_string(),
-        raw_root: format!("{root}/raw"),
+        // `"raw_root": false` leaves the field empty: a model with no inputs.raw.
+        raw_root: if case["raw_root"].as_bool() == Some(false) { String::new() } else { format!("{root}/raw") },
         // `"media_root": false` leaves the field empty, as the form does when none is chosen.
         media_root: if case["media_root"].as_bool() == Some(false) { String::new() } else { format!("{root}/raw") },
-        // Griffin declares ckpt_root without a default: every case gives one, and the
-        // ckpt_root_custom case gives a folder of its own rather than the default.
-        ckpt_root: case["ckpt_root"].as_str().map(str::to_string).unwrap_or_else(|| format!("{root}/ckpts")),
+        // Griffin declares ckpt_root without a default: every Griffin case gives one.
+        // `"ckpt_root": false` is a model that does not declare the option.
+        ckpt_root: if case["ckpt_root"].as_bool() == Some(false) {
+            String::new()
+        } else {
+            case["ckpt_root"].as_str().map(str::to_string).unwrap_or_else(|| format!("{root}/ckpts"))
+        },
+        // The AP protocol the plan records; a legacy case also puts it in the run line.
+        eval_protocol: case["eval_protocol"].as_str().unwrap_or("default").to_string(),
+        // The plugin's interpreter as New evaluation sends it; none leaves the manifest's.
+        plugin_python: case["plugin_python"].as_str().unwrap_or("").to_string(),
         environment_override: None,
     };
     let plan = build_run_plan(&cluster, entry, &request).map_err(|e| format!("build_run_plan: {e}"))?;

@@ -574,6 +574,8 @@ $openPayload = @{
                 profileId = "cluster-a"
                 adapter = "v2xset"
                 rawRoot = "/data/v2xset"
+                # The index's cache.relative_path (sha1 of the raw root's real path).
+                cacheRelative = "coperceive-cache/v2xset/10c21c9efb52/all"
             }
         }
     )

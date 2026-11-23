@@ -20,6 +20,40 @@ use std::path::Path;
 /// process-wide fake SSH environment variables (`FAKE_SSH_LOG`, `FAKE_REMOTE_ROOT`).
 pub static FAKE_SSH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Write an executable test script through a temporary name and rename it into place.
+///
+/// Writing the file that is about to be executed can leave it with a write descriptor
+/// open across a concurrent `fork`, so Linux answers `ETXTBSY` ("Text file busy") on
+/// the `exec`. The temporary file is synced and closed first, then renamed: the name
+/// that is executed is a complete, closed file. This is the same pattern as
+/// `remote_static::scp_tests::recording_scp` (the #170 fix).
+#[cfg(all(test, unix))]
+pub(crate) fn write_executable_atomically(
+    path: &Path,
+    contents: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("script");
+    let staging = path.with_file_name(format!(".{name}.tmp-{}", std::process::id()));
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o755)
+            .open(&staging)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
+    }
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::rename(&staging, path)
+}
+
 /// Crate-wide mutex serializing unit tests that allocate or re-bind ephemeral
 /// loopback TCP ports so parallel tests do not claim a port between
 /// `find_free_loopback_port` returning and the caller binding it.
