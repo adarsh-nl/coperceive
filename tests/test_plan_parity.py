@@ -131,19 +131,42 @@ def _cli_script(case: dict[str, Any], tmp_path: Path, *, with_ckpt_root: bool = 
     # coperceive_root (this checkout, mapped back to code_root by _logical), so the CLI's
     # own PYTHONPATH is checked end to end.
     patched: contextlib.AbstractContextManager[object] = contextlib.nullcontext()
-    manifest = GRIFFIN
+    manifest_path = REPO / case.get(
+        "manifest", "plugins/griffin/coperceive_griffin_model/model.yaml"
+    )
+    manifest = manifest_path
     if "code_root" in case:
         code = _under(tmp_path, case["code_root"])
-        manifest = code / GRIFFIN.relative_to(REPO)
+        manifest = code / manifest_path.relative_to(REPO)
         if not manifest.is_file():
-            shutil.copytree(GRIFFIN.parent, manifest.parent)
+            shutil.copytree(manifest_path.parent, manifest.parent)
         patched = mock.patch.object(slurm, "coperceive_root", return_value=code)
     media = ["--media-root", str(raw)] if case.get("media_root", True) else []
-    ckpt_root = _under(tmp_path, case.get("ckpt_root", f"{case['root']}/ckpts"))
-    # Griffin's ckpt_root has no manifest default, so every case gives the worker one.
-    ckpt = ["--option", f"ckpt_root={ckpt_root}"]
+    raw_args = [] if case.get("raw_root", True) is False else ["--raw-root", str(raw)]
+    # Griffin's ckpt_root has no manifest default, so a Griffin case gives the worker one.
+    # `"ckpt_root": false` is a model that does not declare it (OpenCOOD CoBEVT).
+    if case.get("ckpt_root", True) is False or not with_ckpt_root:
+        ckpt: list[str] = []
+    else:
+        ckpt_root = _under(tmp_path, case.get("ckpt_root", f"{case['root']}/ckpts"))
+        ckpt = ["--option", f"ckpt_root={ckpt_root}"]
+    checkpoint_args: list[str] = []
+    checkpoint = case.get("checkpoint")
+    if isinstance(checkpoint, str) and checkpoint:
+        src = _under(tmp_path, checkpoint)
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_bytes(b"checkpoint\n")
+        checkpoint_args = ["--option", f"checkpoint={src}"]
     options = [word for extra in case.get("extras", []) for word in ("--option", extra)]
     protocol = case.get("eval_protocol")
+    override: list[str] = []
+    if "plugin_python" in case:
+        # The override must exist and be executable where the job is planned.
+        interpreter = _under(tmp_path, case["plugin_python"])
+        interpreter.parent.mkdir(parents=True, exist_ok=True)
+        interpreter.write_text("", encoding="utf-8")
+        interpreter.chmod(0o755)
+        override = ["--plugin-python", str(interpreter)]
     args = [
         "model",
         "run",
@@ -154,11 +177,12 @@ def _cli_script(case: dict[str, Any], tmp_path: Path, *, with_ckpt_root: bool = 
         *(["--protocol", str(protocol)] if protocol is not None else []),
         "--scenes",
         str(scenes),
-        "--raw-root",
-        str(raw),
+        *raw_args,
         *media,
         *(ckpt if with_ckpt_root else []),
+        *checkpoint_args,
         *options,
+        *override,
         "--out",
         str(out),
         "--run-id",
@@ -326,7 +350,16 @@ def _parse(line: str, runtime: dict[str, str]) -> tuple[str, str, argparse.Names
     else:
         assert words[0].endswith("/coperceive"), words[:1]
         program, python, rest = words[0], words[0].removesuffix("coperceive") + "python", words[1:]
-    argv = [runtime.get(word, word) for word in rest]
+
+    def apply(word: str) -> str:
+        if word in runtime:
+            return runtime[word]
+        for key in sorted(runtime, key=len, reverse=True):
+            if key in word:
+                return word.replace(key, runtime[key])
+        return word
+
+    argv = [apply(word) for word in rest]
     errors = io.StringIO()
     try:
         with contextlib.redirect_stderr(errors):
@@ -391,6 +424,9 @@ def test_the_app_and_the_cli_write_the_same_griffin_job(name: str, tmp_path: Pat
         "$SCRATCH/work": "<SCRATCH>/work",
         "$STAGING": "0",
     }
+    checkpoint = case.get("checkpoint")
+    if isinstance(checkpoint, str) and checkpoint:
+        staged[f"$SCRATCH/checkpoints/checkpoint/{Path(checkpoint).name}"] = checkpoint
     _, py_cli, ns_cli = _parse(_run_line(cli), staged)
     program, py_app, ns_app = _parse(_run_line(app), {"$SCRATCH_DIR/work": "<SCRATCH>/work"})
     assert py_app == py_cli == case["python"]
@@ -529,6 +565,33 @@ def test_the_app_reads_what_model_list_json_prints_for_griffin(
     assert printed == committed
 
 
+def test_the_app_reads_what_model_list_json_prints_for_opencood(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``model_list_no_raw.json`` is the CLI's listing of the OpenCOOD plugin, including
+    ``raw_inputs: false`` for CoBEVT (its manifest declares no ``inputs.raw``)."""
+
+    class _OpenCOOD:
+        name = "opencood"
+        group = "coperceive.models"
+        value = "coperceive_opencood_model:MANIFEST"
+
+        def load(self) -> object:
+            return REPO / "plugins/opencood/coperceive_opencood_model/model.yaml"
+
+    def entry_points(**_kwargs: object) -> list[_OpenCOOD]:
+        return [_OpenCOOD()]
+
+    monkeypatch.setattr(metadata, "entry_points", entry_points)
+    registry.clear_cache()
+    main(["model", "list", "--json"])
+    registry.clear_cache()
+    printed = json.loads(_logical(capsys.readouterr().out, Path("/nonexistent")))
+    committed = json.loads((PARITY / "model_list_no_raw.json").read_text(encoding="utf-8"))
+    assert printed == committed
+    assert printed["plugins"][0]["models"]["cobevt-lidar-v2xset"]["raw_inputs"] is False
+
+
 def _refusal_names() -> list[str]:
     return [case["name"] for case in CASES["refusals"]]
 
@@ -550,3 +613,33 @@ def test_the_cli_takes_each_input_the_app_refuses(name: str, tmp_path: Path) -> 
     if shutil.which("bash") is not None:
         done = subprocess.run(["bash", "-n", "-c", cli], capture_output=True, text=True)
         assert done.returncode == 0, (name, done.stderr)
+
+
+def _pending_plugin_python_names() -> list[str]:
+    # Only the --plugin-python cases: another pending case checks its own difference.
+    return [case["name"] for case in CASES.get("pending_app", []) if "plugin_python" in case]
+
+
+@pytest.mark.parametrize("name", _pending_plugin_python_names())
+def test_the_cli_carries_the_plugin_python_override_the_app_does_not_yet(
+    name: str, tmp_path: Path
+) -> None:
+    """A CLI-only case: the app half is pending (allowed_differences.json
+    ``pending_app_cases``, with the follow-up named). The CLI's script differs from the
+    base case's only by ``--plugin-python <path>`` on the run line, the path as given."""
+    (case,) = [case for case in CASES["pending_app"] if case["name"] == name]
+    assert name not in _case_names(), name
+    assert not (PARITY / "app" / f"{name}.sbatch").exists(), name
+    (pending,) = [e for e in LEDGER["pending_app_cases"] if e["case"] == name]
+    for key in ("follow_up", "why", "cite"):
+        assert pending[key].strip() and case.get("follow_up", "").strip(), (name, key)
+    cli = _cli_script(case, tmp_path / "override")
+    base = _cli_script(_case("base"), tmp_path / "base")
+    _, _, ns = _parse(_run_line(cli), {"$STAGING": "0"})
+    assert ns.plugin_python == case["plugin_python"]
+    _, _, base_ns = _parse(_run_line(base), {"$STAGING": "0"})
+    assert base_ns.plugin_python is None
+    differing = [(a, b) for a, b in zip(_lines(cli), _lines(base), strict=True) if a != b]
+    assert len(differing) == 1, differing
+    ((line, base_line),) = differing
+    assert line == f"{base_line} --plugin-python {case['plugin_python']}", line

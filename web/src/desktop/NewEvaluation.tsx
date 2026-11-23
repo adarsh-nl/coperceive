@@ -39,6 +39,7 @@ import {
   artifactFingerprintText,
   pipelineNeedsCheckpoint,
   pipelineNeedsCkptRoot,
+  pipelineNeedsRawRoot,
   pipelineNeedsSplit,
   EVAL_PROTOCOL_CHOICES,
   DEFAULT_EVAL_PROTOCOL,
@@ -203,6 +204,7 @@ export default function NewEvaluation() {
   // own typed arguments are the complete input set.
   const needsCheckpoint = pipelineNeedsCheckpoint(selectedPipeline, model);
   const needsCkptRoot = pipelineNeedsCkptRoot(selectedPipeline, model);
+  const needsRawRoot = pipelineNeedsRawRoot(selectedPipeline, model);
   const needsSplit = pipelineNeedsSplit(selectedPipeline);
   const seeded = useRef(false);
   const stepArguments = (selectedPipeline?.spec.arguments ?? []).filter(
@@ -402,7 +404,12 @@ export default function NewEvaluation() {
       return;
     }
     if (selectedPipeline.source === "builtin") {
-      const inputProblem = builtinPlanInputProblem({ model, rawRoot, mediaRoot });
+      const inputProblem = builtinPlanInputProblem({
+        model,
+        rawRoot,
+        mediaRoot,
+        needsRawInputs: needsRawRoot,
+      });
       if (inputProblem) {
         setError(inputProblem);
         return;
@@ -654,6 +661,11 @@ export default function NewEvaluation() {
                             onChange={(event) => setRawRoot(event.target.value)}
                             placeholder="/data/griffin-release"
                           />
+                          {needsRawRoot ? null : (
+                            <span className="c-step-note">
+                              Optional: this model declares no raw inputs. Leave it empty and the job passes no --raw-root.
+                            </span>
+                          )}
                         </div>
                         {needsCkptRoot ? (
                           <div style={field}>

@@ -20,7 +20,7 @@
     {
       "id": "job-name",
       "side": "cli",
-      "match": "#SBATCH --job-name=model-griffin-plan-1790000000-aabbccddeeff",
+      "match": "#SBATCH --job-name=model-[a-z0-9_-]+-plan-1790000000-aabbccddeeff",
       "kind": "intended",
       "why": "The CLI names its job model-<plugin>-<run id>.",
       "cite": "coperceive/models/slurm.py plan_sbatch"
@@ -154,7 +154,8 @@
         "modules_profile_other_python",
         "venv_profile",
         "venv_script_command",
-        "spaces_and_quotes"
+        "spaces_and_quotes",
+        "no_raw_root"
       ]
     },
     {
@@ -223,6 +224,72 @@
       "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'",
       "cases": [
         "spaces_and_quotes"
+      ]
+    },
+    {
+      "id": "staging",
+      "side": "cli",
+      "match": "rsync -a --files-from=/data/v2xset/predictions/\\.slurm/plan-1790000000-aabbccddeeff\\.scenes\\.txt /data/v2xset/scenes/ \"\\$SCRATCH/scenes/\"",
+      "kind": "intended",
+      "why": "Stages the prepared scenes. The app runs against data already on the cluster and stages nothing. This case has no raw files: CoBEVT declares no inputs.raw, so there is no raw rsync.",
+      "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'",
+      "cases": [
+        "no_raw_root"
+      ]
+    },
+    {
+      "id": "staging",
+      "side": "cli",
+      "match": "mkdir -p \"\\$SCRATCH/checkpoints/checkpoint\"",
+      "kind": "intended",
+      "why": "The CLI stages the checkpoint archive into scratch. The app passes the same archive by its cluster path; the comparison maps the staged path back to it.",
+      "cite": "coperceive/models/slurm.py checkpoint_files",
+      "cases": [
+        "no_raw_root"
+      ]
+    },
+    {
+      "id": "staging",
+      "side": "cli",
+      "match": "rsync -a /data/v2xset/checkpoints/cobevt.zip \"\\$SCRATCH/checkpoints/checkpoint/\"",
+      "kind": "intended",
+      "why": "The CLI copies the checkpoint archive into scratch and the inner model run reads that copy. The app's --option names the same archive on the cluster.",
+      "cite": "coperceive/models/slurm.py checkpoint_files",
+      "cases": [
+        "no_raw_root"
+      ]
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "mkdir -p /data/v2xset/predictions/plan-1790000000-aabbccddeeff",
+      "kind": "intended",
+      "why": "Makes the run's folder under --out. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "no_raw_root"
+      ]
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "rsync -a \"\\$SCRATCH/out/\\$RUN_ID/\" /data/v2xset/predictions/plan-1790000000-aabbccddeeff/",
+      "kind": "intended",
+      "why": "Copies the staged run home. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "no_raw_root"
+      ]
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "echo \"done:\" /data/v2xset/predictions/plan-1790000000-aabbccddeeff \"\\(exit \\$RC\\)\"",
+      "kind": "intended",
+      "why": "The CLI prints where it copied the run. The app's --out is already that directory.",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "no_raw_root"
       ]
     },
     {
@@ -315,7 +382,8 @@
         "modules_profile_other_python",
         "venv_profile",
         "venv_script_command",
-        "spaces_and_quotes"
+        "spaces_and_quotes",
+        "no_raw_root"
       ]
     },
     {
@@ -346,7 +414,8 @@
         "modules_profile_other_python",
         "venv_profile",
         "venv_script_command",
-        "spaces_and_quotes"
+        "spaces_and_quotes",
+        "no_raw_root"
       ]
     },
     {
@@ -500,7 +569,8 @@
         "modules_profile_other_python",
         "venv_profile",
         "venv_script_command",
-        "spaces_and_quotes"
+        "spaces_and_quotes",
+        "no_raw_root"
       ]
     },
     {
@@ -547,7 +617,8 @@
         "modules_profile_other_python",
         "venv_profile",
         "proxy_jump_modules",
-        "spaces_and_quotes"
+        "spaces_and_quotes",
+        "no_raw_root"
       ]
     },
     {
@@ -645,5 +716,15 @@
   "argv_fields": {
     "out": "The app writes under results_root/runs/<plan id>; the CLI under scratch, then copies home (ADR 0015 §3a).",
     "staging_seconds": "Only the CLI stages, so only it times the staging (provenance timing only)."
-  }
+  },
+  "pending_app_cases": [
+    {
+      "case": "plugin_python_override",
+      "side": "app",
+      "line": "the run line's `--plugin-python <path>`",
+      "follow_up": "The app's job script does not pass the plugin interpreter override yet; the laptop agent adds it after PR #213 (see cases.json pending_app).",
+      "why": "The override is new in the CLI. Until the app passes it, an app-planned run uses the manifest's environment.",
+      "cite": "docs/models.md, 'Plugin interpreter'; tests/test_plan_parity.py test_the_cli_carries_the_plugin_python_override_the_app_does_not_yet"
+    }
+  ]
 }

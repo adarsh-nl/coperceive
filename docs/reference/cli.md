@@ -609,13 +609,16 @@ options:
 ## `coperceive model inspect`
 
 ```text
-usage: coperceive model inspect [-h] [--manifest MANIFEST] [plugin]
+usage: coperceive model inspect [-h] [--plugin-python PATH] [--manifest MANIFEST] [plugin]
 
 positional arguments:
-  plugin               Plugin name (entry point).
+  plugin                Plugin name (entry point).
 
 options:
   -h, --help  show this help message and exit
+  --plugin-python PATH  The plugin's interpreter (full path to its python) instead of the
+                        manifest's environment; checked before anything runs, passed to a Slurm
+                        job as given.
   --manifest MANIFEST  Manifest file instead of a name.
 ```
 
@@ -623,10 +626,10 @@ options:
 
 ```text
 usage: coperceive model check [-h] [--manifest MANIFEST] [--model MODEL] [--keep] [--work WORK]
-       [--raw-root RAW_ROOT] [--option K=V] [plugin]
+       [--raw-root RAW_ROOT] [--option K=V] [--plugin-python PATH] [plugin]
 
 positional arguments:
-  plugin               Plugin name (entry point).
+  plugin                Plugin name (entry point).
 
 options:
   -h, --help  show this help message and exit
@@ -636,6 +639,9 @@ options:
   --work WORK  Work root; default a temporary directory.
   --raw-root RAW_ROOT  Raw release for models with raw inputs.
   --option K=V
+  --plugin-python PATH  The plugin's interpreter (full path to its python) instead of the
+                        manifest's environment; checked before anything runs, passed to a Slurm
+                        job as given.
 ```
 
 ## `coperceive model run`
@@ -644,11 +650,11 @@ options:
 usage: coperceive model run [-h] [--manifest MANIFEST] --scenes SCENES --out OUT --run-id RUN_ID
        [--model MODEL] [--agents AGENTS] [--source SOURCE] [--scene-ids SCENE_IDS] [--raw-root
        RAW_ROOT] [--media-root MEDIA_ROOT] [--artifacts ARTIFACTS] [--no-auto-dependencies]
-       [--option K=V] [--protocol {default,legacy}] [--frame-timeout FRAME_TIMEOUT] [--run-timeout
-       RUN_TIMEOUT] [--no-cache] [--hash-inputs] [--work WORK] [--force] [--perturb PERTURB]
-       [--staging-seconds STAGING_SECONDS] [--slurm] [--submit] [--slurm-python SLURM_PYTHON]
-       [--slurm-partition SLURM_PARTITION] [--slurm-logs SLURM_LOGS] [--slurm-results SLURM_RESULTS]
-       [--slurm-scratch-template SLURM_SCRATCH_TEMPLATE] [plugin]
+       [--option K=V] [--protocol {default,legacy}] [--plugin-python PATH] [--frame-timeout
+       FRAME_TIMEOUT] [--run-timeout RUN_TIMEOUT] [--no-cache] [--hash-inputs] [--work WORK]
+       [--force] [--perturb PERTURB] [--staging-seconds STAGING_SECONDS] [--slurm] [--submit]
+       [--slurm-python SLURM_PYTHON] [--slurm-partition SLURM_PARTITION] [--slurm-logs SLURM_LOGS]
+       [--slurm-results SLURM_RESULTS] [--slurm-scratch-template SLURM_SCRATCH_TEMPLATE] [plugin]
 
 positional arguments:
   plugin                Plugin name (entry point).
@@ -675,6 +681,9 @@ options:
                         eval run without --protocol or a config protocol uses it. default: per-
                         frame ranking, connected-union ground truth (70 m). legacy: the v0.1.1
                         rules.
+  --plugin-python PATH  The plugin's interpreter (full path to its python) instead of the
+                        manifest's environment; checked before anything runs, passed to a Slurm
+                        job as given.
   --frame-timeout FRAME_TIMEOUT
   --run-timeout RUN_TIMEOUT
   --no-cache
@@ -1291,11 +1300,12 @@ options:
 ## `coperceive dataset status`
 
 ```text
-usage: coperceive dataset status [-h] --cache CACHE [--verbose]
+usage: coperceive dataset status [-h] --cache CACHE [--live-claims] [--verbose]
 
 options:
   -h, --help  show this help message and exit
   --cache CACHE
+  --live-claims  Also list the preparing scenes a queued or running job still holds (one squeue).
   --verbose  Print the full traceback on failure.
 ```
 

@@ -141,3 +141,25 @@ test("readAppVersion returns null on failure and never offers updates without a 
     null,
   );
 });
+
+test("unsupported platform response stays quiet in background and shows plain message on manual check", async () => {
+  const { desktopCheckTransition } = await import("./UpdateBanner.tsx");
+  const resp = {
+    status: "unsupported" as const,
+    message: "Coperceive v0.1.2 is the last version for Intel Macs.",
+  };
+
+  assert.deepStrictEqual(desktopCheckTransition(resp, false), {
+    checkState: "idle",
+    noticeMessage: "Coperceive v0.1.2 is the last version for Intel Macs.",
+    errorMessage: null,
+    clearUpdate: true,
+  });
+
+  assert.deepStrictEqual(desktopCheckTransition(resp, true), {
+    checkState: "unsupported",
+    noticeMessage: "Coperceive v0.1.2 is the last version for Intel Macs.",
+    errorMessage: null,
+    clearUpdate: true,
+  });
+});
