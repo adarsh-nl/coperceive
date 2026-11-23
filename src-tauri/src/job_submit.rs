@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::hpc::{EnvironmentKind, JobState, ServerProfile};
 use crate::run_plan::{
     environment_lines, model_run_output_checks, quoted_command_with, strip_output_dir,
-    validate_plan_id, verify_plan_inputs, RunPlan, EVAL_PROTOCOLS, WORK_IN_SCRATCH,
+    validate_plan_id, validate_plugin_python, verify_plan_inputs, RunPlan, EVAL_PROTOCOLS,
+    PLUGIN_PYTHON_FLAG, WORK_IN_SCRATCH,
 };
 use crate::slurm_adapter::{RemoteRunner, map_slurm_state};
 use crate::ssh::shell_quote;
@@ -225,6 +226,7 @@ pub fn render_run_script(
     validate_plan_id(&plan.id)?;
     if builtin {
         check_builtin_run_words(plan)?;
+        check_plugin_python_words(plan)?;
     }
     profile.validate()?;
     plan.environment.validate()?;
@@ -732,6 +734,33 @@ fn capture_interpreter(plan: &RunPlan) -> Result<(String, Option<String>), Strin
 /// output directory, `--run-id` its id and `--work` the job's scratch. The post-run
 /// checks and the results views rely on it, so a saved plan that says otherwise (stale
 /// or edited) is refused, as `--output-dir` is.
+/// A saved plan's plugin interpreter, checked again before submitting: a full path with
+/// no line break, and on the run line exactly once, last, as the plan records it (or not
+/// at all without one). A plan edited by hand cannot slip another path into the job.
+fn check_plugin_python_words(plan: &RunPlan) -> Result<(), String> {
+    validate_plugin_python(&plan.plugin_python)
+        .map_err(|error| format!("{error} Rebuild this plan before submitting."))?;
+    let flags = plan.argv.iter().filter(|word| word.starts_with(PLUGIN_PYTHON_FLAG)).count();
+    let tail = match plan.argv.as_slice() {
+        [.., flag, value] if flag == PLUGIN_PYTHON_FLAG => Some(value.as_str()),
+        _ => None,
+    };
+    let matches = if plan.plugin_python.is_empty() {
+        flags == 0
+    } else {
+        flags == 1 && tail == Some(plan.plugin_python.as_str())
+    };
+    if matches {
+        Ok(())
+    } else {
+        Err(format!(
+            "This saved plan's run line does not pass {PLUGIN_PYTHON_FLAG} as the plan records \
+             it ({:?}). Rebuild this plan before submitting.",
+            plan.plugin_python
+        ))
+    }
+}
+
 fn check_builtin_run_words(plan: &RunPlan) -> Result<(), String> {
     let Some(start) = plan
         .argv
@@ -1040,6 +1069,7 @@ mod tests {
             ckpt_root: crate::run_plan::PlanArtifact::default(),
             model_options: Vec::new(),
             eval_protocol: "default".to_string(),
+            plugin_python: String::new(),
             work_dir: String::new(),
             staging_seconds: None,
             checkpoint: crate::run_plan::PlanArtifact {
@@ -1345,6 +1375,78 @@ mod tests {
         plan.argv.push("legacy".to_string());
         let legacy = render_run_script(&profile, &plan, &SubmitOptions::default()).expect("legacy");
         assert!(legacy.script.contains("--protocol legacy"), "{}", legacy.script);
+    }
+
+    /// A built-in plan with `--plugin-python <path>` as save_run_plan writes it.
+    fn with_plugin_python(mut plan: RunPlan, path: &str) -> RunPlan {
+        plan.plugin_python = path.to_string();
+        crate::run_plan::push_plugin_python(&mut plan.argv, path).expect("a valid path");
+        plan
+    }
+
+    #[test]
+    fn the_plugin_interpreter_reaches_the_run_line_quoted_and_inert() {
+        let profile = profile("ps");
+        let plain = render_run_script(&profile, &builtin_plan(&profile), &SubmitOptions::default())
+            .expect("no override");
+        assert!(!plain.script.contains("--plugin-python"), "{}", plain.script);
+        let dir = std::env::temp_dir().join(format!("coperceive-plugin-python-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        for path in [
+            "/opt/envs/opencood-official/bin/python",
+            "/opt/envs/opencood official/bin/python",
+            "/opt/envs/it's \"x\"/bin/python",
+            "/opt/envs/$(touch pwned)/`touch pwned2`/$HOME/bin/python",
+        ] {
+            let plan = with_plugin_python(builtin_plan(&profile), path);
+            let script = render_run_script(&profile, &plan, &SubmitOptions::default())
+                .expect(path)
+                .script;
+            let run_line = script
+                .lines()
+                .find(|line| line.contains(" model run --manifest "))
+                .expect("run line");
+            // Last on the line, quoted by the job script's one quoting helper.
+            let quoted = shell_quote(path);
+            assert!(run_line.ends_with(&format!(" --plugin-python {quoted}")), "{run_line}");
+            // The shell reads the word back as exactly the path, expanding nothing.
+            let echoed = std::process::Command::new("/bin/bash")
+                .arg("-c")
+                .arg(format!("printf '%s' {quoted}"))
+                .current_dir(&dir)
+                .output()
+                .expect("bash");
+            assert_eq!(String::from_utf8_lossy(&echoed.stdout), path);
+            assert!(!dir.join("pwned").exists() && !dir.join("pwned2").exists());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_saved_plan_with_a_bad_or_mismatched_plugin_interpreter_is_refused() {
+        let profile = profile("ps");
+        let render = |plan: &RunPlan| {
+            render_run_script(&profile, plan, &SubmitOptions::default()).expect_err("refused")
+        };
+        // A relative path, or one with a line break, recorded by hand in a saved plan.
+        let mut relative = builtin_plan(&profile);
+        relative.plugin_python = "envs/opencood/bin/python".to_string();
+        relative.argv.extend(["--plugin-python".to_string(), relative.plugin_python.clone()]);
+        assert!(render(&relative).contains("--plugin-python: give a full path"), "{}", render(&relative));
+        let mut newline = builtin_plan(&profile);
+        newline.plugin_python = "/opt/envs/x\n/bin/python".to_string();
+        newline.argv.extend(["--plugin-python".to_string(), newline.plugin_python.clone()]);
+        assert!(render(&newline).contains("line break"), "{}", render(&newline));
+        // The plan records one interpreter and the run line passes another, or none.
+        let mut other = with_plugin_python(builtin_plan(&profile), "/opt/envs/a/bin/python");
+        other.plugin_python = "/opt/envs/b/bin/python".to_string();
+        assert!(render(&other).contains("does not pass --plugin-python"), "{}", render(&other));
+        let mut unrecorded = with_plugin_python(builtin_plan(&profile), "/opt/envs/a/bin/python");
+        unrecorded.plugin_python = String::new();
+        assert!(render(&unrecorded).contains("does not pass --plugin-python"));
+        let mut missing = builtin_plan(&profile);
+        missing.plugin_python = "/opt/envs/a/bin/python".to_string();
+        assert!(render(&missing).contains("does not pass --plugin-python"));
     }
 
     #[test]

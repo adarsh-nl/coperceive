@@ -650,31 +650,29 @@ def test_the_cli_scores_after_the_run_the_app_does_not_yet(name: str, tmp_path: 
     assert a[i2].startswith('echo "done:"'), a[i2]
 
 
-def _pending_plugin_python_names() -> list[str]:
-    # Only the --plugin-python cases: another pending case checks its own difference.
-    return [case["name"] for case in CASES.get("pending_app", []) if "plugin_python" in case]
-
-
-@pytest.mark.parametrize("name", _pending_plugin_python_names())
-def test_the_cli_carries_the_plugin_python_override_the_app_does_not_yet(
-    name: str, tmp_path: Path
+def test_both_sides_pass_the_plugin_interpreter_last_and_change_nothing_else(
+    tmp_path: Path,
 ) -> None:
-    """A CLI-only case: the app half is pending (allowed_differences.json
-    ``pending_app_cases``, with the follow-up named). The CLI's script differs from the
-    base case's only by ``--plugin-python <path>`` on the run line, the path as given."""
-    (case,) = [case for case in CASES["pending_app"] if case["name"] == name]
-    assert name not in _case_names(), name
-    assert not (PARITY / "app" / f"{name}.sbatch").exists(), name
-    (pending,) = [e for e in LEDGER["pending_app_cases"] if e["case"] == name]
-    for key in ("follow_up", "why", "cite"):
-        assert pending[key].strip() and case.get("follow_up", "").strip(), (name, key)
-    cli = _cli_script(case, tmp_path / "override")
-    base = _cli_script(_case("base"), tmp_path / "base")
-    _, _, ns = _parse(_run_line(cli), {"$STAGING": "0"})
-    assert ns.plugin_python == case["plugin_python"]
-    _, _, base_ns = _parse(_run_line(base), {"$STAGING": "0"})
-    assert base_ns.plugin_python is None
-    differing = [(a, b) for a, b in zip(_lines(cli), _lines(base), strict=True) if a != b]
-    assert len(differing) == 1, differing
-    ((line, base_line),) = differing
-    assert line == f"{base_line} --plugin-python {case['plugin_python']}", line
+    """``plugin_python_override``: the CLI's and the app's scripts each differ from their
+    base case's only by ``--plugin-python <path>`` at the end of the run line, the path
+    exactly as given (the field-by-field comparison above checks the two lines agree)."""
+    case = _case("plugin_python_override")
+    assert "plugin_python_override" not in [c["name"] for c in CASES.get("pending_app", [])]
+    assert "plugin_python_override" not in [e["case"] for e in LEDGER["pending_app_cases"]]
+    sides = {
+        "cli": (
+            _cli_script(case, tmp_path / "override"),
+            _cli_script(_case("base"), tmp_path / "base"),
+        ),
+        "app": (_app_script("plugin_python_override"), _app_script("base")),
+    }
+    for side, (override, base) in sides.items():
+        runtime = {"$STAGING": "0"} if side == "cli" else {}
+        _, _, ns = _parse(_run_line(override), runtime)
+        assert ns.plugin_python == case["plugin_python"], side
+        _, _, base_ns = _parse(_run_line(base), runtime)
+        assert base_ns.plugin_python is None, side
+        differing = [(a, b) for a, b in zip(_lines(override), _lines(base), strict=True) if a != b]
+        assert len(differing) == 1, (side, differing)
+        ((line, base_line),) = differing
+        assert line == f"{base_line} --plugin-python {case['plugin_python']}", (side, line)

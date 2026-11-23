@@ -3711,6 +3711,23 @@ fn last_cluster_dataset() -> serde_json::Value {
         .unwrap_or(serde_json::Value::Null)
 }
 
+/// Settings → Model runs → "Plugin interpreter": the server's default for New
+/// evaluation's field (null when the manifest's environment decides).
+#[tauri::command]
+fn get_plugin_python_setting(profile_id: String) -> Option<String> {
+    state::load_state().plugin_python(&profile_id)
+}
+
+/// Sets (or, with `path: null` or an empty path, clears) a server's default plugin
+/// interpreter. Plans already saved keep the interpreter they record.
+#[tauri::command]
+fn set_plugin_python_setting(profile_id: String, path: Option<String>) -> Result<Option<String>, String> {
+    let mut persistent = state::load_state();
+    persistent.set_plugin_python(&profile_id, path.as_deref())?;
+    state::save_state(&persistent).map_err(|error| format!("Could not save the setting: {error}"))?;
+    Ok(persistent.plugin_python(&profile_id))
+}
+
 /// Settings → Cluster datasets → "Camera images when preparing".
 #[tauri::command]
 fn get_camera_images_setting(profile_id: Option<String>) -> state::CameraImagesSetting {
@@ -4038,6 +4055,15 @@ fn run_dataset_flow_probe(
                     arg_text(&args, "rawRoot")?,
                     optional_text(&args, "split"),
                 )),
+                "get_plugin_python_setting" => serde_json::to_value(get_plugin_python_setting(
+                    arg_text(&args, "profileId")?,
+                ))
+                .map_err(|error| error.to_string()),
+                "set_plugin_python_setting" => set_plugin_python_setting(
+                    arg_text(&args, "profileId")?,
+                    optional_text(&args, "path"),
+                )
+                .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string())),
                 "get_camera_images_setting" => serde_json::to_value(get_camera_images_setting(
                     optional_text(&args, "profileId"),
                 ))
@@ -4497,6 +4523,8 @@ fn main() {
             dataset_open,
             get_camera_images_setting,
             set_camera_images_setting,
+            get_plugin_python_setting,
+            set_plugin_python_setting,
             set_viewer_dataset_scenes,
             remember_cluster_dataset,
             last_cluster_dataset,

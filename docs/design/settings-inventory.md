@@ -71,7 +71,7 @@ written later by `coperceive eval run`, not by the model job.
 
 | Setting | Where it lives today | Default | Who would change it, and why | Recommendation |
 | --- | --- | --- | --- | --- |
-| Plugin interpreter (`--plugin-python`) | Proposed in **open PR #213** (not merged on 2026-11-22): accepted by `model run` (local and `--slurm`), `model check` and `model inspect`. No app field. | Without the flag the plugin manifest's `environment` decides, exactly as before. | A plugin user whose cluster environment has another name/path than the installed manifest (for example a renamed conda env), or a contributor testing another interpreter. | **App Settings (per server)** as an optional default, with a per-run override and the CLI flag for headless use; until the app part exists, CLI/config only. The flag's own PR is the source of truth for validation and provenance. |
+| Plugin interpreter (`--plugin-python`) | `model run` (local and `--slurm`), `model check` and `model inspect` (#213). App: Settings → Model runs (per server default) and New evaluation's **Plugin interpreter** field (per run, recorded in the plan as `plugin_python`). | Without the flag the plugin manifest's `environment` decides, exactly as before. | A plugin user whose cluster environment has another name/path than the installed manifest (for example a renamed conda env), or a contributor testing another interpreter. | **App Settings (per server)** as an optional default, with a per-run override and the CLI flag for headless use; until the app part exists, CLI/config only. The flag's own PR is the source of truth for validation and provenance. |
 
 ## Viewer
 
