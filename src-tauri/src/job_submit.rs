@@ -176,11 +176,11 @@ pub fn render_run_script(
     // introduced (9b4d9a0): serde defaults leave all of them empty. work_dir is the marker
     // for that schema version: every built-in plan saved since then records the job's work
     // directory, so an empty one means the plan predates those fields. The media root is
-    // not the marker: it is optional now, and an empty one is a valid new plan.
+    // not the marker: it is optional. The raw root is not the marker either: a model whose
+    // manifest declares no inputs.raw (OpenCOOD CoBEVT) saves a valid plan with an empty
+    // one. An empty model is still refused: a built-in plan without one cannot run.
     if plan.pipeline.source == "builtin"
-        && (plan.model.trim().is_empty()
-            || plan.raw_root.path.trim().is_empty()
-            || plan.work_dir.trim().is_empty())
+        && (plan.model.trim().is_empty() || plan.work_dir.trim().is_empty())
     {
         return Err(
             "This saved plan predates the model/raw/work fields. Rebuild this plan before submitting."
@@ -1292,6 +1292,27 @@ mod tests {
             render_run_script(&profile, &plan, &SubmitOptions::default()).expect("render");
         assert!(!preview.script.contains("--media-root"), "{}", preview.script);
         assert!(preview.script.contains("--raw-root /data/scenes/raw"), "{}", preview.script);
+    }
+
+    #[test]
+    fn a_new_builtin_plan_without_a_raw_root_is_accepted_and_omits_the_flag() {
+        // work_dir is the marker of a plan saved since 9b4d9a0. An empty raw root is a
+        // valid new plan for a model whose manifest declares no raw inputs; the job
+        // script must contain no --raw-root word at all (not an empty one).
+        let profile = profile("ps");
+        let mut plan = builtin_plan(&profile);
+        plan.raw_root = crate::run_plan::PlanArtifact::default();
+        let at = plan
+            .argv
+            .iter()
+            .position(|word| word == "--raw-root")
+            .expect("fixture passes --raw-root");
+        plan.argv.drain(at..at + 2);
+        let preview =
+            render_run_script(&profile, &plan, &SubmitOptions::default()).expect("render");
+        assert!(!preview.script.contains("--raw-root"), "{}", preview.script);
+        assert!(preview.script.contains("--work"), "{}", preview.script);
+        assert!(!plan.work_dir.trim().is_empty());
     }
 
     #[test]

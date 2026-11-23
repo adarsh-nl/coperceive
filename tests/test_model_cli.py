@@ -81,6 +81,8 @@ def test_model_list_json_names_each_manifest_by_path(
         "seconds_per_sample": 0.01,
         "staging_seconds": 0.0,
         "conversion_seconds": 0.0,
+        # False: this fixture declares no inputs.raw, so a run needs no --raw-root.
+        "raw_inputs": False,
     }
     assert plugin["models"]["known-answer"]["options"] == ["offset_m", "scramble_labels"]
 
