@@ -446,6 +446,31 @@ read-only streamer on the login node:
   server and its connection, and points the open viewer at the scene
   (`#/viewer?scene=…`). Opening another dataset or a local folder stops it.
 
+### Open predictions (Job watch, Run history)
+
+**Open predictions** shows a finished run's predictions in this same viewer
+server, with no Slurm job and no remote viewer session:
+
+- **Which dataset.** A built-in model's saved plan names the prepared scenes its
+  run line read (`model run … --scenes <dir>`) and its raw root. The app streams
+  exactly those, reusing the server when that dataset is already open. Both paths
+  must lie inside the profile's data, code or results folders. A custom pipeline's
+  plan names no dataset: open the dataset first. Its `predictions.jsonl` is then
+  imported on the cluster against the open dataset into
+  `<run output>/viewer-predictions` (never into a dataset root).
+- **What crosses the link.** The run is a prediction store at `<run output>/<plan>`
+  (`model run --out <run output> --run-id <plan>`). One SSH command
+  (`# coperceive-predictions-copy`, the paths as arguments) sends the files the
+  viewer reads, and nothing else: `run.json`, and per scene `boxes.parquet`,
+  `metrics.json` and `matches.parquet`. The copy is byte-exact, capped at 512 MiB
+  (a larger run is refused, not cut), and lands in the server's predictions root
+  `<viewing cache>/mirror/<dataset>/predictions/<plan>`. That root is passed to
+  every streamed server (`--predictions`), so a new run appears without a restart.
+- **Then** the viewer opens on the run's first scene (`#/viewer?predictions=<plan>&scene=<scene>`).
+- **A run with no predictions folder yet** (`<run output>/<plan>` missing, or no
+  `run.json` in it) is a plain error naming the folder. Nothing is started and
+  nothing is changed.
+
 ### Per-request timing and `GET /api/stream-stats`
 
 Timing is measured in Python on both ends of the SSH pipe: the streamer reports
