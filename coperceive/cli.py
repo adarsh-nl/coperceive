@@ -994,7 +994,13 @@ def _dataset_prepare(args: argparse.Namespace) -> None:
         print(json.dumps({"schema": "coperceive-cluster-scene-status-1", "error": error}, indent=2))
         raise SystemExit(1) from None
     print(json.dumps(status, indent=2))
-    if any(scene["state"] == "failed" for scene in status.get("scenes", [])):
+    # Exit 2 for this run's own failed scenes only: an array task prepares one
+    # scene, and another task's failure in the shared cache is not its own.
+    wanted = set(scenes) if scenes else None
+    if any(
+        scene["state"] == "failed" and (wanted is None or scene["scene_id"] in wanted)
+        for scene in status.get("scenes", [])
+    ):
         raise SystemExit(2)
 
 

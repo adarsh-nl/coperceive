@@ -640,7 +640,9 @@ export async function datasetIndex(
 
 /**
  * Retrieve per-scene status from the dataset cache on the cluster.
- * Invokes Tauri command `dataset_status({ profileId, adapter, rawRoot, split })`.
+ * Invokes Tauri command `dataset_status({ profileId, adapter, rawRoot, split, cacheRelative })`.
+ * `cacheRelative` is the index's `cache.relative_path`: the app reads the cache split the
+ * index named, which is where the prepare job writes.
  */
 export async function datasetStatus(
   profileId: string,
@@ -648,6 +650,7 @@ export async function datasetStatus(
     adapter: string;
     rawRoot: string;
     split: string | null;
+    cacheRelative: string;
   },
 ): Promise<ClusterSceneStatusDocument> {
   if (isTauriEnvironment()) {
@@ -656,6 +659,7 @@ export async function datasetStatus(
       adapter: params.adapter,
       rawRoot: params.rawRoot,
       split: params.split,
+      cacheRelative: params.cacheRelative,
     });
   }
 
@@ -906,7 +910,7 @@ export async function datasetPrepareSubmit(
 
 /**
  * Open a ready scene in the viewer via the remote viewer session.
- * Invokes Tauri command `dataset_open({ profileId, adapter, rawRoot, split, sceneId })`.
+ * Invokes Tauri command `dataset_open({ profileId, adapter, rawRoot, split, cacheRelative, sceneId })`.
  */
 export async function datasetOpen(
   profileId: string,
@@ -915,6 +919,8 @@ export async function datasetOpen(
     adapter: string;
     rawRoot: string;
     split: string | null;
+    /** The index's `cache.relative_path`, as for `datasetStatus`. */
+    cacheRelative: string;
   },
 ): Promise<DatasetOpenResult> {
   if (isTauriEnvironment()) {
@@ -923,6 +929,7 @@ export async function datasetOpen(
       adapter: params.adapter,
       rawRoot: params.rawRoot,
       split: params.split,
+      cacheRelative: params.cacheRelative,
       sceneId,
     });
   }

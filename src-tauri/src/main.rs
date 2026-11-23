@@ -3641,15 +3641,19 @@ async fn dataset_status(
     adapter: String,
     raw_root: String,
     split: Option<String>,
+    cache_relative: String,
 ) -> Result<serde_json::Value, String> {
+    // The cache split is the one the index named (`cache.relative_path`), as the
+    // prepare job writes it; `raw_root` no longer decides the path.
+    let _ = raw_root;
     tauri::async_runtime::spawn_blocking(move || {
         let entry = find_server_entry(&profile_id)?;
         let runner = plan_runner(&entry)?;
-        let cache = coperceive_desktop::dataset_jobs::cache_absolute(
+        let cache = coperceive_desktop::dataset_jobs::cache_dir(
             &entry.profile,
             &adapter,
-            &raw_root,
             split.as_deref(),
+            &cache_relative,
         )?;
         coperceive_desktop::cluster_datasets::status_once(&runner, &entry.profile, &cache, false)
             .map_err(|failure| {
@@ -3807,14 +3811,16 @@ async fn dataset_open(
     adapter: String,
     raw_root: String,
     split: Option<String>,
+    cache_relative: String,
     scene_id: Option<String>,
 ) -> Result<SessionPayload, String> {
     let entry = find_server_entry(&profile_id)?;
-    let cache = coperceive_desktop::dataset_jobs::cache_absolute(
+    // The cache split the index named, as for `dataset_status`.
+    let cache = coperceive_desktop::dataset_jobs::cache_dir(
         &entry.profile,
         &adapter,
-        &raw_root,
         split.as_deref(),
+        &cache_relative,
     )?;
     let target = entry.ssh_target()?;
     let key = format!("stream|{profile_id}|{cache}|{raw_root}");
@@ -4037,6 +4043,7 @@ fn run_dataset_flow_probe(
                     arg_text(&args, "adapter")?,
                     arg_text(&args, "rawRoot")?,
                     optional_text(&args, "split"),
+                    arg_text(&args, "cacheRelative")?,
                 )),
                 "get_camera_images_setting" => serde_json::to_value(get_camera_images_setting(
                     optional_text(&args, "profileId"),
@@ -4074,6 +4081,7 @@ fn run_dataset_flow_probe(
                     arg_text(&args, "adapter")?,
                     arg_text(&args, "rawRoot")?,
                     optional_text(&args, "split"),
+                    arg_text(&args, "cacheRelative")?,
                     optional_text(&args, "sceneId"),
                 ))
                 .and_then(|payload| {
