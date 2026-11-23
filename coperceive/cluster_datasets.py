@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from coperceive.adapters.build import BuildError, ManifestAdapter
-from coperceive.adapters.ingest import ingest
+from coperceive.adapters.ingest import ingest, manifest_changed, manifest_sha256
 from coperceive.adapters.prefetch import collecting
 from coperceive.adapters.readers.numpy_yaml import yaml_loader_kind
 from coperceive.adapters.registry import RegistryError, resolve_adapter
@@ -277,6 +277,61 @@ def _write_dataset(cache_dir: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+# The reason a ready scene turns stale when its adapter's conversion rules changed.
+MANIFEST_CHANGED = "adapter manifest changed"
+RAW_CHANGED = "raw dataset fingerprint changed"
+# Why the status cannot say whether the raw files changed: a walk hit its bound.
+RAW_CHECK_INCOMPLETE = "raw check incomplete"
+
+
+def _complete(fingerprint: object) -> bool:
+    return isinstance(fingerprint, dict) and not fingerprint.get("truncated", False)
+
+
+def _raw_changed(stored: object, current: Mapping[str, object]) -> bool:
+    """Whether two raw walks prove the raw files changed.
+
+    Only two complete walks can: a walk cut off by its entry or time bound
+    covers a different part of the tree each run, so its digest changes with
+    no raw change at all. A truncated walk therefore never marks a scene stale.
+    """
+    if not _complete(stored) or not _complete(current):
+        return False
+    assert isinstance(stored, dict)
+    return stored.get("digest") != current.get("digest")
+
+
+def _mark_raw_stale(dataset: dict[str, Any]) -> None:
+    for record in dataset.get("scenes", {}).values():
+        if record.get("state") == "ready":
+            record["state"] = "stale"
+            record["reason"] = RAW_CHANGED
+
+
+def _adapter_digest(adapter_name: object) -> str | None:
+    """The current manifest digest of ``adapter_name``; ``None`` when it has none or is unknown."""
+    if not isinstance(adapter_name, str):
+        return None
+    try:
+        return manifest_sha256(resolve_adapter(adapter_name))
+    except (RegistryError, SpecError, OSError):
+        return None
+
+
+def _mark_manifest_stale(cache: Path, dataset: dict[str, Any]) -> None:
+    """Every ready scene prepared under another adapter manifest becomes stale."""
+    current = _adapter_digest(dataset.get("adapter"))
+    if current is None:
+        return
+    for scene_id, record in dataset.get("scenes", {}).items():
+        if record.get("state") != "ready":
+            continue
+        folder = scene_path(cache, safe_scene_id(scene_id))
+        if manifest_changed(folder, current):
+            record["state"] = "stale"
+            record["reason"] = MANIFEST_CHANGED
+
+
 def _scene_ready(cache_dir: Path, scene_id: str) -> bool:
     safe_scene_id(scene_id)
     folder = scene_path(cache_dir, scene_id)
@@ -449,7 +504,11 @@ def _claim_and_prepare_scene(
                 "scene_dir": scene_id,
             },
         )
-        if record.get("state") == "ready" and _scene_ready(cache, scene_id):
+        if (
+            record.get("state") == "ready"
+            and _scene_ready(cache, scene_id)
+            and not manifest_changed(scene_path(cache, scene_id), manifest_sha256(adapter))
+        ):
             if record.get("images") == images:
                 return scene_id, "ready", None, record.get("prepared_unix")
             # Ready in the other camera-image mode (or from before modes): only its
@@ -675,11 +734,10 @@ def prepare_cluster_dataset(
                 "updated_unix": int(time.time()),
                 "scenes": {},
             }
-        if dataset.get("raw_fingerprint", {}).get("digest") != fingerprint["digest"]:
-            for record in dataset.get("scenes", {}).values():
-                if record.get("state") == "ready":
-                    record["state"] = "stale"
-                    record["reason"] = "raw dataset fingerprint changed"
+        stored = dataset.get("raw_fingerprint")
+        if _raw_changed(stored, fingerprint):
+            _mark_raw_stale(dataset)
+        _mark_manifest_stale(cache, dataset)
         for ref in refs:
             dataset.setdefault("scenes", {}).setdefault(
                 ref.scene_id,
@@ -691,7 +749,10 @@ def prepare_cluster_dataset(
                     "scene_dir": ref.scene_id,
                 },
             )
-        dataset["raw_fingerprint"] = fingerprint
+        # Keep a complete fingerprint over a truncated one, so a later complete
+        # walk can still compare against it.
+        if _complete(fingerprint) or not _complete(stored):
+            dataset["raw_fingerprint"] = fingerprint
         dataset["updated_unix"] = int(time.time())
         _write_dataset(cache, dataset)
     job_id = _slurm_job_id()
@@ -739,6 +800,7 @@ def dataset_status_document(cache_dir: str | Path, *, refresh_stale: bool = True
     cache = _real(cache_dir)
     dataset = _read_dataset(cache)
     fingerprint = dataset.get("raw_fingerprint", {})
+    raw_check: dict[str, str | None] = {"state": "not_run", "reason": None}
     if refresh_stale and isinstance(fingerprint, dict):
         raw_root = dataset.get("raw_root")
         split = dataset.get("split")
@@ -749,11 +811,14 @@ def dataset_status_document(cache_dir: str | Path, *, refresh_stale: bool = True
                 max_entries=DEFAULT_MAX_ENTRIES,
                 deadline=time.monotonic() + max(2.0, DEFAULT_TIMEOUT_S),
             )
-            if current["digest"] != fingerprint.get("digest"):
-                for record in dataset.get("scenes", {}).values():
-                    if record.get("state") == "ready":
-                        record["state"] = "stale"
-                        record["reason"] = "raw dataset fingerprint changed"
+            if _complete(current) and _complete(fingerprint):
+                raw_check = {"state": "complete", "reason": None}
+            else:
+                raw_check = {"state": "incomplete", "reason": RAW_CHECK_INCOMPLETE}
+            if _raw_changed(fingerprint, current):
+                _mark_raw_stale(dataset)
+    if refresh_stale:
+        _mark_manifest_stale(cache, dataset)
     records = []
     for scene_id, record in sorted(dataset.get("scenes", {}).items()):
         item = _status_record(cache, record)
@@ -766,8 +831,53 @@ def dataset_status_document(cache_dir: str | Path, *, refresh_stale: bool = True
         "raw_root": dataset.get("raw_root"),
         "split": dataset.get("split"),
         "updated_unix": dataset.get("updated_unix"),
+        "raw_check": raw_check,
         "scenes": records,
     }
+
+
+def _split_entries(
+    adapter_name: str,
+    raw_root: Path,
+    *,
+    max_scenes: int,
+) -> list[dict[str, object]]:
+    """Every split directory present at ``raw_root``, with its scene count.
+
+    The Servers browser and the Dataset view's sidebar show *all* the splits a
+    folder holds, not only the one detect chose (a tree with ``train`` and
+    ``test`` lists both). Each entry carries the adapter that recognises that
+    split, so the app can open it later without a second detect. Adapters
+    without split directories (Griffin, DAIR-V2X-C) return an empty list.
+
+    One listing per split directory, bounded by ``max_scenes``; no frame is
+    listed and no file is read.
+    """
+    if adapter_name not in ("opv2v", "v2xset", "v2v4real"):
+        return []
+    order: list[str] = []
+    for name in (*_SPLITS["opv2v"], *_SPLITS["v2xset"], *_SPLITS["v2v4real"]):
+        if name not in order:
+            order.append(name)
+    base = raw_root.parent if raw_root.name in order and raw_root.is_dir() else raw_root
+    entries: list[dict[str, object]] = []
+    for name in order:
+        if not (base / name).is_dir():
+            continue
+        try:
+            names = _scene_dirs(base / name, max(1, max_scenes))
+        except OSError:
+            continue
+        if _is_v2xset(base, names, name):
+            recognised = "v2xset"
+        elif is_v2v4real(base, names, name):
+            recognised = "v2v4real"
+        else:
+            recognised = "opv2v"
+        if name not in _SPLITS[recognised]:
+            recognised = "opv2v"
+        entries.append({"name": name, "scene_count": len(names), "adapter": recognised})
+    return entries
 
 
 def detect_cluster_dataset(
@@ -784,6 +894,7 @@ def detect_cluster_dataset(
         "params": {},
         "licence": None,
         "scene_count": 0,
+        "splits": [],
         "status": "none",
         "reason": None,
     }
@@ -855,6 +966,7 @@ def detect_cluster_dataset(
             "params": params,
             "licence": _licence(adapter),
             "scene_count": min(scene_count, max_scenes),
+            "splits": _split_entries(adapter_name, raw_root, max_scenes=max_scenes),
             "status": "ok",
             "reason": None,
         }

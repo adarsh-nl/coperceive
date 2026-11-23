@@ -33,7 +33,7 @@ params:
   split:
     allowed: [train, validate, test]
 
-world_frame: v2x-real-world  # unverified: see docs/datasets/v2x-real.md
+world_frame: v2x-real-world  # source handedness remains unverified; see docs/datasets/v2x-real.md
 
 clock:
   from: frame
@@ -105,6 +105,9 @@ streams:
     reader: yaml_record
     path: "{agent_root}/{frame:06d}.yaml"
     missing: skip
+    # The official box_utils.py project_world_objects() docs call the input
+    # objects world-coordinate objects and convert object_pose to lidar with
+    # x1_to_x2(object_pose, lidar_pose), lines 456-519 of the source.
     frame: world
     records: {path: vehicles, mapping_key: track_id}
     # angle is [roll, yaw, pitch] in degrees; obj_type carries the fine-grained class

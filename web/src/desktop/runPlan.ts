@@ -78,6 +78,10 @@ export interface RunPlanRequest {
   model: string;
   raw_root: string;
   media_root: string;
+  /** A model parameter the plan records as a path (Griffin's required ckpt_root). */
+  ckpt_root: string;
+  /** The AP protocol the run is made for: `default` or `legacy`. */
+  eval_protocol: string;
   environment_override: EnvironmentSetup | null;
 }
 
@@ -124,6 +128,12 @@ export interface RunPlan {
   model: string;
   raw_root: PlanArtifact;
   media_root: PlanArtifact;
+  /** The model's ckpt_root parameter; empty for a model that declares none. */
+  ckpt_root: PlanArtifact;
+  /** The --option keys the model's manifest declared when the plan was saved. */
+  model_options?: string[];
+  /** The AP protocol recorded with the plan; old plans are `default`. */
+  eval_protocol: string;
   work_dir: string;
   staging_seconds: number | null;
   output_dir: string;
@@ -241,11 +251,101 @@ export function pipelineNeedsCheckpoint(entry: PipelineEntry | null, model: stri
   return entry.spec.arguments.some((argument) => argument.role === "checkpoint");
 }
 
+/**
+ * Whether a built-in model declares the required ckpt_root parameter (Griffin's released
+ * checkpoints folder). Like the checkpoint rule, the cluster's model list is the authority:
+ * a model the listing does not know gets no field, and the plan check names the reason.
+ */
+export function pipelineNeedsCkptRoot(entry: PipelineEntry | null, model: string): boolean {
+  if (!entry || entry.source !== "builtin") return false;
+  return entry.builtin?.models[model.trim()]?.options.includes("ckpt_root") ?? false;
+}
+
+export type EvalProtocol = "default" | "legacy";
+
+export const DEFAULT_EVAL_PROTOCOL: EvalProtocol = "default";
+
+/** The two choices New evaluation offers, with the wording of docs/eval.md. */
+export const EVAL_PROTOCOL_CHOICES: ReadonlyArray<{
+  value: EvalProtocol;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "default",
+    label: "Default",
+    description:
+      "OpenCOOD-style: per-frame ranking, ground truth from every connected agent within 70 m",
+  },
+  {
+    value: "legacy",
+    label: "Legacy (v0.1.1)",
+    description: "for numbers comparable to v0.1.1",
+  },
+];
+
+/** One line for the plan review, the run history and the job watch. */
+export function evalProtocolLabel(value: string | null | undefined): string {
+  const found = EVAL_PROTOCOL_CHOICES.find((choice) => choice.value === value);
+  return found ? `${found.label} — ${found.description}` : `${DEFAULT_EVAL_PROTOCOL} (not recorded)`;
+}
+
+/** The `metrics.json` config keys that identify an evaluated run's protocol. */
+export interface EvalProtocolConfig {
+  ranking_scope?: string | null;
+  gt_scope?: string | null;
+  comm_range_m?: number | null;
+}
+
+/**
+ * The label `coperceive eval report` prints (coperceive/evaluation/report.py,
+ * config_protocol_label): a config without the keys, or pooled + ego-only, is the
+ * legacy protocol. `eval compare` refuses two runs whose labels differ.
+ */
+export function evalProtocolConfigLabel(config: EvalProtocolConfig | null | undefined): string {
+  if (!config || config.ranking_scope == null || config.gt_scope == null) {
+    return "legacy (pooled, ego-only)";
+  }
+  if (config.ranking_scope === "pooled" && config.gt_scope === "ego_only") {
+    return "legacy (pooled, ego-only)";
+  }
+  let text = `ranking ${config.ranking_scope}, ground truth ${config.gt_scope}`;
+  if (config.gt_scope === "connected_union" && typeof config.comm_range_m === "number") {
+    text += ` (${config.comm_range_m} m)`;
+  }
+  return text;
+}
+
+/** Whether two evaluated runs can be compared (same ranking scope, GT scope and range). */
+export function sameEvalProtocol(
+  a: EvalProtocolConfig | null | undefined,
+  b: EvalProtocolConfig | null | undefined,
+): boolean {
+  return evalProtocolConfigLabel(a) === evalProtocolConfigLabel(b);
+}
+
 /** A built-in model always runs over its scenes; a custom pipeline when it declares one. */
 export function pipelineNeedsSplit(entry: PipelineEntry | null): boolean {
   if (!entry) return false;
   if (entry.source === "builtin") return true;
   return entry.spec.arguments.some((argument) => argument.role === "test_data");
+}
+
+/**
+ * Why a built-in model's plan inputs cannot be checked, or null. The model key and the raw
+ * root are required; the media root is optional, exactly as the CLI's repeatable
+ * `--media-root` is (the job script then leaves the flag out).
+ */
+export function builtinPlanInputProblem(input: {
+  model: string;
+  rawRoot: string;
+  mediaRoot: string;
+}): string | null {
+  if (!input.model.trim() || !input.rawRoot.trim()) {
+    return "Choose the model key and raw root for this built-in model.";
+  }
+  // input.mediaRoot is deliberately not checked: it is optional.
+  return null;
 }
 
 /** A file with its sha256, or a non-empty folder with its listing fingerprint (as Rust's
@@ -518,6 +618,8 @@ export interface RunHistoryEntry {
   started: string | null;
   ended: string | null;
   plan_available: boolean;
+  /** The protocol the saved plan records; old plans are `default`. */
+  eval_protocol?: string;
 }
 
 /** Seconds in a Slurm duration ("[D-]HH:MM:SS", "MM:SS"), or null. */

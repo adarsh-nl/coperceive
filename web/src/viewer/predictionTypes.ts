@@ -1,3 +1,4 @@
+import { evalProtocolConfigLabel } from "../desktop/runPlan";
 import type { Pose } from "./types";
 import { isPose } from "./types";
 
@@ -33,6 +34,10 @@ export type EvalConfig = {
   ignore_gt_visibility_below: number | null;
   max_range_m: number | null;
   score_threshold: number;
+  /** The protocol keys (docs/eval-spec.md A.2). Absent on a pre-protocol metrics.json. */
+  ranking_scope?: string | null;
+  gt_scope?: string | null;
+  comm_range_m?: number | null;
 };
 
 /** One output of a run in the `/predictions` body: totals, AP and cooperative counts from `metrics.json`. */
@@ -365,6 +370,9 @@ export type EvalSummary = {
   source: string;
   a: EvalFigures;
   b: EvalFigures | null;
+  /** The protocol label `eval report` prints for run A and, in compare mode, run B. */
+  protocol: string;
+  compareProtocol: string | null;
 };
 
 function numberOrNull(value: number | null | undefined): number | null {
@@ -408,6 +416,8 @@ export function summarizeOutput(
     source,
     a: figuresFor(run, output),
     b: compare && other ? figuresFor(compare, other) : null,
+    protocol: evalProtocolConfigLabel(run.config),
+    compareProtocol: compare && other ? evalProtocolConfigLabel(compare.config) : null,
   };
 }
 

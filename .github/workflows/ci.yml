@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       desktop: ${{ steps.filter.outputs.desktop }}
+      docs: ${{ steps.filter.outputs.docs }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,13 +41,54 @@ jobs:
               # re-renders the app scripts against these files.
               - 'coperceive/models/**'
               - 'tests/fixtures/plan_parity/**'
+              # Bundled Python entrypoints, demo generator, evaluation, datasets,
+              # scene/bundle/repro/hdmap/validation, and fixtures exercised by desktop smoke/E2E.
+              - 'coperceive/__init__.py'
+              - 'coperceive/__main__.py'
+              - 'coperceive/cli.py'
+              - 'coperceive/demo/**'
+              - 'coperceive/evaluation/**'
+              - 'coperceive/evalview.py'
+              - 'coperceive/adapters/**'
+              - 'coperceive/cluster_datasets.py'
+              - 'coperceive/remote/**'
+              - 'coperceive/remote_view/**'
+              - 'coperceive/scene/**'
+              - 'coperceive/catalog/**'
+              - 'coperceive/repro/**'
+              - 'coperceive/hpc/profile.py'
+              - 'coperceive/hdmap/**'
+              - 'coperceive/bundle/**'
+              - 'coperceive/validate.py'
+              - 'coperceive/model.py'
+              - 'coperceive/store.py'
+              - 'coperceive/viewdata.py'
+              - 'coperceive/se3.py'
+              - 'coperceive/transform.py'
+              - 'coperceive/errors.py'
+              - 'coperceive/images.py'
+              - 'coperceive/camera_images.py'
+              - 'coperceive/seen_by.py'
+              - 'coperceive/plot.py'
+              - 'coperceive/plot_style.py'
+              - 'coperceive/paper_export.py'
+              - 'coperceive/rerun_export.py'
+              - 'coperceive/sequence_export.py'
+              - 'tests/fixtures/synthetic_scene/**'
               - 'pyproject.toml'
               - '**/*lock*'
               - '.github/workflows/**'
+            docs:
+              - 'docs/**'
+              - 'mkdocs.yml'
+              - 'requirements-docs.txt'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/pages.yml'
       - name: Guard check filter accuracy
         if: github.event_name == 'pull_request'
         run: |
           DESKTOP_FILTER="${{ steps.filter.outputs.desktop }}"
+          DOCS_FILTER="${{ steps.filter.outputs.docs }}"
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
           if [ -z "${BASE_SHA}" ]; then
             echo "::error title=FilterGuard::BASE_SHA is empty"
@@ -56,11 +98,18 @@ jobs:
             echo "::error title=FilterGuard::BASE_SHA ${BASE_SHA} not found in git history"
             exit 1
           fi
-          CHANGED_CRITICAL=$(git diff --name-only "${BASE_SHA}"...HEAD | grep -E '^(src-tauri/|web/|coperceive/app/|coperceive/models/|tests/fixtures/plan_parity/|scripts/desktop/|pyproject\.toml|\.github/workflows/|.*lock.*)' || true)
+          CHANGED_CRITICAL=$(git diff --name-only "${BASE_SHA}"...HEAD | grep -E '^(src-tauri/|web/|coperceive/(app|models|demo|evaluation|adapters|remote|remote_view|scene|catalog|repro|hdmap|bundle)/|coperceive/(__init__|__main__|cli|evalview|cluster_datasets|hpc/profile|validate|model|store|viewdata|se3|transform|errors|images|camera_images|seen_by|plot|plot_style|paper_export|rerun_export|sequence_export)\.py$|tests/fixtures/(plan_parity|synthetic_scene)/|scripts/desktop/|pyproject\.toml|\.github/workflows/|.*lock.*)' || true)
           if [ -n "${CHANGED_CRITICAL}" ] && [ "${DESKTOP_FILTER}" != "true" ]; then
             echo "::error title=FilterGuard::Critical desktop paths changed but filter reported skip!"
             echo "Changed critical files:"
             echo "${CHANGED_CRITICAL}"
+            exit 1
+          fi
+          CHANGED_DOCS=$(git diff --name-only "${BASE_SHA}"...HEAD | grep -E '^(docs/|mkdocs\.yml$|requirements-docs\.txt$|\.github/workflows/(ci|pages)\.yml$)' || true)
+          if [ -n "${CHANGED_DOCS}" ] && [ "${DOCS_FILTER}" != "true" ]; then
+            echo "::error title=FilterGuard::Docs paths changed but filter reported skip!"
+            echo "Changed docs files:"
+            echo "${CHANGED_DOCS}"
             exit 1
           fi
 
@@ -77,7 +126,15 @@ jobs:
       # virtualenv, so strict mode treated TestClient.get as unknown. The app
       # extra is required because tests/test_hdmap.py imports FastAPI.
       - run: python -m venv .venv
-      - run: .venv/bin/pip install -e ".[app,dev,viewer]"
+      # Lint against the versions uv.lock pins, not whatever PyPI published last
+      # night: unpinned type stubs (types-pyyaml/types-shapely 2026-11-22) once
+      # turned every PR's pyright red with no code change.
+      - name: Constraints from uv.lock
+        run: |
+          .venv/bin/pip install uv
+          .venv/bin/uv export --frozen --all-extras --no-hashes --no-emit-project \
+            --format requirements-txt -o "$RUNNER_TEMP/constraints.txt" > /dev/null
+      - run: .venv/bin/pip install -c "$RUNNER_TEMP/constraints.txt" -e ".[app,dev,viewer]"
       - run: .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: .venv/bin/ruff check .
       - run: .venv/bin/ruff format --check .
@@ -96,10 +153,10 @@ jobs:
             echo "::error title=BuiltBundleTracked::.gitignore no longer ignores coperceive/app/static/"
             exit 1
           }
-      - name: Shipped web source contains no personal identifiers
+      - name: Repository contains no personal or cluster identifiers
         run: |
-          if grep -rnE "nanjaiyalathaa|ewi\.utwente\.nl" web/src; then
-            echo "::error title=PersonalIdentifiersFound::Personal identifiers found in web/src"
+          if ! bash scripts/ci/check_identifiers.sh; then
+            echo "::error title=PersonalIdentifiersFound::Personal or cluster identifiers found (see scripts/ci/identifier_patterns.txt)"
             exit 1
           fi
 
@@ -196,7 +253,7 @@ jobs:
         working-directory: web
       - run: npx vite build --mode test --outDir /tmp/web-dist --emptyOutDir
         working-directory: web
-      - run: pytest tests/test_viewer_browser.py tests/test_viewer_slow_points.py -q -rs
+      - run: pytest tests/test_viewer_browser.py tests/test_bundle_browser.py tests/test_viewer_slow_points.py -q -rs
         env:
           COPERCEIVE_WEB_DIST: /tmp/web-dist
           COPERCEIVE_E2E_SHOTS: /tmp/e2e-shots
@@ -257,6 +314,33 @@ jobs:
             /tmp/landing-artifacts/*.png
             /tmp/landing-artifacts/hero_recording.webm
           if-no-files-found: error
+
+  docs:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify docs inputs exist
+        run: |
+          test -d docs
+          test -f mkdocs.yml
+          test -f requirements-docs.txt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+      - run: pip install -r requirements-docs.txt
+      - run: mkdocs build --strict
+      - name: Built docs site has search index and no root /assets/ links
+        run: |
+          test -f docs_site/index.html
+          test -f docs_site/search/search_index.json
+          if grep -rnE --include='*.html' '(src|href)=["'\'']/assets/' docs_site; then
+            echo "root-relative /assets/ link found in docs HTML"
+            exit 1
+          fi
 
   gitleaks:
     runs-on: ubuntu-latest
@@ -533,11 +617,9 @@ jobs:
       - run: npm ci --legacy-peer-deps
         working-directory: web
       - run: bash scripts/build_web_static.sh
-      - run: npm test
-        working-directory: web
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
+          targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -553,6 +635,8 @@ jobs:
             bundled-python-${{ runner.os }}-
       - name: Bundle Python Standalone Runtime
         run: bash scripts/desktop/bundle_python.sh
+      - run: npm test
+        working-directory: web
       - name: Run Rust unit tests
         run: cargo test --verbose --color=never 2>&1 | tee /tmp/cargo_test.log
         working-directory: src-tauri
@@ -711,134 +795,9 @@ jobs:
           name: coperceive-desktop-macos-arm64
           path: ${{ env.DMG_PATH }}
           if-no-files-found: error
-      - name: Bundle Python Standalone Runtime for Intel Mac
-        run: python3 scripts/desktop/bundle_python.py --target x86_64-apple-darwin --skip-web-build
-      - name: Build Tauri Desktop Intel DMG
-        run: bash scripts/desktop/build_dmg.sh x86_64-apple-darwin
-      - name: Locate and Measure Intel DMG
-        run: |
-          DMG_INTEL=$(find src-tauri/target -iname "*x64*.dmg" -o -iname "*x86_64*.dmg" 2>/dev/null | head -n 1)
-          if [ -z "${DMG_INTEL}" ]; then
-            DMG_INTEL=$(find src-tauri/target/x86_64-apple-darwin -iname "*.dmg" -type f 2>/dev/null | head -n 1)
-          fi
-          if [ -z "${DMG_INTEL}" ] || [ ! -f "${DMG_INTEL}" ]; then
-            echo "Error: Could not locate built Intel .dmg file!" >&2
-            exit 1
-          fi
-          DMG_INTEL_ABS="$(cd "$(dirname "${DMG_INTEL}")" && pwd)/$(basename "${DMG_INTEL}")"
-          DMG_INTEL_BYTES=$(stat -f %z "${DMG_INTEL_ABS}" 2>/dev/null || wc -c < "${DMG_INTEL_ABS}")
-          DMG_INTEL_HUMAN=$(ls -lh "${DMG_INTEL_ABS}" | awk '{print $5}')
-          echo "DMG_INTEL_PATH=${DMG_INTEL_ABS}" >> $GITHUB_ENV
-          echo "Located Intel DMG at: ${DMG_INTEL_ABS} (${DMG_INTEL_HUMAN}, ${DMG_INTEL_BYTES} bytes)"
-          echo "::notice title=DMG-Intel::$(basename "${DMG_INTEL_ABS}") ${DMG_INTEL_BYTES} bytes"
-          echo "### Desktop macOS (Intel x86_64) DMG Artifact" >> $GITHUB_STEP_SUMMARY
-          echo "- **File**: \`$(basename "${DMG_INTEL_ABS}")\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Size**: ${DMG_INTEL_HUMAN} (${DMG_INTEL_BYTES} bytes)" >> $GITHUB_STEP_SUMMARY
-      - name: Verify Intel Mac App Bundle Under Rosetta
-        run: |
-          if arch -x86_64 /usr/bin/true 2>/dev/null; then
-            echo "Rosetta 2 is available on arm64 runner: executing Intel x86_64 verification"
-            APP_INTEL="$(find src-tauri/target/x86_64-apple-darwin -type d -name Coperceive.app | head -n 1)"
-            if [ -z "${APP_INTEL}" ]; then
-              APP_INTEL="$(find src-tauri/target -type d -name Coperceive.app | head -n 1)"
-            fi
-            echo "Intel App path: ${APP_INTEL}"
-            PY_INTEL="${APP_INTEL}/Contents/Resources/resources/python/bin/python3"
-            if [ ! -x "${PY_INTEL}" ]; then
-              echo "Error: Bundled Intel python3 not found or not executable at ${PY_INTEL}" >&2
-              exit 1
-            fi
-            echo "Testing bundled Intel python3 under Rosetta:"
-            arch -x86_64 "${PY_INTEL}" -c "import coperceive, numpy, pyarrow, PIL; print('Intel Python loaded successfully; PIL version:', PIL.__version__)"
-            echo "Running smoke test on Intel .app under Rosetta:"
-            arch -x86_64 bash scripts/desktop/smoke_test.sh "${APP_INTEL}"
-            echo "::notice title=Rosetta-Test::Intel Mac build verified under Rosetta 2"
-          else
-            echo "::error title=Rosetta-Test::Rosetta 2 is not available on this runner (arch -x86_64 returned non-zero)" >&2
-            exit 1
-          fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: coperceive-desktop-macos-x86_64
-          path: ${{ env.DMG_INTEL_PATH }}
-          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: desktop-e2e-screenshots
           path: /tmp/e2e-shots/*.png
           if-no-files-found: ignore
-
-  desktop-macos-intel:
-    needs: [changes, desktop-macos]
-    if: github.event_name != 'pull_request' || needs.changes.outputs.desktop == 'true'
-    runs-on: macos-15-intel
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: coperceive-desktop-macos-x86_64
-          path: /tmp/intel-dmg
-      - name: Install x64 DMG and run smoke test on native Intel macOS
-        env:
-          COPERCEIVE_PRESERVE_LOGS_DIR: /tmp/intel-smoke-evidence
-          # macos-15-intel runs in a headless VM whose WKWebView returns null for WebGL
-          # vendor/renderer/shader precision ("webgl":{"renderer":null,"unmaskedRenderer":null,
-          # "vendor":null,"webgl":true,"webgl2":true}, "THREE.WebGLRenderer: null is not an
-          # object (evaluating 'e.getShaderPrecisionFormat(e.VERTEX_SHADER,e.HIGH_FLOAT).precision')").
-          # Keep all install/launch/bundled-python/sidecar/demo/API/non-WebGL UI assertions blocking,
-          # verify the visible "3D view unavailable" notice, and skip only 3D rendering/playback ratio.
-          COPERCEIVE_INTEL_VM_NO_WEBGL: "1"
-        run: |
-          rm -rf /tmp/intel-smoke-evidence
-          mkdir -p /tmp/intel-smoke-evidence
-          DMG_FILE="$(find /tmp/intel-dmg -maxdepth 2 -name '*.dmg' | head -n 1)"
-          if [ -z "${DMG_FILE}" ]; then
-            echo "Error: No Intel .dmg found in /tmp/intel-dmg" >&2
-            exit 1
-          fi
-          echo "Mounting ${DMG_FILE}..."
-          MOUNT_DIR="/tmp/coperceive-intel-dmg"
-          mkdir -p "${MOUNT_DIR}" /tmp/intel-app
-          hdiutil attach "${DMG_FILE}" -nobrowse -readonly -mountpoint "${MOUNT_DIR}"
-          cp -R "${MOUNT_DIR}/Coperceive.app" /tmp/intel-app/Coperceive.app
-          hdiutil detach "${MOUNT_DIR}" || true
-          bash scripts/desktop/smoke_test.sh /tmp/intel-app/Coperceive.app "${DMG_FILE}"
-      - name: Upload native Intel screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-intel-screenshots
-          path: /tmp/e2e-shots/*.png
-          if-no-files-found: ignore
-      - name: Collect Intel macOS smoke evidence on failure
-        if: failure()
-        run: |
-          mkdir -p /tmp/intel-smoke-evidence/coperceive-logs /tmp/intel-smoke-evidence/diagnostic-reports
-          if [ -d "$HOME/Library/Logs/Coperceive" ]; then
-            for f in "$HOME/Library/Logs/Coperceive"/*; do
-              [ -f "$f" ] || continue
-              case "$(basename "$f")" in
-                *token*|*secret*|*ctrl_info*|*marker*) continue ;;
-              esac
-              sed -E 's/Bearer [A-Za-z0-9._-]+/Bearer [REDACTED]/g; s/([Tt]oken[^A-Za-z0-9]*)[:=][[:space:]]*[^[:space:]"]+/\1=[REDACTED]/g' "$f" > "/tmp/intel-smoke-evidence/coperceive-logs/$(basename "$f")" || true
-              echo "=== $f ==="
-              tail -n 60 "/tmp/intel-smoke-evidence/coperceive-logs/$(basename "$f")"
-            done
-          fi
-          for dir in "$HOME/Library/Logs/DiagnosticReports" "/Library/Logs/DiagnosticReports"; do
-            [ -d "$dir" ] || continue
-            for f in "$dir"/Coperceive* "$dir"/coperceive*; do
-              [ -f "$f" ] || continue
-              cp "$f" /tmp/intel-smoke-evidence/diagnostic-reports/ || true
-              echo "=== DiagnosticReport: $f ==="
-              head -n 40 "$f" || true
-            done
-          done
-          find /tmp/intel-smoke-evidence -maxdepth 3 -type f || true
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: intel-macos-smoke-evidence
-          path: /tmp/intel-smoke-evidence
-          if-no-files-found: warn

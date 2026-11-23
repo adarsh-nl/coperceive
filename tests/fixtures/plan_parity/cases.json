@@ -1,5 +1,5 @@
 {
-  "about": "Plan parity (ADR 0018, ported to release/v0.1.1): one logical input set per case for the Griffin vehicle-side run. src-tauri/tests/plan_parity.rs renders the app's job script into app/<case>.sbatch; tests/test_plan_parity.py renders `coperceive model run --slurm` for the same inputs and compares the two whole scripts line by line against allowed_differences.json. Paths are logical: the CLI builds them under a temporary directory and maps it back. Each case's `python` is the interpreter that runs `model run` (the CLI's --slurm-python, and the interpreter both sides record environment.json with). Each case's `pyvenv_cfg` is the pyvenv.cfg of the venv that holds `python`, on this cluster's /software/python/<version> base: the CLI reads it locally (slurm.py interpreter_module), the app over the plan's read-only interpreter check, and both load that python module after module purge. Each case's `coperceive_root` and `samples` are what the run's python reports on the cluster (the app's read-only plan-python check): the root of the coperceive it imports (the job's PYTHONPATH; the CLI exports the root of the checkout that emitted the job, mapped to code_root) and the pose times of the fixture's 10 scenes x 149 poses, which the CLI counts locally for its --time estimate.",
+  "about": "Plan parity (ADR 0018, ported to release/v0.1.1): one logical input set per case for the Griffin vehicle-side run. src-tauri/tests/plan_parity.rs renders the app's job script into app/<case>.sbatch; tests/test_plan_parity.py renders `coperceive model run --slurm` for the same inputs and compares the two whole scripts line by line against allowed_differences.json. Paths are logical: the CLI builds them under a temporary directory and maps it back. Each case's `python` is the interpreter that runs `model run` (the CLI's --slurm-python, and the interpreter both sides record environment.json with). Each case's `pyvenv_cfg` is the pyvenv.cfg of the venv that holds `python`, on this cluster's /software/python/<version> base: the CLI reads it locally (slurm.py interpreter_module), the app over the plan's read-only interpreter check, and both load that python module after module purge. Each case's `coperceive_root` and `samples` are what the run's python reports on the cluster (the app's read-only plan-python check): the root of the coperceive it imports (the job's PYTHONPATH; the CLI exports the root of the checkout that emitted the job, mapped to code_root) and the pose times of the fixture's 10 scenes x 149 poses, which the CLI counts locally for its --time estimate. A case may also give its own `code_root` (the manifest's folder and PYTHONPATH; the CLI copies the plugin there), `extras` (the model's options: the app's extras, the CLI's --option k=v), `ckpt_root` (Griffin's required released-checkpoints folder; default `<root>/ckpts`) and `media_root: false` (no media root). A profile's `proxy_jump` and `port` are the SSH settings the app reaches the cluster with; plan_parity.rs checks they reach the SSH arguments and leave the script byte-identical. `refusals` are inputs the app refuses: plan_parity.rs holds the app to the exact `refused` message (`<stage>: <message>`) and tests/test_plan_parity.py checks that `model run --slurm` takes the same input; `why` and `cite` say why the difference stays.",
   "run_id": "plan-1790000000-aabbccddeeff",
   "code_root": "/opt/coperceive",
   "model_list": "model_list.json",
@@ -32,6 +32,66 @@
       "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
       "coperceive_root": "/opt/coperceive",
       "samples": 1490
+    },
+    {
+      "name": "legacy_protocol",
+      "about": "The base case with protocol: legacy, so the app and the CLI both pass --protocol legacy to model run and record it for a later eval run.",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "profile": {
+        "partition": "gpu-a40",
+        "discovered_gpu_types": [
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [
+          "nvidia/cuda-11.8",
+          "nvidia/cuda-11.x_cudnn-8.6"
+        ],
+        "coperceive_command": [
+          "/opt/venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules"
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/opt/venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490,
+      "eval_protocol": "legacy"
+    },
+    {
+      "name": "ckpt_root_custom",
+      "about": "The base case with the released checkpoints in their own folder (/data/griffin/checkpoints), not beside the raw root: both sides must pass --option ckpt_root=/data/griffin/checkpoints to model run, and the app's plan records that folder as ckpt_root.",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "profile": {
+        "partition": "gpu-a40",
+        "discovered_gpu_types": [
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [
+          "nvidia/cuda-11.8",
+          "nvidia/cuda-11.x_cudnn-8.6"
+        ],
+        "coperceive_command": [
+          "/opt/venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules"
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/opt/venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490,
+      "ckpt_root": "/data/griffin/checkpoints"
     },
     {
       "name": "mixed_partition",
@@ -174,6 +234,131 @@
       "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
       "coperceive_root": "/opt/coperceive",
       "samples": 1490
+    },
+    {
+      "name": "proxy_jump_modules",
+      "about": "A modules profile (python/3.12, no GPU discovery, a CPU partition) reached through a jump host on port 2222, its data and results under /data, with a model option (min_score=0.05): ProxyJump reaches only the SSH arguments, and the option reaches both `model run` lines alike.",
+      "root": "/data/scenes",
+      "model": "vehicle-side",
+      "profile": {
+        "partition": "main-cpu",
+        "discovered_gpu_types": null,
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/data/results",
+        "modules": [
+          "python/3.12"
+        ],
+        "coperceive_command": [
+          "/home/bob/coperceive-app/.venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules",
+        "proxy_jump": "jump.example.org",
+        "port": 2222
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/home/bob/coperceive-app/.venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.12/bin\ninclude-system-site-packages = false\nversion = 3.12.4\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490,
+      "extras": [
+        "min_score=0.05"
+      ]
+    },
+    {
+      "name": "spaces_and_quotes",
+      "about": "Every data path (scenes, raw root, media root) is under a folder with a space, a single quote and double quotes, and the code root (manifest and PYTHONPATH) has a space. The code root has no quote: #170 refuses a double quote in a code folder, and with a single quote the app's PYTHONPATH line is quoted '\\'' where plan_sbatch's shlex.quote writes '\"'\"' (same value, other bytes), a difference routed to the owner of job_submit.rs (ADR 0018). The results root has none: #170 refuses a results folder with a space, a '#' or a quote (it goes into #SBATCH --output/--error); see the refusal results_root_with_space.",
+      "root": "/data/te st/it's \"q\"",
+      "model": "vehicle-side",
+      "profile": {
+        "partition": "gpu-a40",
+        "discovered_gpu_types": [
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [
+          "nvidia/cuda-11.8",
+          "nvidia/cuda-11.x_cudnn-8.6"
+        ],
+        "coperceive_command": [
+          "/opt/venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules"
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/opt/venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/co perceive",
+      "samples": 1490,
+      "code_root": "/opt/co perceive"
+    },
+    {
+      "name": "no_media_root",
+      "about": "The base case with no media root: the CLI's --media-root is optional and the CLI is the reference, so the app accepts the plan too. Both job scripts must leave the flag out entirely, never write an empty one, and the app's plan must pass the same model/raw-root words.",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "profile": {
+        "partition": "gpu-a40",
+        "discovered_gpu_types": [
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [
+          "nvidia/cuda-11.8",
+          "nvidia/cuda-11.x_cudnn-8.6"
+        ],
+        "coperceive_command": [
+          "/opt/venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules"
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/opt/venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490,
+      "media_root": false
+    }
+  ],
+  "refusals": [
+    {
+      "name": "results_root_with_space",
+      "about": "The base case with a results root that holds a space (/home/te st/results).",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "profile": {
+        "partition": "gpu-a40",
+        "discovered_gpu_types": [
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/te st/results",
+        "modules": [
+          "nvidia/cuda-11.8",
+          "nvidia/cuda-11.x_cudnn-8.6"
+        ],
+        "coperceive_command": [
+          "/opt/venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules"
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/opt/venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490,
+      "refused": "build_run_plan: The results folder \"/home/te st/results\" contains a space. Slurm reads this folder from the job script's #SBATCH --output and --error lines, which it splits at spaces and cuts at '#', so the path may not contain spaces, '#' or quotes. Choose a folder whose path has none of these, for example /data/my_lab/runs.",
+      "why": "#170: the app writes the results folder into #SBATCH --output/--error, which Slurm splits at spaces and cuts at '#', so a shared profile could add Slurm options to every job. The CLI writes no results folder into an #SBATCH line (its log folder, --slurm-logs, is refused with a space for the same reason: test_model_slurm.py), so it takes this results root.",
+      "cite": "CHANGELOG.md Unreleased/Security (results folder); src-tauri/src/hpc.rs validate_sbatch_path; coperceive/models/slurm.py validate_logs_dir"
     }
   ]
 }

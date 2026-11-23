@@ -109,7 +109,24 @@ fn ensure_control_dir() {
 
 /// Standard SSH arguments enforcing BatchMode, ControlMaster and an 8 s connect
 /// timeout. BatchMode makes 2FA/passphrase prompts fail fast instead of hanging.
+///
+/// The destination always follows `--`, so ssh can never read it as an option
+/// (an alias or host such as `-oProxyCommand=...` would otherwise run a local
+/// command). Everything after the destination is the remote command.
 pub fn standard_ssh_args(target: &SshTarget) -> Vec<String> {
+    let mut args = ssh_option_args(target);
+    push_destination(&mut args, target);
+    args
+}
+
+/// Ends ssh's options with `--` and appends the destination.
+fn push_destination(args: &mut Vec<String>, target: &SshTarget) {
+    args.push("--".to_string());
+    args.push(target.destination.clone());
+}
+
+/// The options of [`standard_ssh_args`], without the destination.
+fn ssh_option_args(target: &SshTarget) -> Vec<String> {
     let mut args = vec![
         "-o".to_string(),
         "BatchMode=yes".to_string(),
@@ -146,7 +163,6 @@ pub fn standard_ssh_args(target: &SshTarget) -> Vec<String> {
             args.push(jump.clone());
         }
     }
-    args.push(target.destination.clone());
     args
 }
 
@@ -169,10 +185,14 @@ pub fn build_ssh_tunnel_command(
     remote_host: &str,
     remote_port: u16,
 ) -> Vec<String> {
-    let mut args = standard_ssh_args(&SshTarget::alias(alias));
+    let target = SshTarget::alias(alias);
+    let mut args = ssh_option_args(&target);
+    // Options must come before `--`; after the destination they would be the
+    // remote command.
     args.push("-N".to_string());
     args.push("-L".to_string());
     args.push(format!("127.0.0.1:{}:{}:{}", local_port, remote_host, remote_port));
+    push_destination(&mut args, &target);
     args
 }
 
@@ -234,11 +254,20 @@ pub fn run_ssh_command(
 
 /// Runs `ssh -G <alias>` to read effective host settings locally. This never
 /// contacts the cluster and never prints key material.
+///
+/// An alias starting with '-' is refused before ssh runs: ssh would read it as
+/// an option.
 pub fn run_ssh_g(
     ssh_bin: &str,
     alias: &str,
     timeout: Duration,
 ) -> std::io::Result<CommandResult> {
+    if alias.trim_start().starts_with('-') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("the SSH host name {alias:?} may not start with '-'"),
+        ));
+    }
     run_local_command(
         ssh_bin,
         &["-G".to_string(), alias.to_string()],
@@ -309,7 +338,7 @@ mod tests {
     #[test]
     fn test_classify_public_key_denied() {
         let err = classify_ssh_error(
-            "alice@hpc-head1: Permission denied (publickey,gssapi-keyex,gssapi-with-mic).",
+            "alice@cluster-login: Permission denied (publickey,gssapi-keyex,gssapi-with-mic).",
         );
         match &err {
             SshErrorKind::PublicKeyAuthRequired(msg) => {
@@ -405,6 +434,115 @@ mod tests {
         assert_eq!(
             line,
             "coperceive remote start --root '/data/my scenes; touch /tmp/x'"
+        );
+    }
+
+    /// Index of the `--` that ends ssh's options, which must come right before
+    /// the destination.
+    fn end_of_options(args: &[String], destination: &str) -> usize {
+        let at = args
+            .iter()
+            .position(|arg| arg == "--")
+            .unwrap_or_else(|| panic!("no '--' before the destination: {args:?}"));
+        assert_eq!(args.get(at + 1).map(String::as_str), Some(destination), "{args:?}");
+        at
+    }
+
+    #[test]
+    fn the_destination_follows_double_dash_so_ssh_never_reads_it_as_an_option() {
+        let hostile = "-oProxyCommand=touch /tmp/coperceive-marker";
+        let target = SshTarget {
+            destination: hostile.to_string(),
+            port: Some(2222),
+            proxy_jump: Some("jump.example.org".to_string()),
+        };
+        let args = build_ssh_command_for(&target, "true");
+        let at = end_of_options(&args, hostile);
+        assert_eq!(args.len(), at + 3, "only the remote command follows: {args:?}");
+        assert_eq!(args.last().map(String::as_str), Some("true"));
+        for option in ["BatchMode=yes", "ConnectTimeout=8", "-p", "-J"] {
+            let index = args.iter().position(|arg| arg == option).expect(option);
+            assert!(index < at, "{option} must come before '--': {args:?}");
+        }
+
+        let plain = build_ssh_command("cluster-a", "coperceive --version");
+        let at = end_of_options(&plain, "cluster-a");
+        assert_eq!(plain[at + 2], "coperceive --version");
+    }
+
+    #[test]
+    fn the_tunnel_options_come_before_double_dash() {
+        let args = build_ssh_tunnel_command("cluster-a", 49152, "10.20.240.48", 8731);
+        let at = end_of_options(&args, "cluster-a");
+        assert_eq!(args.len(), at + 2, "nothing follows the alias: {args:?}");
+        let n = args.iter().position(|arg| arg == "-N").expect("-N");
+        assert_eq!(args[n + 1], "-L", "-N -L stay together: {args:?}");
+        assert_eq!(args[n + 2], "127.0.0.1:49152:10.20.240.48:8731");
+        assert!(n < at, "{args:?}");
+    }
+
+    #[test]
+    fn ssh_g_refuses_an_alias_that_looks_like_an_option() {
+        // A missing binary proves nothing was spawned: spawning would fail with
+        // NotFound, the guard fails with InvalidInput first.
+        let error = run_ssh_g(
+            "/nonexistent/coperceive-test-ssh",
+            "-oProxyCommand=touch /tmp/coperceive-marker",
+            Duration::from_secs(1),
+        )
+        .expect_err("option-like alias");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput, "{error}");
+        let error = run_ssh_g(
+            "/nonexistent/coperceive-test-ssh",
+            "cluster-a",
+            Duration::from_secs(1),
+        )
+        .expect_err("missing binary");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "{error}");
+    }
+
+    /// The real OpenSSH client, without connecting (`-G` prints the resolved
+    /// configuration and exits; `-F /dev/null` ignores every config file).
+    #[test]
+    #[cfg(unix)]
+    fn openssh_accepts_double_dash_before_the_destination() {
+        let run = |target: &SshTarget| {
+            let mut args = vec!["-G".to_string(), "-F".to_string(), "/dev/null".to_string()];
+            args.extend(build_ssh_command_for(target, "true"));
+            std::process::Command::new("ssh").args(&args).output()
+        };
+        let plain = SshTarget {
+            destination: "alice@cluster.example.org".to_string(),
+            port: Some(2222),
+            proxy_jump: Some("jump.example.org".to_string()),
+        };
+        let output = match run(&plain) {
+            Ok(output) => output,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("ssh is not installed; skipping the OpenSSH argv check");
+                return;
+            }
+            Err(error) => panic!("could not run ssh -G: {error}"),
+        };
+        let config = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{config}");
+        for line in [
+            "hostname cluster.example.org",
+            "user alice",
+            "port 2222",
+            "proxyjump jump.example.org",
+            "batchmode yes",
+            "connecttimeout 8",
+        ] {
+            assert!(config.lines().any(|have| have == line), "{line}: {config}");
+        }
+
+        let hostile = SshTarget::alias("-oProxyCommand=touch /nonexistent/coperceive-marker");
+        let output = run(&hostile).expect("ssh -G");
+        let config = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !config.contains("proxycommand touch"),
+            "the destination was read as an option: {config}"
         );
     }
 

@@ -28,8 +28,27 @@ AGENT_TYPES = ("vehicle", "uav", "infrastructure", "other")
 OPTION_TYPES = ("str", "int", "float", "bool")
 ERROR_CODES = ("unsupported", "configure_failed", "frame_failed", "cancelled", "bad_message")
 
-_NAME = re.compile(r"^[a-z0-9_-]+$")
+# Always used with fullmatch: `re.match('^...$')` also accepts a final "\n", and these names
+# reach `#SBATCH --job-name` and comment lines of the --slurm job script.
+_NAME = re.compile(r"[a-z0-9_-]+")
+# `environment.secrets` are environment variable names (POSIX portable form).
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# `resources.slurm_constraint` is a Slurm --constraint feature expression: feature names,
+# `&` AND, `|` OR, `*` counts, `[...]` matching OR and `(...)` grouping. It is written into
+# `#SBATCH --constraint="..."`, so a quote, backslash, space or line break is refused.
+_SLURM_CONSTRAINT = re.compile(r"[A-Za-z0-9_.,:&|*()\[\]-]+")
+# `outputs.artifacts` (and so `transient_artifacts` and `depends_on[].artifact`) name a
+# directory `artifacts/<model>/<name>` and reach the --slurm job script raw inside an rsync
+# `--exclude='...'` pattern: a plain path segment, no quote, glob, slash or `.`/`..`.
+_ARTIFACT_NAME = re.compile(r"[A-Za-z0-9_.-]+")
+# `environment.modules` entries become `module load <name>` lines of the job script: an Lmod
+# or Environment Modules name such as `nvidia/cuda-11.x_cudnn-8.6`, `foss@2023a`.
+_MODULE_NAME = re.compile(r"[A-Za-z0-9_.+/@:-]+")
 _ARGV_FIELD = re.compile(r"\{([^{}]*)\}")
+# ``{option:NAME}`` in ``commands.batch``/``commands.live``: the validated effective value of
+# the model's option NAME, which lets a child that needs a file to hash at ``hello`` receive
+# it in argv before the parent may send ``configure`` (the OpenCOOD plugin's checkpoint).
+_OPTION_FIELD_PREFIX = "option:"
 
 
 class ModelSpecError(CoperceiveError):
@@ -105,9 +124,25 @@ class Dependency:
 @dataclass(frozen=True)
 class OptionSpec:
     type: str
-    default: object
+    # None when the manifest declares no default: such an option is required (the
+    # validated effective value then has to come from the caller's --option).
+    default: object | None
     choices: tuple[object, ...] | None
     description: str | None
+    required: bool = False
+
+
+@dataclass(frozen=True)
+class CheckpointSpec:
+    """A model whose checkpoint is a file named by one of its options.
+
+    The option's value reaches the child in ``commands.batch`` through a
+    ``{option:<name>}`` placeholder (so a worker can hash it for ``hello`` before
+    ``configure``), and ``--slurm`` stages that file into the job's scratch and rewrites
+    the inner ``--option`` to the staged copy.
+    """
+
+    option: str
 
 
 @dataclass(frozen=True)
@@ -120,6 +155,7 @@ class ModelSpec:
     resources: Resources
     depends_on: tuple[Dependency, ...]
     options: Mapping[str, OptionSpec]
+    checkpoint: CheckpointSpec | None = None
 
 
 @dataclass(frozen=True)
@@ -160,13 +196,14 @@ def parse_manifest(payload: object, *, source: Path | None) -> Manifest:
     if version != SPEC_VERSION:
         raise ModelSpecError(f"spec_version: expected {SPEC_VERSION}, got {version}")
     name = root.str("name")
-    if not _NAME.match(name):
+    if not _NAME.fullmatch(name):
         raise ModelSpecError(f"name: expected [a-z0-9_-]+, got {name!r}")
     plugin_version = root.str("version")
     licence = _licence(root.sub("licence"))
     environment = _environment(root.sub("environment"))
     models = _models(root.sub("models"))
-    commands = _commands(root.sub("commands"))
+    commands, option_refs = _commands(root.sub("commands"))
+    _check_option_refs(models, option_refs)
     notes = root.opt_str("notes")
     root.done()
     return Manifest(
@@ -197,8 +234,13 @@ def render_argv(
     plugin_dir: Path,
     work_dir: Path,
     model: str,
+    options: Mapping[str, object] | None = None,
 ) -> list[str]:
-    """``commands.<command>`` with the closed placeholder set substituted; no shell."""
+    """``commands.<command>`` with the closed placeholder set substituted; no shell.
+
+    ``{option:NAME}`` resolves to the model's validated effective option value
+    (``options``); booleans render ``true``/``false``, numbers without a trailing ``.0``.
+    """
     template = manifest.commands.batch if command == "batch" else manifest.commands.live
     values = {
         "python": str(python),
@@ -206,7 +248,28 @@ def render_argv(
         "work_dir": str(work_dir),
         "model": model,
     }
-    return [_ARGV_FIELD.sub(lambda match: values[match.group(1)], arg) for arg in template]
+
+    def replace(match: re.Match[str]) -> str:
+        field = match.group(1)
+        if field in values:
+            return values[field]
+        if field.startswith(_OPTION_FIELD_PREFIX):
+            name = field[len(_OPTION_FIELD_PREFIX) :]
+            if options is None or name not in options:
+                raise ModelSpecError(f"commands.{command}: no value for {{option:{name}}}")
+            return option_text(options[name])
+        raise ModelSpecError(f"commands.{command}: unknown placeholder {{{field}}}")
+
+    return [_ARGV_FIELD.sub(replace, arg) for arg in template]
+
+
+def option_text(value: object) -> str:
+    """One option value as it appears in argv or on the command line."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return format(value, "g")
+    return str(value)
 
 
 def select_model(manifest: Manifest, name: str | None) -> ModelSpec:
@@ -224,19 +287,90 @@ def select_model(manifest: Manifest, name: str | None) -> ModelSpec:
     return spec
 
 
+def check_slurm_constraint(value: str, path: str = "slurm_constraint") -> str:
+    """``value`` when it is a Slurm ``--constraint`` feature expression the job script can
+    carry inside ``#SBATCH --constraint="..."``; a ModelSpecError naming ``path`` else."""
+    if _SLURM_CONSTRAINT.fullmatch(value) is None:
+        raise ModelSpecError(
+            f"{path}: {value!r} is not a Slurm feature expression; use feature names "
+            "(letters, digits, '_', '.', '-', ':', ',') joined by '&', '|', '*' counts, "
+            "'[...]' and '(...)', with no spaces, quotes or line breaks"
+        )
+    return value
+
+
+def check_artifact_name(value: str, path: str = "outputs.artifacts") -> str:
+    """An artefact name is one plain path segment: ``[A-Za-z0-9_.-]+``, not ``.``/``..``."""
+    if value in {".", ".."} or _ARTIFACT_NAME.fullmatch(value) is None:
+        raise ModelSpecError(
+            f"{path}: {value!r}: artifact names are [A-Za-z0-9_.-]+ (not '.' or '..'); "
+            "they name a directory and reach the --slurm job script"
+        )
+    return value
+
+
+def check_module_name(value: str, path: str = "environment.modules") -> str:
+    """A ``module load`` name: ``[A-Za-z0-9_.+/@:-]+`` and no ``.``/``..`` segment."""
+    if _MODULE_NAME.fullmatch(value) is None or any(
+        segment in {".", ".."} for segment in value.split("/")
+    ):
+        raise ModelSpecError(
+            f"{path}: {value!r}: module names are [A-Za-z0-9_.+/@:-]+ without a '.' or "
+            "'..' segment; each becomes a `module load` line of the --slurm job script"
+        )
+    return value
+
+
+def check_model_key(value: str, path: str = "models") -> str:
+    """A model key or option name: ``[a-z0-9_-]+``."""
+    if _NAME.fullmatch(value) is None:
+        raise ModelSpecError(f"{path}: {value!r}: model keys and option names are [a-z0-9_-]+")
+    return value
+
+
+def check_secret_name(value: str, path: str = "environment.secrets") -> str:
+    """``value`` when it is an environment variable name; a ModelSpecError naming ``path``
+    else. Secret names are written into a comment line of the --slurm job script."""
+    if _ENV_NAME.fullmatch(value) is None:
+        raise ModelSpecError(
+            f"{path}: {value!r} is not an environment variable name ([A-Za-z_][A-Za-z0-9_]*)"
+        )
+    return value
+
+
 def check_options(spec: ModelSpec, given: Mapping[str, str]) -> dict[str, object]:
-    """Typed option values with defaults filled; an unknown name or a bad value is an error."""
-    out: dict[str, object] = {key: option.default for key, option in spec.options.items()}
+    """Typed option values with defaults filled; an unknown name or a bad value is an error.
+
+    An option declared without a default is required: a missing one is refused here, before
+    a run or a Slurm script starts, with a message that names the option and how to pass it.
+    """
+    out: dict[str, object] = {}
+    missing: list[str] = []
+    for key, option in spec.options.items():
+        if option.required:
+            missing.append(key)
+        else:
+            out[key] = option.default
     for key, text in given.items():
         option = spec.options.get(key)
         if option is None:
             known = ", ".join(spec.options) or "none"
             raise ModelSpecError(f"unknown option {key!r} for model {spec.key}; known: {known}")
+        if option.required and not text:
+            # An empty value is not a value: leave it in missing for the error below.
+            continue
         value = _coerce_option(key, option, text)
         if option.choices is not None and value not in option.choices:
             choices = ", ".join(str(choice) for choice in option.choices)
             raise ModelSpecError(f"option {key}: expected one of {choices}, got {text!r}")
         out[key] = value
+        if option.required and key in missing:
+            missing.remove(key)
+    if missing:
+        key = missing[0]
+        option = spec.options[key]
+        detail = f": {option.description}" if option.description else ""
+        raise ModelSpecError(f"model {spec.key} needs --option {key}=VALUE{detail}")
     return out
 
 
@@ -409,6 +543,10 @@ def _environment(node: _Node | None) -> Environment:
         inherit_ld_library_path=node.bool("inherit_ld_library_path", False),
         container_runtime=runtime,
     )
+    for secret in environment.secrets:
+        check_secret_name(secret, node.at("secrets"))
+    for module in environment.modules:
+        check_module_name(module, node.at("modules"))
     node.done()
     return environment
 
@@ -419,7 +557,7 @@ def _models(node: _Node | None) -> dict[str, ModelSpec]:
         raise ModelSpecError(f"{node.path}: at least one model is required")
     out: dict[str, ModelSpec] = {}
     for key in list(node.payload):
-        if not _NAME.match(key):
+        if not _NAME.fullmatch(key):
             raise ModelSpecError(f"{node.at(key)}: model keys are [a-z0-9_-]+")
         sub = node.sub(key)
         assert sub is not None
@@ -441,6 +579,7 @@ def _models(node: _Node | None) -> dict[str, ModelSpec]:
 
 
 def _model(key: str, node: _Node) -> ModelSpec:
+    options = _options(node.sub("options", optional=True))
     spec = ModelSpec(
         key=key,
         description=node.opt_str("description"),
@@ -449,7 +588,8 @@ def _model(key: str, node: _Node) -> ModelSpec:
         outputs=_outputs(node.sub("outputs")),
         resources=_resources(node.sub("resources")),
         depends_on=_depends_on(node),
-        options=_options(node.sub("options", optional=True)),
+        options=options,
+        checkpoint=_checkpoint(node.sub("checkpoint", optional=True), options, key),
     )
     node.done()
     return spec
@@ -524,6 +664,8 @@ def _outputs(node: _Node | None) -> Outputs:
         transient_artifacts=node.strs("transient_artifacts", optional=True),
         deterministic=node.bool("deterministic", True),
     )
+    for name in outputs.artifacts:
+        check_artifact_name(name, node.at("artifacts"))
     for name in outputs.transient_artifacts:
         if name not in outputs.artifacts:
             raise ModelSpecError(
@@ -550,6 +692,8 @@ def _resources(node: _Node | None) -> Resources:
         slurm_constraint=node.opt_str("slurm_constraint"),
         max_inflight=node.opt_int("max_inflight", 1),
     )
+    if resources.slurm_constraint is not None:
+        check_slurm_constraint(resources.slurm_constraint, node.at("slurm_constraint"))
     if resources.max_inflight < 1:
         raise ModelSpecError(f"{node.at('max_inflight')}: expected at least 1")
     if resources.cpus < 1 or resources.memory_gb < 1:
@@ -578,13 +722,17 @@ def _options(node: _Node | None) -> dict[str, OptionSpec]:
         return {}
     out: dict[str, OptionSpec] = {}
     for key in list(node.payload):
-        if not _NAME.match(key):
+        if not _NAME.fullmatch(key):
             raise ModelSpecError(f"{node.at(key)}: option names are [a-z0-9_-]+")
         sub = node.sub(key)
         assert sub is not None
         kind = sub.str("type", choices=OPTION_TYPES)
-        default = sub.any("default")
-        _check_option_value(sub.at("default"), kind, default)
+        # No "default" key: the option is required, and check_options refuses a run that
+        # does not give it. A default of null is not a value any option type allows.
+        required = not sub.has("default")
+        default = sub.any("default", optional=True)
+        if not required:
+            _check_option_value(sub.at("default"), kind, default)
         choices_raw = sub.any("choices", optional=True)
         choices: tuple[object, ...] | None = None
         if choices_raw is not None:
@@ -594,7 +742,11 @@ def _options(node: _Node | None) -> dict[str, OptionSpec]:
             for choice in choices:
                 _check_option_value(sub.at("choices"), kind, choice)
         out[key] = OptionSpec(
-            type=kind, default=default, choices=choices, description=sub.opt_str("description")
+            type=kind,
+            default=default,
+            choices=choices,
+            description=sub.opt_str("description"),
+            required=required,
         )
         sub.done()
     node.done()
@@ -612,20 +764,78 @@ def _check_option_value(path: str, kind: str, value: object) -> None:
         raise ModelSpecError(f"{path}: expected a {kind}")
 
 
-def _commands(node: _Node | None) -> Commands:
+def _checkpoint(
+    node: _Node | None, options: Mapping[str, OptionSpec], model_key: str
+) -> CheckpointSpec | None:
+    if node is None:
+        return None
+    option = node.str("option")
+    node.done()
+    spec = options.get(option)
+    if spec is None:
+        raise ModelSpecError(
+            f"{node.at('option')}: model {model_key} declares no option {option!r}"
+        )
+    if spec.type != "str":
+        raise ModelSpecError(
+            f"{node.at('option')}: option {option!r} names a file path, so its type must "
+            f"be str, not {spec.type}"
+        )
+    return CheckpointSpec(option=option)
+
+
+def _check_option_refs(models: Mapping[str, ModelSpec], refs: tuple[tuple[str, str], ...]) -> None:
+    """``{option:NAME}`` must name an option every model of the manifest declares."""
+    for command, name in refs:
+        for spec in models.values():
+            if name not in spec.options:
+                raise ModelSpecError(
+                    f"commands.{command}: {{option:{name}}} is not an option of model "
+                    f"{spec.key}; declare it under models.{spec.key}.options"
+                )
+
+
+def _commands(node: _Node | None) -> tuple[Commands, tuple[tuple[str, str], ...]]:
     assert node is not None
     batch = _argv(node, "batch")
-    live = _argv(node, "live") if node.has("live") else batch
+    has_live = node.has("live")
+    live = _argv(node, "live") if has_live else batch
     node.done()
-    return Commands(batch=batch, live=live)
+    refs = list(_option_refs("batch", batch))
+    if has_live:
+        for ref in _option_refs("live", live):
+            if ref not in refs:
+                refs.append(ref)
+    return Commands(batch=batch, live=live), tuple(refs)
+
+
+def _option_refs(command: str, argv: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+    """The ``{option:NAME}`` names ``argv`` needs, in first-seen order, one entry each."""
+    seen: dict[str, str] = {}
+    for arg in argv:
+        for match in _ARGV_FIELD.finditer(arg):
+            field = match.group(1)
+            if field.startswith(_OPTION_FIELD_PREFIX):
+                name = field[len(_OPTION_FIELD_PREFIX) :]
+                seen.setdefault(name, field)
+    return tuple((command, name) for name in seen)
 
 
 def _argv(node: _Node, key: str) -> tuple[str, ...]:
     argv = node.strs(key)
     for arg in argv:
         for match in _ARGV_FIELD.finditer(arg):
-            if match.group(1) not in PLACEHOLDERS:
-                raise ModelSpecError(f"{node.at(key)}: unknown placeholder {match.group(0)!r}")
+            field = match.group(1)
+            if field in PLACEHOLDERS:
+                continue
+            if field.startswith(_OPTION_FIELD_PREFIX):
+                name = field[len(_OPTION_FIELD_PREFIX) :]
+                if not _NAME.fullmatch(name):
+                    raise ModelSpecError(
+                        f"{node.at(key)}: {{{field}}}: option names are [a-z0-9_-]+"
+                    )
+                continue
+            raise ModelSpecError(f"{node.at(key)}: unknown placeholder {match.group(0)!r}")
         if "{" in _ARGV_FIELD.sub("", arg) or "}" in _ARGV_FIELD.sub("", arg):
             raise ModelSpecError(f"{node.at(key)}: unbalanced braces in {arg!r}")
     return argv
@@ -638,6 +848,7 @@ __all__ = [
     "PLACEHOLDERS",
     "RAW_PLACEHOLDERS",
     "SPEC_VERSION",
+    "CheckpointSpec",
     "Commands",
     "Dependency",
     "Environment",
@@ -649,9 +860,15 @@ __all__ = [
     "OptionSpec",
     "Outputs",
     "Resources",
+    "check_artifact_name",
+    "check_model_key",
+    "check_module_name",
     "check_options",
+    "check_secret_name",
+    "check_slurm_constraint",
     "load_manifest",
     "manifest_sha256",
+    "option_text",
     "parse_manifest",
     "render_argv",
     "select_model",

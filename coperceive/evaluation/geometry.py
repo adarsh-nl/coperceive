@@ -41,14 +41,17 @@ def _yaw_rad(box: WorldBox) -> float:
     return math.radians(yaw_deg(box.rotation))
 
 
-def footprint(box: WorldBox) -> tuple[Point2, ...]:
-    """Four XY corners of the box in the world frame, counter-clockwise.
+def footprint(box: WorldBox, *, origin: Point2 = (0.0, 0.0)) -> tuple[Point2, ...]:
+    """Four XY corners of the box, counter-clockwise, as offsets from ``origin``.
 
-    The first corner is ``(-length/2, -width/2)`` of the box frame.
+    With the default ``origin`` these are the corners in the world frame. The
+    first corner is ``(-length/2, -width/2)`` of the box frame. The centre is
+    moved to ``origin`` before the half extents are added, so corners taken about
+    a nearby origin keep the precision of the box, whatever the world coordinates.
     """
     yaw = _yaw_rad(box)
     cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
-    cx, cy = box.center[0], box.center[1]
+    cx, cy = box.center[0] - origin[0], box.center[1] - origin[1]
     half_length, half_width = box.size_lwh[0] / 2.0, box.size_lwh[1] / 2.0
     corners: list[Point2] = []
     for sign_x, sign_y in _FOOTPRINT_SIGNS:
@@ -128,9 +131,16 @@ def bev_iou(a: WorldBox, b: WorldBox) -> float:
     """Footprint intersection over footprint union, in ``[0, 1]``.
 
     A union of area 0 gives ``0.0``.
+
+    Both footprints are taken about the midpoint of the two centres. Areas by the
+    shoelace formula lose about ``x * y * 2**-52`` square metres on absolute
+    coordinates ``(x, y)``, which is nothing at simulator scale and 6e-5 of a car's
+    IoU in projected map coordinates; about a local origin the loss stays at the
+    last bits wherever the scene is.
     """
-    footprint_a = footprint(a)
-    footprint_b = footprint(b)
+    origin = ((a.center[0] + b.center[0]) / 2.0, (a.center[1] + b.center[1]) / 2.0)
+    footprint_a = footprint(a, origin=origin)
+    footprint_b = footprint(b, origin=origin)
     area_a = polygon_area(footprint_a)
     area_b = polygon_area(footprint_b)
     # The intersection cannot exceed either footprint; the min only removes

@@ -25,6 +25,14 @@ use crate::slurm_adapter::RemoteRunner;
 use crate::ssh::shell_quote;
 
 pub const RUN_PLAN_SCHEMA: &str = "coperceive-run-plan-1";
+/// The AP protocol used when a plan does not name one: the evaluator's default
+/// (per-frame ranking, connected-union ground truth within 70 m).
+pub const DEFAULT_EVAL_PROTOCOL: &str = "default";
+pub const EVAL_PROTOCOLS: [&str; 2] = ["default", "legacy"];
+
+fn default_eval_protocol() -> String {
+    DEFAULT_EVAL_PROTOCOL.to_string()
+}
 pub const PIPELINE_SPEC_FILE: &str = "coperceive-pipeline.json";
 pub const CONTRACT_CHECK_FRAMES: u32 = 3;
 
@@ -188,6 +196,12 @@ pub struct RunPlanRequest {
     pub raw_root: String,
     #[serde(default)]
     pub media_root: String,
+    /// A built-in model parameter the plan records as a path (Griffin's `ckpt_root`).
+    #[serde(default)]
+    pub ckpt_root: String,
+    /// The AP protocol the run is made for: `default` or `legacy`.
+    #[serde(default = "default_eval_protocol")]
+    pub eval_protocol: String,
     #[serde(default)]
     pub environment_override: Option<EnvironmentSetup>,
 }
@@ -276,6 +290,20 @@ pub struct RunPlan {
     pub raw_root: PlanArtifact,
     #[serde(default)]
     pub media_root: PlanArtifact,
+    /// The model's `ckpt_root` parameter: the released checkpoints root the plan runs
+    /// with. Empty for a custom pipeline, a model that declares no such option, and on
+    /// plans saved before it existed.
+    #[serde(default)]
+    pub ckpt_root: PlanArtifact,
+    /// The `--option` keys the model's manifest declared when the plan was saved, so a
+    /// submission can check a required parameter without asking the cluster again. Empty
+    /// for a custom pipeline and on plans saved before this field existed.
+    #[serde(default)]
+    pub model_options: Vec<String>,
+    /// The AP protocol the run was made for (`default` or `legacy`), recorded so a later
+    /// `coperceive eval run` uses it. A plan saved before this field is `default`.
+    #[serde(default = "default_eval_protocol")]
+    pub eval_protocol: String,
     /// Work directory (inside the run output) and the staging seconds the job
     /// measured. Empty/None on plans saved before these fields existed.
     #[serde(default)]
@@ -655,6 +683,8 @@ pub fn build_builtin_argv(
     model: &str,
     raw_root: &str,
     media_root: &str,
+    ckpt_root: &str,
+    eval_protocol: &str,
     work_dir: &str,
 ) -> Result<Vec<String>, String> {
     if plugin_manifest.trim().is_empty() {
@@ -694,6 +724,19 @@ pub fn build_builtin_argv(
     if !media_root.trim().is_empty() {
         argv.push("--media-root".to_string());
         argv.push(media_root.trim().to_string());
+    }
+    // A model parameter the plan records as a path (Griffin's ckpt_root) reaches the
+    // worker through the manifest's commands.batch template; model run takes it as an
+    // --option, like the CLI's own --option ckpt_root=DIR.
+    if !ckpt_root.trim().is_empty() {
+        argv.push("--option".to_string());
+        argv.push(format!("ckpt_root={}", ckpt_root.trim()));
+    }
+    // Record the AP protocol in the run so eval run can use it. The default is left
+    // out, exactly as the CLI's no-flag command leaves it out; the parity then holds.
+    if eval_protocol == "legacy" {
+        argv.push("--protocol".to_string());
+        argv.push("legacy".to_string());
     }
     if !work_dir.trim().is_empty() {
         argv.push("--work".to_string());
@@ -1848,12 +1891,19 @@ impl BuiltinChoice {
         self.model.options.iter().any(|option| option == "checkpoint")
     }
 
+    /// Whether the model declares the required `ckpt_root` parameter (Griffin's released
+    /// checkpoints root). The app materialises it as a plan field, like the raw root.
+    fn declares_ckpt_root(&self) -> bool {
+        self.model.options.iter().any(|option| option == "ckpt_root")
+    }
+
     /// Model options exactly as the manifest declares them: a checkpoint only when the
     /// model has a `checkpoint` option, and every extra `K=V` a declared key. The CLI's
     /// `check_options` would refuse anything else on the node, after the job queued.
     fn check_options(
         &self,
         checkpoint: &str,
+        ckpt_root: &str,
         values: &BTreeMap<String, serde_json::Value>,
     ) -> Result<(), String> {
         let declared = if self.model.options.is_empty() {
@@ -1861,6 +1911,20 @@ impl BuiltinChoice {
         } else {
             self.model.options.join(", ")
         };
+        // ckpt_root has no default in the manifest: it must be given for a model that
+        // declares it, and is not invented from any site path when it is missing.
+        if self.declares_ckpt_root() && ckpt_root.trim().is_empty() {
+            return Err(format!(
+                "The model {} {} needs the ckpt_root parameter (the released checkpoints root): choose it on the cluster before checking the plan. It is the folder that holds griffin_50scenes_25m.",
+                self.plugin, self.key
+            ));
+        }
+        if !self.declares_ckpt_root() && !ckpt_root.trim().is_empty() {
+            return Err(format!(
+                "The model {} {} has no ckpt_root option in its manifest. Clear the checkpoint root field and check the plan again. Options it declares: {declared}.",
+                self.plugin, self.key
+            ));
+        }
         if !self.takes_checkpoint() && !checkpoint.trim().is_empty() {
             return Err(format!(
                 "The model {} {} has no checkpoint option in its manifest (it loads its own \
@@ -2128,7 +2192,7 @@ pub fn build_run_plan(
             request.pipeline.name.trim(),
             request.model.trim(),
         )?;
-        choice.check_options(&request.checkpoint, &request.values)?;
+        choice.check_options(&request.checkpoint, &request.ckpt_root, &request.values)?;
         // A dependency loop in the manifest is refused before any other check.
         choice.resources()?;
         Some(choice)
@@ -2150,16 +2214,26 @@ pub fn build_run_plan(
         None => default_eval_gres(entry),
     };
     if builtin {
-        for (path, label) in [
-            (request.raw_root.trim(), "raw root"),
-            (request.media_root.trim(), "media root"),
-        ] {
-            if path.is_empty() {
-                return Err(format!(
-                    "Choose the {label} on the cluster before checking the plan."
-                ));
-            }
-            validate_path_in_roots(profile, path, label)?;
+        let eval_protocol = request.eval_protocol.trim();
+        if !EVAL_PROTOCOLS.contains(&eval_protocol) {
+            return Err(format!(
+                "Choose the AP protocol for this run: one of {}.",
+                EVAL_PROTOCOLS.join(", ")
+            ));
+        }
+        let raw = request.raw_root.trim();
+        if raw.is_empty() {
+            return Err("Choose the raw root on the cluster before checking the plan.".to_string());
+        }
+        validate_path_in_roots(profile, raw, "raw root")?;
+        // The media root is optional, as the CLI's repeatable --media-root is: an empty
+        // one leaves the flag out of the job script instead of passing an empty path.
+        let media = request.media_root.trim();
+        if !media.is_empty() {
+            validate_path_in_roots(profile, media, "media root")?;
+        }
+        if !request.ckpt_root.trim().is_empty() {
+            validate_path_in_roots(profile, request.ckpt_root.trim(), "ckpt root")?;
         }
     }
     validate_plan_destinations(profile)?;
@@ -2658,6 +2732,8 @@ pub fn build_run_plan(
                 request.model.trim(),
                 request.raw_root.trim(),
                 request.media_root.trim(),
+                request.ckpt_root.trim(),
+                request.eval_protocol.trim(),
                 WORK_IN_SCRATCH,
             )?
         }
@@ -2719,6 +2795,9 @@ pub fn build_run_plan(
         model: if builtin { request.model.trim().to_string() } else { String::new() },
         raw_root: if builtin { artifact_from_check_for_input(&request.raw_root, "folder") } else { PlanArtifact::default() },
         media_root: if builtin { artifact_from_check_for_input(&request.media_root, "folder") } else { PlanArtifact::default() },
+        ckpt_root: if builtin { artifact_from_check_for_input(&request.ckpt_root, "folder") } else { PlanArtifact::default() },
+        model_options: builtin_choice.as_ref().map(|choice| choice.model.options.clone()).unwrap_or_default(),
+        eval_protocol: if builtin { request.eval_protocol.trim().to_string() } else { DEFAULT_EVAL_PROTOCOL.to_string() },
         work_dir: if builtin { WORK_IN_SCRATCH.to_string() } else { String::new() },
         staging_seconds: None,
         output_dir,
@@ -3611,7 +3690,12 @@ pub fn save_run_plan(
             } else {
                 plan.checkpoint.path.as_str()
             };
-            choice.check_options(given, &request.values)?;
+            let ckpt_root = if plan.ckpt_root.path.trim().is_empty() {
+                request.ckpt_root.as_str()
+            } else {
+                plan.ckpt_root.path.as_str()
+            };
+            choice.check_options(given, ckpt_root, &request.values)?;
             (choice.takes_checkpoint(), true)
         }
         None => required_plan_artifacts(&save_pipeline.source, &save_pipeline.spec),
@@ -3657,18 +3741,41 @@ pub fn save_run_plan(
             _ => {}
         }
     }
+    let eval_protocol = if request.eval_protocol.trim().is_empty() {
+        plan.eval_protocol.trim()
+    } else {
+        request.eval_protocol.trim()
+    };
+    if save_pipeline.builtin.is_some() && !EVAL_PROTOCOLS.contains(&eval_protocol) {
+        return Err(format!(
+            "Choose the AP protocol for this run: one of {}.",
+            EVAL_PROTOCOLS.join(", ")
+        ));
+    }
     let argv: Vec<String> = if let Some(choice) = &save_pipeline.builtin {
         let model = request.model.trim();
         let raw = request.raw_root.trim();
         let media = request.media_root.trim();
-        if model.is_empty() || raw.is_empty() || media.is_empty() {
+        let ckpt_root = if plan.ckpt_root.path.trim().is_empty() {
+            request.ckpt_root.trim()
+        } else {
+            plan.ckpt_root.path.trim()
+        };
+        if model.is_empty() || raw.is_empty() {
             return Err(
-                "This plan predates the model/raw/media fields; rebuild this plan before saving."
+                "This plan predates the model/raw fields; rebuild this plan before saving."
                     .to_string(),
             );
         }
         validate_path_in_roots(profile, raw, "raw root")?;
-        validate_path_in_roots(profile, media, "media root")?;
+        // Optional, as the CLI's --media-root is; when empty build_builtin_argv writes no
+        // --media-root at all.
+        if !media.is_empty() {
+            validate_path_in_roots(profile, media, "media root")?;
+        }
+        if !ckpt_root.is_empty() {
+            validate_path_in_roots(profile, ckpt_root, "ckpt root")?;
+        }
         // `coperceive model run` takes --out/--run-id/--work and has no --output-dir.
         build_builtin_argv(
             profile,
@@ -3681,6 +3788,8 @@ pub fn save_run_plan(
             model,
             raw,
             media,
+            ckpt_root,
+            eval_protocol,
             WORK_IN_SCRATCH,
         )?
     } else {
@@ -3766,6 +3875,28 @@ pub fn save_run_plan(
         artifact_from_check_for_input(&request.media_root, "folder")
     } else {
         PlanArtifact::default()
+    };
+    validated.ckpt_root = if save_pipeline.source == "builtin" {
+        artifact_from_check_for_input(
+            if plan.ckpt_root.path.trim().is_empty() {
+                request.ckpt_root.trim()
+            } else {
+                plan.ckpt_root.path.trim()
+            },
+            "folder",
+        )
+    } else {
+        PlanArtifact::default()
+    };
+    validated.model_options = save_pipeline
+        .builtin
+        .as_ref()
+        .map(|choice| choice.model.options.clone())
+        .unwrap_or_default();
+    validated.eval_protocol = if save_pipeline.source == "builtin" {
+        eval_protocol.to_string()
+    } else {
+        DEFAULT_EVAL_PROTOCOL.to_string()
     };
     validated.work_dir = if save_pipeline.source == "builtin" {
         WORK_IN_SCRATCH.to_string()
@@ -4070,6 +4201,8 @@ mod tests {
             model: String::new(),
             raw_root: String::new(),
             media_root: String::new(),
+            ckpt_root: String::new(),
+            eval_protocol: "default".to_string(),
             environment_override: None,
         }
     }
@@ -4104,9 +4237,9 @@ mod tests {
       "location": "coperceive_griffin_model:MANIFEST",
       "manifest": "/data/code/griffin/coperceive_griffin_model/model.yaml",
       "models": {
-        "vehicle-side": {"cpus": 8, "depends_on": [], "gpu": true, "memory_gb": 64, "options": ["det_json", "min_score", "nusc_root", "subset"], "transient_artifacts": [], "seconds_per_sample": 0.394, "staging_seconds": 700.0, "conversion_seconds": 100.0},
-        "drone-side": {"cpus": 8, "depends_on": [], "gpu": true, "memory_gb": 64, "options": ["subset"], "transient_artifacts": ["track_query"]},
-        "fusion": {"cpus": 4, "depends_on": ["drone-side"], "gpu": true, "memory_gb": 32, "options": [], "transient_artifacts": []},
+        "vehicle-side": {"cpus": 8, "depends_on": [], "gpu": true, "memory_gb": 64, "options": ["ckpt_root", "det_json", "min_score", "nusc_root", "subset"], "transient_artifacts": [], "seconds_per_sample": 0.394, "staging_seconds": 700.0, "conversion_seconds": 100.0},
+        "drone-side": {"cpus": 8, "depends_on": [], "gpu": true, "memory_gb": 64, "options": ["ckpt_root", "subset"], "transient_artifacts": ["track_query"]},
+        "fusion": {"cpus": 4, "depends_on": ["drone-side"], "gpu": true, "memory_gb": 32, "options": ["ckpt_root"], "transient_artifacts": []},
         "weights-from-option": {"cpus": 1, "depends_on": [], "gpu": false, "memory_gb": 2, "options": ["checkpoint"], "transient_artifacts": []}
       },
       "modules": ["nvidia/cuda-11.8", "nvidia/cuda-11.x_cudnn-8.6"],
@@ -4262,6 +4395,8 @@ mod tests {
         req.model = "vehicle-side".to_string();
         req.raw_root = "/data/scenes/raw".to_string();
         req.media_root = "/data/scenes/raw".to_string();
+        req.ckpt_root = "/data/scenes/ckpts".to_string();
+        req.eval_protocol = "default".to_string();
         req
     }
 
@@ -4307,6 +4442,8 @@ mod tests {
         let cluster = GriffinCluster::new();
         let mut req = griffin_request();
         req.model = "weights-from-option".to_string();
+        // This fixture model declares only checkpoint, not the required ckpt_root.
+        req.ckpt_root = String::new();
         req.checkpoint = String::new();
         let error = build_run_plan(&cluster, &entry(), &req).expect_err("needs one");
         assert!(error.contains("Choose a checkpoint path"), "{error}");
@@ -4679,6 +4816,7 @@ mod tests {
         let cluster = GriffinCluster::new();
         let mut req = griffin_request();
         req.model = "weights-from-option".to_string();
+        req.ckpt_root = String::new();
         req.checkpoint = "/data/code/checkpoints/vehicle.pth".to_string();
         for entry in [entry(), entry_with_discovered("gpu-a40", &["a40"])] {
             let plan = build_run_plan(&cluster, &entry, &req).expect("build");
@@ -5271,6 +5409,7 @@ mod tests {
         req.split = root.join("scenes").to_string_lossy().to_string();
         req.raw_root = root.join("raw").to_string_lossy().to_string();
         req.media_root = req.raw_root.clone();
+        req.ckpt_root = req.raw_root.clone();
         (root, entry, req)
     }
 
@@ -5511,6 +5650,7 @@ mod tests {
         // declares a `checkpoint` option (Griffin vehicle-side declares none).
         let mut req = griffin_request();
         req.model = "weights-from-option".to_string();
+        req.ckpt_root = String::new();
         req.checkpoint = String::new();
         let error = build_run_plan(&checked_runner(), &entry(), &req).expect_err("builtin");
         assert!(error.contains("Choose a checkpoint path"), "{error}");
@@ -6203,7 +6343,7 @@ mod tests {
             "/data/scenes",
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
-            "", "", "", "",
+            "", "", "", "", "", "",
         )
         .expect("argv");
         assert_eq!(
@@ -6242,7 +6382,7 @@ mod tests {
             // vehicle-side declares no checkpoint option: the plan passes none.
             "",
             "/data/results/runs/plan-1790000000-aabbccddeeff",
-            "vehicle-side", "/data/raw", "/data/raw", "/data/results/runs/plan-1790000000-aabbccddeeff/work",
+            "vehicle-side", "/data/raw", "/data/raw", "", "default", "/data/results/runs/plan-1790000000-aabbccddeeff/work",
         )
         .expect("argv");
         for item in [
@@ -6301,7 +6441,7 @@ mod tests {
             "/data/scenes",
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
-            "", "", "", "",
+            "", "", "", "", "", "",
         )
         .expect("argv");
         assert_eq!(argv[0], "/home/bob/coperceive-app/.venv/bin/python");
@@ -6323,7 +6463,7 @@ mod tests {
             "/data/scenes",
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
-            "", "", "", "",
+            "", "", "", "", "", "",
         )
         .expect_err("empty manifest");
         assert!(error.contains("no pipeline manifest"), "{error}");
@@ -6396,6 +6536,92 @@ mod tests {
         for item in ["--model", "vehicle-side", "--raw-root", "/data/code/raw", "--media-root", "/data/code/raw", "--work"] {
             assert!(plan.argv.iter().any(|value| value == item), "missing {item}: {:?}", plan.argv);
         }
+    }
+
+    #[test]
+    fn a_builtin_plan_without_a_media_root_is_accepted_and_has_no_flag() {
+        // The CLI's --media-root is optional (coperceive/cli.py); the media root is not
+        // what identifies a plan field. An empty one must be accepted and leave the flag
+        // out entirely, in both the built argv and the saved plan.
+        let mut req = griffin_request();
+        req.split = "/data/code/splits/test.txt".to_string();
+        req.raw_root = "/data/code/raw".to_string();
+        req.media_root = String::new();
+        let plan = build_run_plan(&checked_runner(), &entry(), &req).expect("build");
+        assert_eq!(plan.model, "vehicle-side");
+        assert_eq!(plan.raw_root.path, "/data/code/raw");
+        assert!(plan.media_root.path.is_empty());
+        assert!(!plan.argv.iter().any(|word| word == "--media-root"), "{:?}", plan.argv);
+
+        let mut echo = EchoRunner::new();
+        echo.model_list = Some(MODEL_LIST_JSON.to_string());
+        let saved = save_run_plan(&echo, &entry(), &plan, &req).expect("save");
+        assert!(saved.media_root.path.is_empty());
+        assert!(!saved.argv.iter().any(|word| word == "--media-root"), "{:?}", saved.argv);
+    }
+
+    #[test]
+    fn a_builtin_plan_needs_its_manifest_required_ckpt_root_and_passes_it_through() {
+        // The real Griffin manifest declares ckpt_root without a default. The plan must
+        // carry the value the user gave, pass it as an --option (the worker gets it as
+        // --ckpt-root from commands.batch), and refuse a missing one by name.
+        let mut req = griffin_request();
+        req.split = "/data/code/splits/test.txt".to_string();
+        req.raw_root = "/data/code/raw".to_string();
+        req.media_root = "/data/code/raw".to_string();
+        req.ckpt_root = "/data/code/ckpts".to_string();
+        let plan = build_run_plan(&checked_runner(), &entry(), &req).expect("build");
+        assert_eq!(plan.ckpt_root.path, "/data/code/ckpts");
+        assert!(plan.model_options.iter().any(|option| option == "ckpt_root"));
+        let at = plan
+            .argv
+            .iter()
+            .position(|word| word == "ckpt_root=/data/code/ckpts")
+            .expect("ckpt_root option");
+        assert_eq!(plan.argv[at - 1], "--option");
+
+        req.ckpt_root = String::new();
+        let error = build_run_plan(&checked_runner(), &entry(), &req).expect_err("missing");
+        assert!(error.contains("ckpt_root"), "{error}");
+        assert!(error.contains("vehicle-side"), "{error}");
+    }
+
+    #[test]
+    fn a_legacy_plan_carries_the_protocol_and_an_old_plan_defaults() {
+        // The plan records the AP protocol and passes it to model run, which writes it
+        // into run.json for a later eval run. A plan saved before the field is default.
+        let mut req = griffin_request();
+        req.split = "/data/code/splits/test.txt".to_string();
+        req.raw_root = "/data/code/raw".to_string();
+        req.media_root = "/data/code/raw".to_string();
+        req.ckpt_root = "/data/code/ckpts".to_string();
+        req.eval_protocol = "legacy".to_string();
+        let plan = build_run_plan(&checked_runner(), &entry(), &req).expect("build");
+        assert_eq!(plan.eval_protocol, "legacy");
+        let at = plan
+            .argv
+            .iter()
+            .position(|word| word == "--protocol")
+            .expect("--protocol");
+        assert_eq!(plan.argv[at + 1], "legacy");
+        let mut echo = EchoRunner::new();
+        echo.model_list = Some(MODEL_LIST_JSON.to_string());
+        let saved = save_run_plan(&echo, &entry(), &plan, &req).expect("save");
+        assert_eq!(saved.eval_protocol, "legacy");
+        assert!(saved.argv.iter().any(|word| word == "legacy"));
+
+        let mut json = serde_json::to_value(&plan).unwrap();
+        json.as_object_mut().unwrap().remove("eval_protocol");
+        let old: RunPlan = serde_json::from_value(json).unwrap();
+        assert_eq!(old.eval_protocol, DEFAULT_EVAL_PROTOCOL);
+    }
+
+    #[test]
+    fn a_builtin_plan_refuses_an_unknown_evaluation_protocol() {
+        let mut req = griffin_request();
+        req.eval_protocol = "v0.1.1".to_string();
+        let error = build_run_plan(&checked_runner(), &entry(), &req).expect_err("bad protocol");
+        assert!(error.contains("AP protocol"), "{error}");
     }
 
     #[test]

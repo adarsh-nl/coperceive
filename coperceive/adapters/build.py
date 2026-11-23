@@ -44,6 +44,7 @@ from coperceive.adapters.rotation import (
 )
 from coperceive.adapters.spec import (
     BoxesSpec,
+    EulerSpec,
     LidarSpec,
     Manifest,
     PlatformValue,
@@ -70,6 +71,25 @@ from coperceive.se3 import SE3
 Sample = int | str
 _LENGTH = {"m": 1.0, "cm": 0.01, "mm": 0.001}
 _UNIT_US = {"s": 1_000_000.0, "ms": 1_000.0, "us": 1.0, "ns": 0.001}
+
+
+def euler_spec_to_se3(
+    euler: EulerSpec, angles: tuple[float, float, float], *, degrees: bool
+) -> SE3:
+    """The rotation of an ``euler`` block for its three field values (about x, y, z).
+
+    Each value is multiplied by its ``signs`` entry first. With all signs 1 the values are
+    passed on untouched, so a manifest without ``signs`` gives the same bytes as before.
+    """
+    sx, sy, sz = euler.signs
+    if (sx, sy, sz) != (1, 1, 1):
+        angles = (angles[0] * sx, angles[1] * sy, angles[2] * sz)
+    return euler_to_se3(angles, order=euler.order, intrinsic=euler.intrinsic, degrees=degrees)
+
+
+def oriented(transform: SE3, direction: str) -> SE3:
+    """``parent_from_child`` of a transform read in a manifest ``direction``."""
+    return transform.inverse() if direction == "parent_to_child" else transform
 
 
 class BuildError(CoperceiveError):
@@ -422,8 +442,7 @@ class ManifestAdapter:
             )
             rotation = self._rotation(spec.rotation, record, where, allow_missing=False)
             pose = rotation.translation(translation[0], translation[1], translation[2])
-            if spec.direction == "parent_to_child":
-                pose = pose.inverse()
+            pose = oriented(pose, spec.direction)
             if self._reflect is not None:
                 pose = self._reflect.se3(pose)
             pose = self._body.world_from_body(pose)
@@ -527,8 +546,7 @@ class ManifestAdapter:
             extrinsic = self._rotation(
                 ext.rotation, record, where, allow_missing=False
             ).translation(t[0], t[1], t[2])
-        if ext.direction == "parent_to_child":
-            extrinsic = extrinsic.inverse()
+        extrinsic = oriented(extrinsic, ext.direction)
         if self._reflect is not None:
             extrinsic = self._reflect.se3(extrinsic)
         fx = fy = cx = cy = None
@@ -1059,11 +1077,8 @@ class ManifestAdapter:
                         angles.append(0.0)
                     else:
                         raise BuildError(f"{where}: box has no {name!r} and no missing_angles rule")
-                return euler_to_se3(
-                    (angles[0], angles[1], angles[2]),
-                    order=spec.euler.order,
-                    intrinsic=spec.euler.intrinsic,
-                    degrees=self._degrees,
+                return euler_spec_to_se3(
+                    spec.euler, (angles[0], angles[1], angles[2]), degrees=self._degrees
                 )
             if spec.quaternion is not None:
                 q = [_num(_field(record, n, where), n, where) for n in spec.quaternion.fields]

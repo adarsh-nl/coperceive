@@ -28,6 +28,27 @@
         }
       }
     },
+    "/api/stream-stats": {
+      "get": {
+        "summary": "Stream Stats",
+        "description": "Versioned, bounded timings for streamed viewing (frame/points/image).\n\nThe data plane is webview -> this Python sidecar -> StreamClient -> one\nSSH pipe -> the Python streamer; Rust only spawns the sidecar. The\nqueue/read/transfer percentiles are the streamer's and client's own\ntimings, so the viewer can show where a frame's time went.",
+        "operationId": "stream_stats_api_stream_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Stream Stats Api Stream Stats Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs": {
       "get": {
         "summary": "Jobs",

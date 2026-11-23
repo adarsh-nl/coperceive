@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from coperceive.remote_view.client import StreamClient, StreamRefused
+from coperceive.remote_view.client import CancelToken, StreamClient, StreamRefused
 
 # Mirrored per scene; points.bin and images are read on demand instead.
 SMALL_FILES = (
@@ -225,13 +225,15 @@ class RemoteScenes:
             self._sweeps[scene_id] = (version, index)
         return index
 
-    def sweep_bytes(self, scene_id: str, sweep: Sweep) -> bytes:
+    def sweep_bytes(
+        self, scene_id: str, sweep: Sweep, *, token: CancelToken | None = None
+    ) -> bytes:
         version = self.ready().get(scene_id, 0)
         key = f"{scene_id}|{version}|points|{sweep.offset}|{sweep.nbytes}"
         cached = self.cache.get(key)
         if cached is not None and len(cached) == sweep.nbytes:
             return cached
-        data = self.client.read(f"{scene_id}/points.bin", sweep.offset, sweep.nbytes)
+        data = self.client.read(f"{scene_id}/points.bin", sweep.offset, sweep.nbytes, token=token)
         if len(data) != sweep.nbytes:
             raise OSError(
                 f"{scene_id}: short read of points.bin ({len(data)} of {sweep.nbytes} bytes)"

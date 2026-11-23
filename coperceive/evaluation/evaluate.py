@@ -48,6 +48,7 @@ from coperceive.evaluation.metrics import (
     average_precision,
     cooperative_counts,
     counts_of,
+    mean_ap,
     tp_errors,
 )
 from coperceive.evaluation.predictions import (
@@ -60,6 +61,13 @@ from coperceive.evaluation.predictions import (
     read_boxes,
     read_run_meta,
     validate_boxes,
+)
+from coperceive.evaluation.union import (
+    UnionBox,
+    connected_agents,
+    holds_a_point,
+    lidar_points_world,
+    pair_with,
 )
 from coperceive.model import Annotation, BoxFrame, Scene
 from coperceive.se3 import SE3
@@ -74,6 +82,8 @@ METRICS_FILE = "metrics.json"
 
 KIND_GT = "gt"
 KIND_PREDICTION = "prediction"
+# Keys of an `ap` table of metrics.json that are not classes.
+AP_MEAN_KEYS = ("mean", "mean_model")
 SOURCE_SINGLE = "single"
 SOURCE_FUSED = "fused"
 
@@ -130,6 +140,21 @@ def status_at_columns(n_thresholds: int) -> list[str]:
     return [status_at_column(index) for index in range(n_thresholds)]
 
 
+# On a gt row: the agent whose annotation it is. Under connected_union a fused output's
+# ground truth holds other agents' boxes too (spec A.4).
+GT_AGENT_COLUMN = "gt_agent_id"
+
+
+def gt_row_at_column(index: int) -> str:
+    """The column holding the ground-truth row a prediction was paired with in the AP pass."""
+    return f"gt_row_at_{index}"
+
+
+def gt_row_at_columns(n_thresholds: int) -> list[str]:
+    """``gt_row_at_0`` … ``gt_row_at_<n-1>``, in the order of ``config.thresholds``."""
+    return [gt_row_at_column(index) for index in range(n_thresholds)]
+
+
 def match_schema(n_thresholds: int) -> pa.Schema:
     """:data:`MATCH_SCHEMA` followed by one nullable string ``status_at_<i>`` per threshold.
 
@@ -140,6 +165,10 @@ def match_schema(n_thresholds: int) -> pa.Schema:
     fields.extend(
         pa.field(name, pa.string(), nullable=True) for name in status_at_columns(n_thresholds)
     )
+    fields.extend(
+        pa.field(name, pa.int64(), nullable=True) for name in gt_row_at_columns(n_thresholds)
+    )
+    fields.append(pa.field(GT_AGENT_COLUMN, pa.string(), nullable=True))
     return pa.schema(fields)
 
 
@@ -207,6 +236,9 @@ class _PlacedGt:
     annotation: Annotation
     box: GtBox
     world: WorldBox
+    # The connected agent that added this box to a fused output's ground truth (spec
+    # A.4), or None for the output agent's own annotation.
+    added_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -223,6 +255,7 @@ class _ApRecord:
     row: int
     score: float
     status: str
+    time_us: int = 0
 
 
 @dataclass
@@ -240,6 +273,9 @@ class _Output:
     )
     # threshold index -> prediction row -> its AP-pass status (the ``status_at_<i>`` column).
     ap_status: dict[int, dict[int, str]] = field(default_factory=dict[int, dict[int, str]])
+    # threshold index -> prediction row -> the ground-truth row it was paired with in that
+    # AP pass (the ``gt_row_at_<i>`` column); a breakdown bins a true positive by it.
+    ap_pairs: dict[int, dict[int, int]] = field(default_factory=dict[int, dict[int, int]])
 
     @property
     def key(self) -> tuple[str, str]:
@@ -302,6 +338,66 @@ def _place_gt(
     return by_time
 
 
+def _union_gt(
+    scene: Scene,
+    ego: str,
+    own_by_time: Mapping[int, Sequence[_PlacedGt]],
+    config: EvalConfig,
+) -> dict[int, list[_PlacedGt]]:
+    """The connected-union ground truth of ``(ego, fused)`` per pose time (spec A.4).
+
+    The ego's own boxes first, always. Then each connected agent in scene order adds
+    its observed annotations at that time that are not the same object as a box
+    already in the set. Observed: a LiDAR return of the ego or of a connected agent
+    lies inside the box; with no sweep from any of them, every annotation counts.
+    Added boxes are measured from the ego for rule 1.
+    """
+    renames: Mapping[str, str] = config.gt_class_map
+    shared = frozenset(obj.track_id for obj in scene.objects)
+    union_by_time: dict[int, list[_PlacedGt]] = {}
+    for time_us, own in own_by_time.items():
+        chosen = list(own)
+        connected = connected_agents(scene, ego, time_us, config.comm_range_m)
+        if not connected:
+            union_by_time[time_us] = chosen
+            continue
+        points = lidar_points_world(scene, [ego, *connected], time_us)
+        origin = _agent_origin(scene, ego, time_us)
+        for other in connected:
+            candidates: list[_PlacedGt] = []
+            for row, ann in enumerate(scene.annotations):
+                if ann.agent_id != other or ann.time_us != time_us:
+                    continue
+                world = world_box(
+                    scene, other, time_us, ann.center, ann.size_lwh, ann.box_from_rpy, ann.frame
+                )
+                if points is not None and not holds_a_point(world, points):
+                    continue
+                candidates.append(
+                    _PlacedGt(
+                        annotation=ann,
+                        box=GtBox(
+                            row=row,
+                            category=renames.get(ann.category, ann.category),
+                            track_id=ann.track_id,
+                            visibility=ann.visibility,
+                            world=world,
+                            range_m=horizontal_range_m(world, origin),
+                        ),
+                        world=world,
+                        added_by=other,
+                    )
+                )
+            same = pair_with(
+                [UnionBox(item.box.track_id, item.world) for item in chosen],
+                [UnionBox(item.box.track_id, item.world) for item in candidates],
+                shared,
+            )
+            chosen.extend(item for index, item in enumerate(candidates) if index not in same)
+        union_by_time[time_us] = chosen
+    return union_by_time
+
+
 def _place_pred(scene: Scene, row: int, box: PredictionBox) -> _PlacedPred:
     world = world_box(
         scene, box.agent_id, box.time_us, box.center, box.size_lwh, box.box_from_rpy, box.frame
@@ -324,8 +420,17 @@ def _place_pred(scene: Scene, row: int, box: PredictionBox) -> _PlacedPred:
 # --- matching per output ----------------------------------------------------------
 
 
-def _collect_outputs(scene: Scene, boxes: Sequence[PredictionBox]) -> list[_Output]:
-    """Outputs in first-appearance order with their predictions placed, per time."""
+def _collect_outputs(
+    scene: Scene,
+    boxes: Sequence[PredictionBox],
+    run_outputs: Sequence[tuple[str, str]] = (),
+) -> list[_Output]:
+    """The outputs of a covered scene (spec A.0), with their predictions placed, per time.
+
+    First the outputs that have rows here, in first-appearance order; then the other
+    ``run_outputs`` whose agent is an agent of the scene, in run order. Those have no
+    prediction, and their ground truth counts as missed.
+    """
     outputs: dict[tuple[str, str], _Output] = {}
     for row, box in enumerate(boxes):
         key = (box.agent_id, box.source)
@@ -334,7 +439,38 @@ def _collect_outputs(scene: Scene, boxes: Sequence[PredictionBox]) -> list[_Outp
             output = _Output(agent_id=box.agent_id, source=box.source)
             outputs[key] = output
         output.preds.setdefault(box.time_us, []).append(_place_pred(scene, row, box))
+    agents = {agent.agent_id for agent in scene.agents}
+    for agent_id, source in run_outputs:
+        if (agent_id, source) not in outputs and agent_id in agents:
+            outputs[(agent_id, source)] = _Output(agent_id=agent_id, source=source)
     return list(outputs.values())
+
+
+def run_outputs(predictions_root: Path, run_id: str) -> tuple[tuple[str, str], ...]:
+    """The outputs of a run (spec A.0): ``(agent_id, source)`` in first-appearance order.
+
+    Read from the ``boxes.parquet`` of every scene the run covers, in ascending scene
+    id order, so the outputs of one scene do not depend on which scenes are evaluated.
+    """
+    run_dir = scene_output_dir(predictions_root, run_id, ".").resolve()
+    found: dict[tuple[str, str], None] = {}
+    if not run_dir.is_dir():
+        return ()
+    for child in sorted(run_dir.iterdir(), key=lambda path: path.name):
+        try:
+            check_scene_id(child.name)
+        except PredictionError:
+            continue
+        path = child / BOXES_FILE
+        if not path.is_file():
+            continue
+        try:
+            table = pq.read_table(scene_file(child, BOXES_FILE), columns=["agent_id", "source"])
+        except Exception as error:  # pyarrow error types are not in the stubs
+            raise EvaluationError(f"{path}: {error}") from error
+        for item in table.to_pylist():
+            found.setdefault((str(item["agent_id"]), str(item["source"])), None)
+    return tuple(found)
 
 
 def _match_output(
@@ -362,11 +498,14 @@ def _match_output(
             )
             records = output.ap_records.setdefault(index, {})
             statuses = output.ap_status.setdefault(index, {})
+            paired = output.ap_pairs.setdefault(index, {})
+            for pair in result.pairs:
+                paired[pair.pred_row] = pair.gt_row
             for pred in preds:
                 status = result.pred_status[pred.row]
                 statuses[pred.row] = status
                 records.setdefault(pred.category, []).append(
-                    _ApRecord(row=pred.row, score=pred.score, status=status)
+                    _ApRecord(row=pred.row, score=pred.score, status=status, time_us=time_us)
                 )
 
 
@@ -379,6 +518,21 @@ def _ap_records(records: Sequence[_ApRecord]) -> list[tuple[float, str]]:
     a stable sort, so handing it the file order makes ties follow the file.
     """
     return [(item.score, item.status) for item in sorted(records, key=lambda item: item.row)]
+
+
+def _per_frame_records(records: Sequence[_ApRecord]) -> list[tuple[float, str]]:
+    """``(score, status)`` in the per-frame order of spec A.5: time, then score, then row."""
+    ordered = sorted(records, key=lambda item: (item.time_us, -item.score, item.row))
+    return [(item.score, item.status) for item in ordered]
+
+
+def scene_average_precision(
+    records: Sequence[_ApRecord], n_gt: int, ranking_scope: str
+) -> float | None:
+    """The per-scene AP of one category (spec A.5) under ``ranking_scope``."""
+    if ranking_scope == "per_frame":
+        return average_precision(_per_frame_records(records), n_gt, presorted=True)
+    return average_precision(_ap_records(records), n_gt)
 
 
 def _ap_table(
@@ -404,21 +558,31 @@ def _ap_table(
     categories = set(meta.categories) | set(n_gt)
     for placed in output.all_preds():
         categories.add(placed.box.category)
+    for reserved in AP_MEAN_KEYS:
+        if reserved in categories:
+            # The table has one entry per class beside these two keys; a class with
+            # one of their names would be overwritten by the mean, silently.
+            raise EvaluationError(
+                f"category {reserved!r} cannot be evaluated: the name is reserved for the "
+                "mean in the `ap` table of metrics.json; rename the class"
+            )
     table: dict[str, object] = {}
     for index, threshold in enumerate(config.thresholds):
         records = output.ap_records.get(index, {})
         per_category: dict[str, object] = {}
         values: list[float] = []
         for category in sorted(categories):
-            ap = average_precision(_ap_records(records.get(category, ())), n_gt.get(category, 0))
+            ap = scene_average_precision(
+                records.get(category, ()), n_gt.get(category, 0), config.ranking_scope
+            )
             per_category[category] = ap
             if ap is not None:
                 values.append(ap)
-        per_category["mean"] = sum(values) / len(values) if values else None
+        per_category["mean"] = mean_ap(values)
         model = [
             cast(float, per_category[c]) for c in meta.categories if per_category.get(c) is not None
         ]
-        per_category["mean_model"] = sum(model) / len(model) if model else None
+        per_category["mean_model"] = mean_ap(model)
         table[threshold_key(threshold)] = per_category
     return table
 
@@ -537,13 +701,32 @@ def _cooperative_columns(
     outputs: Mapping[tuple[str, str], _Output],
     agent_id: str,
     gt_by_time: Mapping[int, Sequence[_PlacedGt]],
+    fused_by_time: Mapping[int, Sequence[_PlacedGt]] | None = None,
 ) -> dict[int, GtCooperative]:
-    """The §Cooperative views columns per ground-truth row of ``agent_id``."""
+    """The cooperative columns of spec A.9 per ground-truth row of ``agent_id``.
+
+    The boxes are those of the fused output's ground-truth set when the agent has one
+    (``fused_by_time``), else its own. A box another agent added has no single status,
+    is seen by another agent by definition, and its ``other_agent_tp`` is that agent's
+    ``single`` status on it.
+    """
     columns: dict[int, GtCooperative] = {}
-    for time_us, placed_gt in gt_by_time.items():
-        others = _other_boxes(scene, agent_id, time_us, placed_gt)
-        for item in placed_gt:
+    boxes_by_time = fused_by_time if fused_by_time is not None else gt_by_time
+    for time_us, own in gt_by_time.items():
+        others = _other_boxes(scene, agent_id, time_us, own)
+        for item in boxes_by_time.get(time_us, ()):
             row = item.box.row
+            if item.added_by is not None:
+                status = _gt_status(outputs, item.added_by, SOURCE_SINGLE, time_us, row)
+                columns[row] = GtCooperative(
+                    status_single=None,
+                    status_fused=_gt_status(outputs, agent_id, SOURCE_FUSED, time_us, row),
+                    seen_by_other_gt=True,
+                    other_kind=None,
+                    other_agent_tp=None if status is None else status == TP,
+                    added_by=item.added_by,
+                )
+                continue
             paired = others[row]
             kinds = {other.kind for other in paired}
             other_kind: str | None = None
@@ -602,6 +785,7 @@ def _match_rows(
     rows: list[dict[str, object]] = []
     indices = range(len(config.thresholds))
     gt_status_at: dict[str, object] = {status_at_column(index): None for index in indices}
+    gt_status_at.update({gt_row_at_column(index): None for index in indices})
     for time_us, placed_gt in gt_by_time.items():
         result = output.display[time_us]
         by_gt = {pair.gt_row: pair for pair in result.pairs}
@@ -639,6 +823,7 @@ def _match_rows(
                     "seen_by_other_gt": coop.seen_by_other_gt,
                     "other_agent_tp": coop.other_agent_tp,
                     **gt_status_at,
+                    GT_AGENT_COLUMN: item.annotation.agent_id,
                 }
             )
         for placed in output.preds.get(time_us, ()):
@@ -670,6 +855,11 @@ def _match_rows(
                         status_at_column(index): output.ap_status[index][pred_row]
                         for index in indices
                     },
+                    **{
+                        gt_row_at_column(index): output.ap_pairs.get(index, {}).get(pred_row)
+                        for index in indices
+                    },
+                    GT_AGENT_COLUMN: None,
                 }
             )
     return rows, next_pair_id
@@ -682,8 +872,12 @@ def evaluate_scene(
     config: EvalConfig,
     *,
     created_utc: str,
+    outputs: Sequence[tuple[str, str]] = (),
 ) -> SceneEvaluation:
     """Match every output of ``boxes`` against ``scene`` and build both result objects.
+
+    ``outputs`` are the outputs of the run (:func:`run_outputs`): those without a row
+    in this scene are evaluated too, with no prediction (spec A.0).
 
     ``boxes`` are the rows of ``boxes.parquet`` in file order, already checked by
     :func:`~coperceive.evaluation.predictions.validate_boxes`. Outputs are
@@ -693,23 +887,36 @@ def evaluate_scene(
     agent once every output is matched, since ``other_agent_tp`` reads another
     output's statuses.
     """
-    outputs = _collect_outputs(scene, boxes)
-    by_key = {output.key: output for output in outputs}
+    collected = _collect_outputs(scene, boxes, run_outputs=outputs)
+    by_key = {output.key: output for output in collected}
     gt_by_agent: dict[str, dict[int, list[_PlacedGt]]] = {}
-    for output in outputs:
+    gt_by_output: dict[tuple[str, str], dict[int, list[_PlacedGt]]] = {}
+    for output in collected:
         if output.agent_id not in gt_by_agent:
             gt_by_agent[output.agent_id] = _place_gt(scene, output.agent_id, config.gt_class_map)
-        _match_output(output, gt_by_agent[output.agent_id], config)
+        own = gt_by_agent[output.agent_id]
+        # spec A.4: a fused output is scored against the connected union by default.
+        if output.source == SOURCE_FUSED and config.gt_scope == "connected_union":
+            gt_by_output[output.key] = _union_gt(scene, output.agent_id, own, config)
+        else:
+            gt_by_output[output.key] = own
+        _match_output(output, gt_by_output[output.key], config)
     cooperative_by_agent = {
-        agent_id: _cooperative_columns(scene, by_key, agent_id, gt_by_time)
+        agent_id: _cooperative_columns(
+            scene, by_key, agent_id, gt_by_time, gt_by_output.get((agent_id, SOURCE_FUSED))
+        )
         for agent_id, gt_by_time in gt_by_agent.items()
     }
     matches: list[dict[str, object]] = []
     metrics_outputs: list[dict[str, object]] = []
     next_pair_id = 0
-    for output in outputs:
-        gt_by_time = gt_by_agent[output.agent_id]
+    for output in collected:
+        gt_by_time = gt_by_output[output.key]
         cooperative = cooperative_by_agent[output.agent_id]
+        both = (output.agent_id, SOURCE_SINGLE) in by_key and (
+            output.agent_id,
+            SOURCE_FUSED,
+        ) in by_key
         rows, next_pair_id = _match_rows(output, gt_by_time, cooperative, config, next_pair_id)
         matches.extend(rows)
         samples, totals = _samples_and_totals(output, gt_by_time)
@@ -721,7 +928,7 @@ def evaluate_scene(
                 "totals": totals,
                 "ap": _ap_table(output, gt_by_time, meta, config),
                 "tp_errors": _tp_errors(output, gt_by_time),
-                "cooperative": cooperative_counts(tuple(cooperative.values())),
+                "cooperative": cooperative_counts(tuple(cooperative.values()), both_outputs=both),
             }
         )
     metrics: dict[str, object] = {
@@ -732,12 +939,14 @@ def evaluate_scene(
         "created_utc": created_utc,
         "coperceive_version": coperceive_version(),
         "config": config_json(config),
+        # spec A.12: every AP of the iou_bev criterion is a bird's-eye-view AP.
+        "iou": "bev" if config.criterion == "iou_bev" else None,
         "outputs": metrics_outputs,
     }
     return SceneEvaluation(
         matches=tuple(matches),
         metrics=cast(dict[str, object], _json_safe(metrics)),
-        warnings=_category_warnings(outputs, gt_by_agent, meta),
+        warnings=_category_warnings(collected, gt_by_agent, meta),
     )
 
 
@@ -895,6 +1104,7 @@ def evaluate_run(
     # A plugin run that stopped early (model-plugin spec §Partial runs) is evaluated on its
     # finished scenes and says so in every metrics.json it writes.
     partial = (meta.provenance or {}).get("status") == "partial"
+    outputs = run_outputs(predictions_root, run_id)
     missing = [
         scene_id
         for scene_id in selected
@@ -913,7 +1123,9 @@ def evaluate_run(
             scene = read_scene(scene_dir)
             boxes = read_boxes(predictions_root, run_id, scene_id)
             validate_boxes(scene, meta, boxes)
-            result = evaluate_scene(scene, meta, boxes, config, created_utc=created_utc)
+            result = evaluate_scene(
+                scene, meta, boxes, config, created_utc=created_utc, outputs=outputs
+            )
             result.metrics["run_status"] = "partial" if partial else "complete"
             if partial:
                 result.metrics["missing_scenes"] = list(missing)

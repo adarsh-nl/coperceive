@@ -251,7 +251,7 @@ test("partitions are grouped one chip per name with GPU types inside", () => {
 });
 
 test("a kind-none cluster with infinite walltimes saves after detection, no manual edits", () => {
-  // Real-cluster shape: Slurm, every partition reports max_time "infinite",
+  // The real cluster login shape: Slurm, every partition reports max_time "infinite",
   // detection finds coperceive only through the interpreter the user typed first.
   const interpreter = "/home/alice/coperceive-app/.venv/bin/python";
   const infinitePartitions: DiscoveredPartition[] = [
@@ -290,8 +290,8 @@ test("a kind-none cluster with infinite walltimes saves after detection, no manu
     scratch: { path: "/local/alice", writable: true, free_bytes: null, quota: null, detail: "" },
   });
 
-  const entry = emptyEntry("cluster-a");
-  entry.profile.ssh_alias = "cluster-a";
+  const entry = emptyEntry("cluster-login");
+  entry.profile.ssh_alias = "cluster-login";
   // The user types the interpreter BEFORE pressing "Use detected settings".
   entry.profile.environment.interpreter = interpreter;
   entry.profile.data_roots = ["/home/alice/data"];

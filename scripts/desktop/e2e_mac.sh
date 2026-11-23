@@ -2236,8 +2236,9 @@ echo ""
 echo "--- Step 5d: Update banner from a mock latest.json ---"
 export UPDATE_PORT_FILE="${TMP_DIR}/update.port"
 export UPDATE_LOG_FILE="${TMP_DIR}/update-hits.log"
-rm -f "${UPDATE_PORT_FILE}" "${UPDATE_LOG_FILE}"
-python3 - << 'PY' &
+UPDATE_SERVER_ERR="${TMP_DIR}/update-server.stderr.log"
+rm -f "${UPDATE_PORT_FILE}" "${UPDATE_PORT_FILE}.tmp" "${UPDATE_LOG_FILE}" "${UPDATE_SERVER_ERR}"
+python3 - << 'PY' 2>"${UPDATE_SERVER_ERR}" &
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2261,6 +2262,13 @@ body = json.dumps(
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/healthz":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
         with open(log_file, "a", encoding="utf-8") as handle:
             handle.write(self.path + "\n")
         if ".tar.gz" in self.path or ".app" in self.path:
@@ -2322,28 +2330,41 @@ class Handler(BaseHTTPRequestHandler):
 
 
 server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-with open(port_file, "w", encoding="utf-8") as handle:
+tmp_port_file = port_file + ".tmp"
+with open(tmp_port_file, "w", encoding="utf-8") as handle:
     handle.write(str(server.server_address[1]))
+os.replace(tmp_port_file, port_file)
 server.serve_forever()
 PY
 UPDATE_SERVER_PID=$!
-for i in {1..40}; do
-    if [ -s "${UPDATE_PORT_FILE}" ]; then
-        break
-    fi
+UPDATE_WAIT_LIMIT=30
+UPDATE_WAIT_START=${SECONDS}
+UPDATE_DEADLINE=$((UPDATE_WAIT_START + UPDATE_WAIT_LIMIT))
+UPDATE_READY=0
+while [ "${SECONDS}" -lt "${UPDATE_DEADLINE}" ]; do
     if ! kill -0 "${UPDATE_SERVER_PID}" 2>/dev/null; then
         echo "Error: mock update server exited" >&2
+        cat "${UPDATE_SERVER_ERR}" >&2 || true
         exit 17
+    fi
+    if [ -s "${UPDATE_PORT_FILE}" ]; then
+        CANDIDATE_PORT="$(cat "${UPDATE_PORT_FILE}")"
+        if curl -fsS --max-time 1 "http://127.0.0.1:${CANDIDATE_PORT}/healthz" >/dev/null 2>&1; then
+            UPDATE_READY=1
+            break
+        fi
     fi
     sleep 0.1
 done
-if [ ! -s "${UPDATE_PORT_FILE}" ]; then
-    echo "Error: mock update server did not bind" >&2
+if [ "${UPDATE_READY}" -ne 1 ]; then
+    echo "Error: mock update server did not bind within ${UPDATE_WAIT_LIMIT}s" >&2
+    cat "${UPDATE_SERVER_ERR}" >&2 || true
     exit 17
 fi
+UPDATE_WAIT_ELAPSED=$((SECONDS - UPDATE_WAIT_START))
 UPDATE_PORT=$(cat "${UPDATE_PORT_FILE}")
 export COPERCEIVE_UPDATE_URL="http://127.0.0.1:${UPDATE_PORT}/latest.json"
-echo "Step 5d mock latest.json at ${COPERCEIVE_UPDATE_URL}"
+echo "Step 5d mock latest.json at ${COPERCEIVE_UPDATE_URL} (ready in ${UPDATE_WAIT_ELAPSED}s)"
 
 osascript <<EOF || true
 tell application "System Events"
@@ -3313,9 +3334,9 @@ def focus_and_clear(field_id):
     wait_for_field_value(field_id, "", f"Clearing #{field_id}")
 
 cases = [
-    ("hpc-user", "alicelowercase"),
+    ("hpc-user", "cluster-user"),
     ("hpc-partition", "ps"),
-    ("hpc-host", "login1"),
+    ("hpc-host", "cluster-login"),
 ]
 
 for field_id, text in cases:

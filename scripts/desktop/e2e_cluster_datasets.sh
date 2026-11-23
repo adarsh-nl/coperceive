@@ -110,4 +110,79 @@ PY
 AFTER="$(find "${RAW}" -type f | sort | xargs sha256sum)"
 [ "${BEFORE}" = "${AFTER}" ] || fail "raw tree changed"
 echo "Step CD-7 verified: raw tree byte-identical"
+
+# --- V2V4Real-shaped split: detect names its splits and index reads every scene ---
+# The layout the Servers browser recognises: <root>/test/testoutput_CAV_data_*/<0|1>/,
+# two vehicle agents, no camera images. Detect counted 9 scene directories; index
+# must return the same 9 scenes (the HPC workspace showed 0 for this folder).
+RAW_V2V4REAL="${TMP_DIR}/raw/v2v4real"
+"${PYTHON}" - "${RAW_V2V4REAL}" <<'PY'
+import sys
+from pathlib import Path
+root, split = Path(sys.argv[1]), "test"
+pcd = ("# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\nFIELDS x y z rgb\n"
+       "SIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 1 1\nWIDTH 1\nHEIGHT 1\n"
+       "VIEWPOINT 0 0 0 1 0 0 0\nPOINTS 1\nDATA ascii\n0.000000 0.000000 0.000000 0\n")
+for index in range(9):
+    scene = root / split / f"testoutput_CAV_data_2022-03-15-09-54-{40 + index:02d}_0"
+    for agent in ("0", "1"):
+        folder = scene / agent
+        folder.mkdir(parents=True)
+        for frame in (0, 1, 2):
+            (folder / f"{frame:06d}.yaml").write_text(
+                "ego_speed: 5.0\n"
+                "gps: [39.9, -83.0, 226.1, 2.6, -0.0003, 0.0047]\n"
+                f"lidar_pose: [{agent}.0, {frame}.0, 1.9, 0.0, 90.0, 0.0]\n"
+                f"true_ego_pos: [{agent}.0, {frame}.0, 0.0, 0.0, 90.0, 0.0]\n"
+                "vehicles:\n  650:\n    angle: [0.0, 90.0, 0.0]\n    ass_id: -1\n"
+                "    center: [0.0, 0.0, 0.75]\n    extent: [2.4, 1.0, 0.75]\n"
+                f"    location: [{agent}.0, {frame}.0, 0.0]\n    speed: 0.0\n"
+            )
+            (folder / f"{frame:06d}.pcd").write_text(pcd)
+PY
+"${PYTHON}" -m coperceive.cli dataset detect --path "${RAW_V2V4REAL}" > "${TMP_DIR}/detect-v2v4real.json"
+"${PYTHON}" -m coperceive.cli dataset index --adapter v2v4real --raw-root "${RAW_V2V4REAL}" --split test > "${TMP_DIR}/index-v2v4real.json"
+"${PYTHON}" - "${TMP_DIR}/detect-v2v4real.json" "${TMP_DIR}/index-v2v4real.json" <<'PY'
+import json, sys
+detect = json.load(open(sys.argv[1]))
+index = json.load(open(sys.argv[2]))
+assert detect["status"] == "ok" and detect["adapter"] == "v2v4real", detect
+assert detect["split"] == "test" and detect["scene_count"] == 9, detect
+assert detect["splits"] == [{"name": "test", "scene_count": 9, "adapter": "v2v4real"}], detect["splits"]
+assert index["scene_count"] == 9 and index["errors"] == [], index
+assert index["split"] == "test" and len(index["scenes"]) == 9, index["scenes"]
+assert all(scene["agent_count"] == 2 for scene in index["scenes"]), index["scenes"]
+print("Step CD-8 verified: V2V4Real-shaped split -> detect v2v4real/test/9 scenes, "
+      "splits lists the recognised split, index reads the same 9 scenes with no errors")
+PY
+# The reported symptom without inventing a cluster fault: the same
+# V2V4Real-shaped tree with its agent folders present but no frame files. Detect
+# counts the 9 scene directories; index can read none of them and returns 0
+# scenes plus 9 per-scene errors. On the old app this rendered exactly
+# "V2V4REAL test | 0 scenes / No scenes in this split" while the sidebar kept
+# detect's 9. The view now names the errors and offers a retry; the cluster-side
+# reason the real tree's scenes were unreadable is still unverified.
+RAW_V2V4REAL_EMPTY="${TMP_DIR}/raw/v2v4real-empty"
+"${PYTHON}" - "${RAW_V2V4REAL_EMPTY}" <<'PY'
+import sys
+from pathlib import Path
+root, split = Path(sys.argv[1]), "test"
+for index in range(9):
+    scene = root / split / f"testoutput_CAV_data_2022-03-15-09-54-{40 + index:02d}_0"
+    for agent in ("0", "1"):
+        (scene / agent).mkdir(parents=True)
+PY
+"${PYTHON}" -m coperceive.cli dataset detect --path "${RAW_V2V4REAL_EMPTY}" > "${TMP_DIR}/detect-v2v4real-empty.json"
+"${PYTHON}" -m coperceive.cli dataset index --adapter v2v4real --raw-root "${RAW_V2V4REAL_EMPTY}" --split test > "${TMP_DIR}/index-v2v4real-empty.json"
+"${PYTHON}" - "${TMP_DIR}/detect-v2v4real-empty.json" "${TMP_DIR}/index-v2v4real-empty.json" <<'PY'
+import json, sys
+detect = json.load(open(sys.argv[1]))
+index = json.load(open(sys.argv[2]))
+assert detect["status"] == "ok" and detect["scene_count"] == 9, detect
+assert index["scene_count"] == 0 and len(index["errors"]) == 9, index
+assert all("no samples found with streams.poses" in line for line in index["errors"]), index["errors"]
+print("Step CD-9 verified: V2V4Real-shaped tree with no frame files -> detect 9 scenes / "
+      "index 0 scenes + 9 per-scene errors, the detect/index disagreement the view now names "
+      "(the old view showed only 'No scenes in this split.')")
+PY
 echo "E2E_DATASET_MARK: cluster datasets backend verified"

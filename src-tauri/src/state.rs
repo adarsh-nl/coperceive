@@ -456,6 +456,20 @@ pub struct AppPersistentState {
     #[serde(default = "default_camera_strip")]
     pub camera_strip: String,
 
+    /// Seconds of playback the viewer buffers ahead (Settings → Viewer →
+    /// "Streaming buffer"): 1, 3 or 5. 3 by default.
+    #[serde(default = "default_buffer_target_seconds")]
+    pub buffer_target_seconds: u64,
+
+    /// Cap of the viewer's in-memory frame and point cache in bytes (Settings →
+    /// Viewer → "Client memory limit"): 256, 512 or 1024 MB. 512 MB by default.
+    #[serde(default = "default_client_memory_limit_bytes")]
+    pub client_memory_limit_bytes: u64,
+
+    /// Show the small streaming stats line under the viewer's status line. Off
+    /// by default: the line is a diagnostic, not part of the normal view.
+    #[serde(default)]
+    pub show_stream_stats: bool,
     /// Settings → Viewer → Style. "classic" is today's layout and the default.
     #[serde(default = "default_viewer_style")]
     pub viewer_style: String,
@@ -487,6 +501,38 @@ fn default_camera_strip() -> String {
 pub fn camera_strip_from(value: &serde_json::Value) -> Option<String> {
     let text = value.as_str()?;
     CAMERA_STRIP_MODES.contains(&text).then(|| text.to_string())
+}
+
+/// The buffer targets "Streaming buffer" may hold, in seconds.
+pub const BUFFER_TARGET_SECONDS_CHOICES: [u64; 3] = [1, 3, 5];
+
+/// The client memory limits "Client memory limit" may hold, in bytes.
+pub const CLIENT_MEMORY_LIMIT_CHOICES_BYTES: [u64; 3] =
+    [256 * 1024 * 1024, 512 * 1024 * 1024, 1024 * 1024 * 1024];
+
+fn default_buffer_target_seconds() -> u64 {
+    3
+}
+
+fn default_client_memory_limit_bytes() -> u64 {
+    512 * 1024 * 1024
+}
+
+/// A buffer target from a settings update, when it is one of [`BUFFER_TARGET_SECONDS_CHOICES`].
+pub fn buffer_target_seconds_from(value: &serde_json::Value) -> Option<u64> {
+    let seconds = value.as_u64()?;
+    BUFFER_TARGET_SECONDS_CHOICES
+        .contains(&seconds)
+        .then_some(seconds)
+}
+
+/// A client memory limit from a settings update, when it is one of
+/// [`CLIENT_MEMORY_LIMIT_CHOICES_BYTES`].
+pub fn client_memory_limit_bytes_from(value: &serde_json::Value) -> Option<u64> {
+    let bytes = value.as_u64()?;
+    CLIENT_MEMORY_LIMIT_CHOICES_BYTES
+        .contains(&bytes)
+        .then_some(bytes)
 }
 
 fn default_viewer_style() -> String {
@@ -550,6 +596,10 @@ pub struct ViewerPreferences {
     pub theme_override: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_loop: Option<bool>,
+    /// Streaming settings chosen in the main window's Settings; the viewer only reads them.
+    pub buffer_target_seconds: u64,
+    pub client_memory_limit_bytes: u64,
+    pub show_stream_stats: bool,
 }
 
 /// Projects only viewer UI preferences out of [`AppPersistentState`].
@@ -561,6 +611,9 @@ pub fn viewer_preferences(persistent: &AppPersistentState) -> ViewerPreferences 
         cinema_drift: persistent.cinema_drift,
         theme_override: persistent.theme_override.clone(),
         last_loop: persistent.last_loop,
+        buffer_target_seconds: persistent.buffer_target_seconds,
+        client_memory_limit_bytes: persistent.client_memory_limit_bytes,
+        show_stream_stats: persistent.show_stream_stats,
     }
 }
 
@@ -665,6 +718,18 @@ pub fn apply_state_patch(
             if let Ok(ws) = serde_json::from_value::<WindowState>(win.clone()) {
                 persistent.window_state = Some(ws);
             }
+        }
+        if let Some(seconds) = val.get("buffer_target_seconds").and_then(buffer_target_seconds_from) {
+            persistent.buffer_target_seconds = seconds;
+        }
+        if let Some(bytes) = val
+            .get("client_memory_limit_bytes")
+            .and_then(client_memory_limit_bytes_from)
+        {
+            persistent.client_memory_limit_bytes = bytes;
+        }
+        if let Some(show) = val.get("show_stream_stats").and_then(|v| v.as_bool()) {
+            persistent.show_stream_stats = show;
         }
     }
 
@@ -777,6 +842,9 @@ impl Default for AppPersistentState {
             remote_view_cache_bytes: DEFAULT_REMOTE_VIEW_CACHE_BYTES,
             dataset_grouping: default_dataset_grouping(),
             camera_strip: default_camera_strip(),
+            buffer_target_seconds: default_buffer_target_seconds(),
+            client_memory_limit_bytes: default_client_memory_limit_bytes(),
+            show_stream_stats: false,
             viewer_style: default_viewer_style(),
             cinema_drift: true,
             welcome_card_dismissed: false,
@@ -1029,6 +1097,49 @@ pub mod tests {
     }
 
     #[test]
+    fn streaming_settings_default_to_3s_512mb_and_no_stats_line() {
+        let defaults = AppPersistentState::default();
+        assert_eq!(defaults.buffer_target_seconds, 3);
+        assert_eq!(defaults.client_memory_limit_bytes, 512 * 1024 * 1024);
+        assert!(!defaults.show_stream_stats);
+        // A state.json written before the settings existed reads as the defaults.
+        let old: AppPersistentState = serde_json::from_str("{}").expect("old state");
+        assert_eq!(old.buffer_target_seconds, 3);
+        assert_eq!(old.client_memory_limit_bytes, 512 * 1024 * 1024);
+        assert!(!old.show_stream_stats);
+        for seconds in BUFFER_TARGET_SECONDS_CHOICES {
+            assert_eq!(
+                buffer_target_seconds_from(&serde_json::json!(seconds)),
+                Some(seconds)
+            );
+        }
+        for value in [
+            serde_json::json!(0),
+            serde_json::json!(2),
+            serde_json::json!(60),
+            serde_json::json!("3"),
+            serde_json::Value::Null,
+        ] {
+            assert_eq!(buffer_target_seconds_from(&value), None, "{value}");
+        }
+        for bytes in CLIENT_MEMORY_LIMIT_CHOICES_BYTES {
+            assert_eq!(
+                client_memory_limit_bytes_from(&serde_json::json!(bytes)),
+                Some(bytes)
+            );
+        }
+        for value in [
+            serde_json::json!(0),
+            serde_json::json!(100 * 1024 * 1024),
+            serde_json::json!(2u64 * 1024 * 1024 * 1024),
+            serde_json::json!("512"),
+            serde_json::Value::Null,
+        ] {
+            assert_eq!(client_memory_limit_bytes_from(&value), None, "{value}");
+        }
+    }
+
+    #[test]
     fn dataset_grouping_defaults_to_none_and_accepts_only_known_values() {
         assert_eq!(AppPersistentState::default().dataset_grouping, "none");
         // A state.json written before the setting existed reads as "none".
@@ -1141,6 +1252,9 @@ pub mod tests {
             remote_view_cache_bytes: 512 * 1024 * 1024,
             dataset_grouping: "day".into(),
             camera_strip: "agent".into(),
+            buffer_target_seconds: 5,
+            client_memory_limit_bytes: 1024 * 1024 * 1024,
+            show_stream_stats: true,
             viewer_style: "cinema".into(),
             cinema_drift: false,
             welcome_card_dismissed: true,
@@ -1668,6 +1782,52 @@ pub mod tests {
         .expect("full scope should apply");
         assert!(!s.reopen_last_session);
         assert!(s.auto_next_scene);
+    }
+
+    /// Release-sync guard: the v0.1.2 streaming settings are written from the main
+    /// window through the Full scope, refused from the viewer window, and readable
+    /// by the viewer through its preferences projection.
+    #[test]
+    fn test_streaming_settings_patch_scopes_and_viewer_projection() {
+        let mut s = AppPersistentState::default();
+        apply_state_patch(
+            &mut s,
+            &serde_json::json!({
+                "buffer_target_seconds": 5,
+                "client_memory_limit_bytes": 268435456u64,
+                "show_stream_stats": true,
+            }),
+            StatePatchScope::Full,
+        )
+        .expect("full scope should apply streaming settings");
+        assert_eq!(s.buffer_target_seconds, 5);
+        assert_eq!(s.client_memory_limit_bytes, 268435456);
+        assert!(s.show_stream_stats);
+
+        // Invalid values are ignored, as the controller did before.
+        apply_state_patch(
+            &mut s,
+            &serde_json::json!({ "buffer_target_seconds": 60, "client_memory_limit_bytes": 8192 }),
+            StatePatchScope::Full,
+        )
+        .expect("invalid values are dropped, not errors");
+        assert_eq!(s.buffer_target_seconds, 5);
+        assert_eq!(s.client_memory_limit_bytes, 268435456);
+
+        assert!(
+            apply_state_patch(
+                &mut s,
+                &serde_json::json!({ "show_stream_stats": false }),
+                StatePatchScope::ViewerOnly,
+            )
+            .is_err(),
+            "viewer scope must not write streaming settings"
+        );
+
+        let prefs = viewer_preferences(&s);
+        assert_eq!(prefs.buffer_target_seconds, 5);
+        assert_eq!(prefs.client_memory_limit_bytes, 268435456);
+        assert!(prefs.show_stream_stats);
     }
 
     #[test]

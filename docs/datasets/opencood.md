@@ -1,6 +1,28 @@
-# OPV2V and V2XSet (OpenCOOD layout)
+# OPV2V and V2XSet — details
+
+The short pages are [OPV2V](opv2v.md) and [V2XSet](v2xset.md).
 
 Two CARLA-based cooperative perception datasets with the same on-disk layout, read through the builtin manifests `opv2v` and `v2xset` (`coperceive/adapters/builtin/`). The manifest rules they needed beyond Griffin's are [ADR 0012](../adr/0012-left-handed-sources.md). Nothing in this page or in the repository holds dataset bytes.
+
+## Licence, citation and download
+
+### OPV2V
+
+**Licence.** See [Licence: unknown](#licence-unknown) below for data uncertainty, software terms, copyright and project restrictions.
+
+**Citation.** Use the canonical arXiv entry on the [OPV2V page](opv2v.md#citation).
+
+**Download.** [Authors' UCLA Box data host](https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V) (linked from <https://mobility-lab.seas.ucla.edu/opv2v/>, the authors' page, which links the UCLA Box folder).
+
+### V2XSet
+
+**Licence.** See [Licence: unknown](#licence-unknown) below for data uncertainty, software terms, copyright and project restrictions.
+
+**Citation.** Use the canonical arXiv entry on the [V2XSet page](v2xset.md#citation).
+
+**Download.** [Authors' UCLA Box data host](https://ucla.app.box.com/v/UCLA-MobilityLab-V2XVIT) (linked from <https://github.com/DerrickXuNu/v2x-vit>, whose README links the UCLA Box V2X-ViT data).
+
+Upstream asset terms have not been checked.
 
 ## Licence: unknown
 
@@ -18,7 +40,7 @@ Neither dataset publishes a licence. The OPV2V page states "Copyright © 2021 UC
 <split>/<scene>/<agent>/NNNNNN_cameraK.png   # 800x600
 ```
 
-Scenes are named by their collection time; agents by their CARLA actor id. In V2XSet the roadside unit is the agent directory `-1` (29 of 58 scenes). On the HPC: `/data/opencood/opv2v` (train 44, validate 9, test 16, test_culver_city 4 scenes) and `/data/opencood/v2xset` (train 33, validate 6, test 19).
+Scenes are named by their collection time; agents by their CARLA actor id. In V2XSet the roadside unit is the agent directory `-1` (29 of 58 scenes). On the HPC: `/data/opv2v` (train 44, validate 9, test 16, test_culver_city 4 scenes) and `/data/v2xset` (train 33, validate 6, test 19).
 
 ## Conventions, from public documentation only
 
@@ -32,10 +54,10 @@ Scenes are named by their collection time; agents by their CARLA actor id. In V2
 ## Commands
 
 ```bash
-coperceive adapters check opv2v --raw-root /data/opencood/opv2v --param split=test --scenes 2021_08_20_21_10_24
+coperceive adapters check opv2v --raw-root /data/opv2v --param split=test --scenes 2021_08_20_21_10_24
 coperceive maps ingest --xodr ~/maps-src/carla-0.9.15/Town06.xodr --map-name Carla/Maps/Town06 --out MAPS   # one per town
 coperceive maps identify --maps MAPS --scenes SCENES --out scene_towns.yaml
-coperceive adapters ingest v2xset --raw-root /data/opencood/v2xset --param split=train --out SCENES --platform-table scene_towns.yaml
+coperceive adapters ingest v2xset --raw-root /data/v2xset --param split=train --out SCENES --platform-table scene_towns.yaml
 ```
 
 On the HPC the whole flow runs in `scripts/opencood/stage_viewer.py` inside a compute-node allocation (`~/scripts/slurm/opencood-viewer-stage.sbatch`), which stages into `/local/$SLURM_JOB_ID`, links the images from the dataset through `--media-root`, and prints the serve line.

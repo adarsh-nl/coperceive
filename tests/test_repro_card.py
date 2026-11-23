@@ -472,25 +472,34 @@ def _remote_run(root: Path, *, token: str, hostname: str) -> None:
     (plans / f"{PLAN_ID}.json").write_text(json.dumps(plan) + "\n", encoding="utf-8")
 
 
-def test_scrubber_removes_personal_identifiers_hosts_homes_tokens_and_emails() -> None:
+def test_scrubber_removes_runtime_identifiers_hosts_homes_tokens_and_emails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import getpass
+    import socket
+
+    monkeypatch.setattr(getpass, "getuser", lambda: "zz9999")
+    monkeypatch.setattr(socket, "gethostname", lambda: "node042.cluster.example")
+    monkeypatch.setattr(socket, "getfqdn", lambda: "node042.cluster.example")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("/home/zz9999")))
     card: dict[str, object] = {
         "environment": {
-            "user": "nanjaiyalathaa",
-            "host": "ewi.utwente.nl",
-            "home": "/home/nanjaiyalathaa",
-            "mac_home": "/Users/nanjaiyalathaa/data",
-            "email": "nanjaiyalathaa@example.org",
+            "user": "zz9999",
+            "host": "node042.cluster.example",
+            "home": "/home/zz9999",
+            "mac_home": "/Users/zz9999/data",
+            "email": "zz9999@example.org",
             "token": TOKEN,
-            "ssh": "ssh -i /home/nanjaiyalathaa/.ssh/id_ed25519 ewi.utwente.nl",
+            "ssh": "ssh -i /home/zz9999/.ssh/id_ed25519 node042.cluster.example",
         },
-        "pipeline": {"name": "nanjaiyalathaa-checkpoint"},
+        "pipeline": {"name": "zz9999-checkpoint"},
     }
     cleaned = scrub_card(card)
     text = json.dumps(cleaned)
     assert leaks(cleaned) == []
     for forbidden in (
-        "nanjaiyalathaa",
-        "ewi.utwente.nl",
+        "zz9999",
+        "node042.cluster.example",
         "/home/",
         "/Users/",
         "@example.org",

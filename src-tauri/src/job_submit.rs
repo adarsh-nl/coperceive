@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::hpc::{EnvironmentKind, JobState, ServerProfile};
 use crate::run_plan::{
     environment_lines, model_run_output_checks, quoted_command_with, strip_output_dir,
-    validate_plan_id, verify_plan_inputs, RunPlan, WORK_IN_SCRATCH,
+    validate_plan_id, verify_plan_inputs, RunPlan, EVAL_PROTOCOLS, WORK_IN_SCRATCH,
 };
 use crate::slurm_adapter::{RemoteRunner, map_slurm_state};
 use crate::ssh::shell_quote;
@@ -172,13 +172,38 @@ pub fn render_run_script(
     if !plan.nothing_submitted {
         return Err("This plan records a submission; it cannot be submitted again.".to_string());
     }
+    // A genuinely old plan is one saved before model/raw_root/media_root/work_dir were
+    // introduced (9b4d9a0): serde defaults leave all of them empty. work_dir is the marker
+    // for that schema version: every built-in plan saved since then records the job's work
+    // directory, so an empty one means the plan predates those fields. The media root is
+    // not the marker: it is optional now, and an empty one is a valid new plan.
     if plan.pipeline.source == "builtin"
         && (plan.model.trim().is_empty()
             || plan.raw_root.path.trim().is_empty()
-            || plan.media_root.path.trim().is_empty())
+            || plan.work_dir.trim().is_empty())
     {
         return Err(
-            "This saved plan predates the model/raw/media fields. Rebuild this plan before submitting."
+            "This saved plan predates the model/raw/work fields. Rebuild this plan before submitting."
+                .to_string(),
+        );
+    }
+    // A model option with no manifest default (Griffin's ckpt_root) cannot be guessed: a
+    // saved plan that records the model's option keys but no value is refused here, before
+    // anything is submitted. A plan saved before model_options existed has none recorded;
+    // its argv then lacks the option and `coperceive model run` refuses it by name.
+    if plan.pipeline.source == "builtin" && !EVAL_PROTOCOLS.contains(&plan.eval_protocol.trim())
+    {
+        return Err(
+            "This saved plan records an unknown AP protocol. Rebuild this plan before submitting."
+                .to_string(),
+        );
+    }
+    if plan.pipeline.source == "builtin"
+        && plan.model_options.iter().any(|option| option == "ckpt_root")
+        && plan.ckpt_root.path.trim().is_empty()
+    {
+        return Err(
+            "This saved plan has no ckpt_root value, but its model declares the required ckpt_root parameter. Rebuild this plan before submitting."
                 .to_string(),
         );
     }
@@ -1012,6 +1037,9 @@ mod tests {
             model: String::new(),
             raw_root: crate::run_plan::PlanArtifact::default(),
             media_root: crate::run_plan::PlanArtifact::default(),
+            ckpt_root: crate::run_plan::PlanArtifact::default(),
+            model_options: Vec::new(),
+            eval_protocol: "default".to_string(),
             work_dir: String::new(),
             staging_seconds: None,
             checkpoint: crate::run_plan::PlanArtifact {
@@ -1226,15 +1254,76 @@ mod tests {
 
     #[test]
     fn an_old_builtin_plan_asks_for_a_rebuild_instead_of_submitting() {
+        // A plan saved before 9b4d9a0 has none of model/raw_root/media_root/work_dir; the
+        // work_dir marker alone must still refuse it, with or without a media root.
         let profile = profile("ps");
         let mut plan = plan(&profile);
         plan.pipeline.source = "builtin".to_string();
         plan.model = String::new();
         plan.raw_root = crate::run_plan::PlanArtifact::default();
         plan.media_root = crate::run_plan::PlanArtifact::default();
+        plan.work_dir = String::new();
         let error = render_run_script(&profile, &plan, &SubmitOptions::default())
             .expect_err("old plan");
         assert!(error.contains("Rebuild this plan"), "{error}");
+
+        // model and raw root are present, but the plan predates work_dir: still old.
+        let mut no_work = builtin_plan(&profile);
+        no_work.work_dir = String::new();
+        let error = render_run_script(&profile, &no_work, &SubmitOptions::default())
+            .expect_err("plan without work_dir");
+        assert!(error.contains("Rebuild this plan"), "{error}");
+    }
+
+    #[test]
+    fn a_new_builtin_plan_without_a_media_root_is_accepted_and_omits_the_flag() {
+        // The CLI's --media-root is optional; the app now accepts an empty one and the job
+        // script must contain no --media-root word at all (not an empty one).
+        let profile = profile("ps");
+        let mut plan = builtin_plan(&profile);
+        plan.media_root = crate::run_plan::PlanArtifact::default();
+        let at = plan
+            .argv
+            .iter()
+            .position(|word| word == "--media-root")
+            .expect("fixture passes --media-root");
+        plan.argv.drain(at..at + 2);
+        let preview =
+            render_run_script(&profile, &plan, &SubmitOptions::default()).expect("render");
+        assert!(!preview.script.contains("--media-root"), "{}", preview.script);
+        assert!(preview.script.contains("--raw-root /data/scenes/raw"), "{}", preview.script);
+    }
+
+    #[test]
+    fn a_saved_plan_missing_its_required_ckpt_root_is_refused_before_submission() {
+        // ckpt_root has no manifest default: a plan that records the model's options but
+        // no value must be rebuilt, not submitted with a guessed path.
+        let profile = profile("ps");
+        let mut plan = builtin_plan(&profile);
+        plan.ckpt_root = crate::run_plan::PlanArtifact::default();
+        let at = plan
+            .argv
+            .iter()
+            .position(|word| word == "ckpt_root=/data/scenes/ckpts")
+            .expect("fixture passes ckpt_root");
+        plan.argv.drain(at - 1..at + 1);
+        let error = render_run_script(&profile, &plan, &SubmitOptions::default())
+            .expect_err("missing ckpt_root");
+        assert!(error.contains("ckpt_root"), "{error}");
+        assert!(error.contains("Rebuild this plan"), "{error}");
+    }
+
+    #[test]
+    fn a_legacy_plan_renders_the_protocol_and_a_default_plan_does_not() {
+        let profile = profile("ps");
+        let mut plan = builtin_plan(&profile);
+        let plain = render_run_script(&profile, &plan, &SubmitOptions::default()).expect("default");
+        assert!(!plain.script.contains("--protocol"), "{}", plain.script);
+        plan.eval_protocol = "legacy".to_string();
+        plan.argv.push("--protocol".to_string());
+        plan.argv.push("legacy".to_string());
+        let legacy = render_run_script(&profile, &plan, &SubmitOptions::default()).expect("legacy");
+        assert!(legacy.script.contains("--protocol legacy"), "{}", legacy.script);
     }
 
     #[test]
@@ -1326,6 +1415,17 @@ mod tests {
             ..crate::run_plan::PlanArtifact::default()
         };
         plan.media_root = plan.raw_root.clone();
+        plan.ckpt_root = crate::run_plan::PlanArtifact {
+            path: "/data/scenes/ckpts".to_string(),
+            kind: "folder".to_string(),
+            ..crate::run_plan::PlanArtifact::default()
+        };
+        plan.model_options = [
+            "ckpt_root", "det_json", "min_score", "nusc_root", "subset",
+        ]
+        .iter()
+        .map(|option| option.to_string())
+        .collect();
         plan.work_dir = "$SCRATCH_DIR/work".to_string();
         plan.checkpoint = crate::run_plan::PlanArtifact::default();
         plan.split = crate::run_plan::PlanArtifact {
@@ -1345,6 +1445,7 @@ mod tests {
             "--model", "vehicle-side",
             "--raw-root", "/data/scenes/raw",
             "--media-root", "/data/scenes/raw",
+            "--option", "ckpt_root=/data/scenes/ckpts",
             "--work", "$SCRATCH_DIR/work",
         ]
         .iter()

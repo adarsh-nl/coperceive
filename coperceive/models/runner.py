@@ -184,8 +184,13 @@ class PluginProcess:
         work_dir: Path,
         parent_env: Mapping[str, str],
         hello_timeout_s: float,
+        options: Mapping[str, object] | None = None,
     ) -> PluginProcess:
-        """Start the child, read ``hello`` and check §Ordering 1."""
+        """Start the child, read ``hello`` and check §Ordering 1.
+
+        ``options`` are the model's validated effective options; a ``{option:NAME}``
+        placeholder in ``commands.batch`` is rendered from them.
+        """
         python = resolve_interpreter(manifest.environment, plugin_dir=plugin_dir)
         argv = render_argv(
             manifest,
@@ -194,6 +199,7 @@ class PluginProcess:
             plugin_dir=plugin_dir,
             work_dir=work_dir,
             model=spec.key,
+            options=options,
         )
         env = child_environment(
             manifest, plugin_dir=plugin_dir, work_dir=work_dir, parent=parent_env

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from coperceive.adapters.ingest import ingest
 from coperceive.adapters.registry import list_adapters, resolve_adapter
-from coperceive.model import AgentType, Scene
+from coperceive.model import AgentType, BoxFrame, Scene
 from coperceive.store import read_scene
 from coperceive.validate import validate_root
 
@@ -69,6 +69,7 @@ def test_agents_clock_classes_and_lidar_intensity_fill() -> None:
 
     categories = {ann.category for ann in scene.annotations}
     assert categories == {"car", "pedestrian", "truck"}
+    assert all(annotation.frame is BoxFrame.WORLD for annotation in scene.annotations)
 
     # The synthetic .bin stores non-zero 4th floats, which the manifest must zero-fill.
     for _, _, _, intensity in _points(scene, "1", 0):
@@ -96,7 +97,9 @@ def test_hand_computed_v2x_real_pose_box_and_point_transforms() -> None:
     assert car.category == "car"
     assert car.center == pytest.approx((16.0, -30.0, 0.75))
 
-    # Vehicle 1's lidar point cloud transformed to world must match the reflected box centre.
+    # The upstream loader treats vehicles as world-coordinate objects, then
+    # projects them to LiDAR with the agent pose. The synthetic points must
+    # agree after Coperceive applies the provisional source-axis reflection.
     world_points = [
         pose_v1.world_from_body.apply((x, y, z)) for x, y, z, _ in _points(scene, "1", 0)
     ]

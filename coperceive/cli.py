@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import stat
 import sys
 import warnings
+import zipfile
 from pathlib import Path
 from typing import cast
 
@@ -18,6 +21,7 @@ from coperceive.model import SCHEMA_VERSION
 from coperceive.models.commands import add_parser as add_models_parser
 from coperceive.remote.commands import add_parser as add_remote_parser
 from coperceive.repro.commands import add_parser as add_repro_parser
+from coperceive.robustness.commands import add_parser as add_robustness_parser
 
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
@@ -37,6 +41,67 @@ def build_parser() -> argparse.ArgumentParser:
         "capabilities", help="Print what this build supports, as JSON (for the desktop app)."
     )
     capabilities.set_defaults(func=_capabilities)
+
+    bundle = sub.add_parser("bundle", help="Export or open a shareable result bundle.")
+    bundle_commands = bundle.add_subparsers(dest="bundle_command", required=True)
+    bundle_export = bundle_commands.add_parser("export", help="Write a .cpbundle from a run.")
+    bundle_export.add_argument("run_id")
+    bundle_export.add_argument(
+        "--root", required=True, help="Scenes root the run was evaluated on."
+    )
+    bundle_export.add_argument("--predictions", required=True, help="Predictions root.")
+    bundle_export.add_argument("-o", "--out", required=True, help="Output .cpbundle path.")
+    bundle_export.add_argument("--title", default="")
+    bundle_export.add_argument("--frames", default="worst:6")
+    bundle_export.add_argument(
+        "--dataset-id",
+        default=None,
+        help="The dataset the run was evaluated on, recorded in the bundle. A name never "
+        "allows sensor data: only a demo scene's COMPLETE.json generator marker does.",
+    )
+    bundle_export.add_argument(
+        "--include-sensor-data",
+        action="store_true",
+        help="Include LiDAR points and camera images for the included frames. Only "
+        "Coperceive demo scenes qualify, and the frames must fit the cap.",
+    )
+    bundle_export.add_argument(
+        "--sensor-max-bytes",
+        type=int,
+        default=None,
+        help="Uncompressed sensor-data cap in bytes (default 50 MiB).",
+    )
+    bundle_export.add_argument("--include-full-predictions", action="store_true")
+    bundle_export.add_argument(
+        "--marker", action="append", default=[], help="Extra identifier to scrub."
+    )
+    bundle_export.set_defaults(func=_bundle_export)
+    bundle_preview = bundle_commands.add_parser("preview", help="Print the export review as JSON.")
+    bundle_preview.add_argument("run_id")
+    bundle_preview.add_argument("--root", required=True)
+    bundle_preview.add_argument("--predictions", required=True)
+    bundle_preview.add_argument("--title", default="")
+    bundle_preview.add_argument("--frames", default="worst:6")
+    bundle_preview.add_argument("--dataset-id", default=None)
+    bundle_preview.add_argument("--include-sensor-data", action="store_true")
+    bundle_preview.add_argument("--sensor-max-bytes", type=int, default=None)
+    bundle_preview.add_argument("--include-full-predictions", action="store_true")
+    bundle_preview.add_argument("--marker", action="append", default=[])
+    bundle_preview.set_defaults(func=_bundle_preview)
+    bundle_open = bundle_commands.add_parser("open", help="Verify and open a .cpbundle read-only.")
+    bundle_open.add_argument("file")
+    bundle_open.add_argument(
+        "--data-root", default=None, help="App data folder for bundles/<sha>/."
+    )
+    bundle_open.add_argument(
+        "--library-root",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="The recipient's library root. A bundle without sensor data uses a matching "
+        "scene from here (same scene id, adapter and frame count). Repeatable.",
+    )
+    bundle_open.set_defaults(func=_bundle_open)
 
     demo = sub.add_parser("demo", help="Create the synthetic demo scene.")
     demo_sub = demo.add_subparsers(dest="demo_command")
@@ -58,7 +123,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--token-file",
         default=None,
         metavar="PATH",
-        help="Path to a file containing the bearer token. Must be mode 0600 or 0400.",
+        help="Path to a file containing the bearer token: a regular file you own (not a "
+        "symbolic link), mode 0600 or 0400.",
     )
     serve.add_argument(
         "--root-path",
@@ -93,6 +159,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-origin",
         default=None,
         help="Exact origin allowed for cross-origin requests.",
+    )
+    serve.add_argument(
+        "--bundle-info",
+        default=None,
+        metavar="PATH",
+        help="An opened result bundle's open.json. The scene summary then says whether "
+        "sensor frames are included, from the recipient's local copy, or omitted.",
     )
     serve.add_argument(
         "--remote-stream-argv",
@@ -155,6 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_models_parser(sub)
     add_remote_parser(sub)
     add_repro_parser(sub)
+    add_robustness_parser(sub)
 
     download = sub.add_parser("download", help="Download a dataset.")
     download_sub = download.add_subparsers(dest="dataset", required=True)
@@ -497,6 +571,88 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         return
     func(args)
+
+
+def _bundle_export(args: argparse.Namespace) -> None:
+    from coperceive.bundle import BundleExportRequest, export_bundle
+    from coperceive.bundle.sensor import SENSOR_MAX_BYTES
+
+    try:
+        path = export_bundle(
+            BundleExportRequest(
+                run_id=args.run_id,
+                scenes_root=Path(args.root),
+                predictions_root=Path(args.predictions),
+                out=Path(args.out),
+                title=args.title,
+                frames=args.frames,
+                dataset_id=args.dataset_id,
+                include_sensor_data=args.include_sensor_data,
+                sensor_max_bytes=(
+                    SENSOR_MAX_BYTES if args.sensor_max_bytes is None else args.sensor_max_bytes
+                ),
+                include_full_predictions=args.include_full_predictions,
+                extra_markers=tuple(args.marker),
+            )
+        )
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(f"wrote {path}")
+    with zipfile.ZipFile(path) as archive:
+        _print_omitted_links(json.loads(archive.read("bundle.json")))
+
+
+def _print_omitted_links(manifest: dict[str, object]) -> None:
+    """Say so when a prepared scene's raw camera link was left out (stderr: stdout is data)."""
+    if manifest.get("omitted_links"):
+        print("The link to the raw camera folder is not included.", file=sys.stderr)
+
+
+def _bundle_preview(args: argparse.Namespace) -> None:
+    from coperceive.bundle import BundleExportRequest, preview_bundle
+    from coperceive.bundle.sensor import SENSOR_MAX_BYTES
+
+    try:
+        manifest = preview_bundle(
+            BundleExportRequest(
+                run_id=args.run_id,
+                scenes_root=Path(args.root),
+                predictions_root=Path(args.predictions),
+                out=Path(".coperceive-preview.cpbundle"),
+                title=args.title,
+                frames=args.frames,
+                dataset_id=args.dataset_id,
+                include_sensor_data=args.include_sensor_data,
+                sensor_max_bytes=(
+                    SENSOR_MAX_BYTES if args.sensor_max_bytes is None else args.sensor_max_bytes
+                ),
+                include_full_predictions=args.include_full_predictions,
+                extra_markers=tuple(args.marker),
+            )
+        )
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    _print_omitted_links(manifest)
+    print(json.dumps(manifest, indent=2))
+
+
+def _bundle_open(args: argparse.Namespace) -> None:
+    from coperceive.bundle import open_bundle
+
+    data_root = Path(args.data_root) if args.data_root else Path.home() / ".coperceive"
+    library_roots = tuple(Path(item) for item in args.library_root)
+    try:
+        opened = open_bundle(Path(args.file), data_root=data_root, library_roots=library_roots)
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(f"opened {opened.root}")
+    print(f"run {opened.manifest.get('run_id')} schema {opened.manifest.get('schema_version')}")
+    print(f"scenes {opened.scenes_root}")
+    print(f"predictions {opened.predictions_root}")
+    print(f"report {opened.report_path}")
 
 
 def _demo_create(args: argparse.Namespace) -> None:
@@ -991,50 +1147,83 @@ def _convert_griffin(args: argparse.Namespace) -> None:
     module.convert_command(args)  # type: ignore[attr-defined]
 
 
+def _token_file_error(token_file: str, problem: str) -> SystemExit:
+    print(f"--token-file {token_file} {problem}", file=sys.stderr)
+    return SystemExit(2)
+
+
+def _read_posix_token_file(token_file: str) -> str:
+    """The token file's text, checked on the open file itself.
+
+    The file must be a regular file (not a symbolic link) owned by this user
+    with no group or other permission bits: in a shared directory another user
+    could otherwise swap in a 0600 file of their own between write and read.
+    """
+    token_path = Path(token_file)
+    if token_path.is_symlink():
+        raise _token_file_error(token_file, "is a symbolic link; pass the file itself")
+    if not token_path.is_file():
+        raise _token_file_error(token_file, "is not a file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(token_path, flags)
+    except OSError as exc:
+        raise _token_file_error(token_file, f"cannot be read: {exc.strerror}") from exc
+    with os.fdopen(descriptor, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise _token_file_error(token_file, "is not a file")
+        if info.st_uid != os.geteuid():
+            raise _token_file_error(
+                token_file, f"is owned by uid {info.st_uid}, not by you (uid {os.geteuid()})"
+            )
+        mode = info.st_mode & 0o777
+        if (mode & 0o077) != 0:
+            raise _token_file_error(
+                token_file, f"has loose permissions {oct(mode)} (must be mode 0600 or 0400)"
+            )
+        return handle.read().decode("utf-8")
+
+
+def _read_windows_token_file(token_file: str) -> str:
+    token_path = Path(token_file)
+    if not token_path.is_file():
+        raise _token_file_error(token_file, "is not a file")
+    try:
+        import subprocess
+
+        proc = subprocess.run(
+            ["icacls", str(token_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode == 0:
+            out_lower = proc.stdout.lower()
+            forbidden = [
+                "everyone",
+                "builtin\\users",
+                "nt authority\\authenticated users",
+            ]
+            for f in forbidden:
+                if f in out_lower:
+                    raise _token_file_error(token_file, f"has loose permissions allowing {f}")
+    except Exception:
+        pass
+    return token_path.read_text(encoding="utf-8")
+
+
 def _resolve_token(args: argparse.Namespace) -> str | None:
     token: str | None = None
     if getattr(args, "token_file", None) is not None:
-        token_path = Path(args.token_file)
-        if not token_path.is_file():
-            print(f"--token-file {args.token_file} is not a file", file=sys.stderr)
-            raise SystemExit(2)
         if os.name != "nt":
-            mode = token_path.stat().st_mode & 0o777
-            if (mode & 0o077) != 0:
-                print(
-                    f"--token-file {args.token_file} has loose permissions {oct(mode)} "
-                    "(must be mode 0600 or 0400)",
-                    file=sys.stderr,
-                )
-                raise SystemExit(2)
+            text = _read_posix_token_file(args.token_file)
         else:
-            try:
-                import subprocess
-
-                proc = subprocess.run(
-                    ["icacls", str(token_path)],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if proc.returncode == 0:
-                    out_lower = proc.stdout.lower()
-                    forbidden = [
-                        "everyone",
-                        "builtin\\users",
-                        "nt authority\\authenticated users",
-                    ]
-                    for f in forbidden:
-                        if f in out_lower:
-                            tf = args.token_file
-                            print(
-                                f"--token-file {tf} has loose permissions allowing {f}",
-                                file=sys.stderr,
-                            )
-                            raise SystemExit(2)
-            except Exception:
-                pass
-        token = token_path.read_text(encoding="utf-8").strip() or None
+            text = _read_windows_token_file(args.token_file)
+        token = text.strip()
+        if not token:
+            # An empty file must not turn into "no token", the anonymous mode.
+            raise _token_file_error(args.token_file, "is empty")
     elif "COPERCEIVE_TOKEN" in os.environ and os.environ["COPERCEIVE_TOKEN"].strip():
         token = os.environ["COPERCEIVE_TOKEN"].strip()
     elif getattr(args, "token", None):
@@ -1095,6 +1284,7 @@ def _serve(args: argparse.Namespace) -> None:
         remote_stream_argv=stream_argv,
         remote_cache_dir=args.remote_cache_dir,
         remote_cache_bytes=args.remote_cache_bytes,
+        bundle_info=args.bundle_info,
     )
 
 

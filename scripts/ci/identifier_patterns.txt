@@ -1,0 +1,6 @@
+# Personal and cluster-specific identifiers that must not appear in shipped code, docs, or scripts.
+# One extended regex (grep -E) per line.
+nanjaiyalatha+
+ewi\.utwente\.nl
+utwente\.nl
+hpc-head1

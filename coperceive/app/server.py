@@ -5,11 +5,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
+import dataclasses
 import functools
 import hmac
 import io
 import json
 import re
+import sqlite3
+import threading
+import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 from typing import cast
@@ -22,7 +27,16 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from starlette.datastructures import Headers
 
-from coperceive.app.jobs import CSRF_HEADER, confine, confine_media, list_jobs, open_db, run_job
+from coperceive.app import bundle_jobs
+from coperceive.app.jobs import (
+    CSRF_HEADER,
+    JobsDatabaseError,
+    confine,
+    confine_media,
+    list_jobs,
+    open_db,
+    run_job,
+)
 from coperceive.camera_images import served_candidates
 from coperceive.errors import CoperceiveError
 from coperceive.evaluation.predictions import predictions_root
@@ -50,6 +64,7 @@ from coperceive.plot import (
 )
 from coperceive.remote_view.client import StreamRefused, StreamUnavailable
 from coperceive.remote_view.scenes import RemoteScenes
+from coperceive.remote_view.stats import DEFAULT_CAPACITY, SampleStats
 from coperceive.rerun_export import RerunUnavailable, export_rerun
 from coperceive.seen_by import adapter_name, seen_by_for_scene
 from coperceive.sequence_export import (
@@ -81,6 +96,231 @@ _IMAGE_TYPES = {
 
 _STATIC = Path(__file__).resolve().parent / "static"
 _THUMBNAIL_WIDTH_MAX = 1280
+
+# The viewer's stream timing: bounded samples (a ring per statistic) and exact
+# counters, so a long session does not grow memory. The schema string versions
+# the additive JSON of GET /api/stream-stats.
+_STREAM_STATS_SCHEMA = "coperceive-stream-stats-1"
+_STREAM_STATS_CAPACITY = DEFAULT_CAPACITY
+_STREAM_ENDPOINTS = ("frame", "points", "image")
+# How often the async points endpoint checks whether the browser went away; a
+# disconnected viewer cancels the remote read it no longer needs. The read is
+# then given a moment to finish so no worker is left behind a closed request.
+_DISCONNECT_POLL_S = 0.05
+_DISCONNECT_CANCEL_WAIT_S = 1.0
+_EMPTY_TIMING: dict[str, float | int] = {"count": 0, "p50": 0.0, "p95": 0.0, "max": 0.0}
+
+
+_CSRF_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# The names a browser on this machine uses for a loopback server. A page served
+# from any other name (a DNS-rebinding domain, a LAN name) keeps that name in
+# its Host header even when it resolves to 127.0.0.1.
+_LOOPBACK_HOSTNAMES = ("127.0.0.1", "localhost", "[::1]")
+
+
+def _route_path(scope: dict[str, object]) -> str:
+    """The path Starlette's router matches: ``scope["path"]`` without ``root_path``.
+
+    Uvicorn puts ``--root-path`` in front of the request path and the router
+    strips it again (``starlette._utils.get_route_path``, mirrored here), so the
+    guard has to decide on the same path or a prefixed request skips it.
+    """
+    path = str(scope.get("path", ""))
+    root_path = str(scope.get("root_path", "") or "")
+    if not root_path or not path.startswith(root_path):
+        return path
+    if path == root_path:
+        return ""
+    if path[len(root_path)] == "/":
+        return path[len(root_path) :]
+    return path
+
+
+def _is_api(path: str) -> bool:
+    return path == "/api" or path.startswith("/api/")
+
+
+def _loopback_host(scope: dict[str, object], headers: Headers, port: int) -> bool:
+    """True when the one Host header names a loopback address on ``port``.
+
+    ``port`` 0 means the port the server listens on (``scope["server"]``), for a
+    server started on an ephemeral port.
+    """
+    values = headers.getlist("host")
+    if len(values) != 1:
+        return False
+    expected = port
+    if expected == 0:
+        server = scope.get("server")
+        listening = list(cast(Sequence[object], server)) if isinstance(server, tuple | list) else []
+        if len(listening) != 2 or not isinstance(listening[1], int):
+            return False
+        expected = listening[1]
+    host = values[0].strip().lower()
+    default_port = 443 if scope.get("scheme") == "https" else 80
+    for name in _LOOPBACK_HOSTNAMES:
+        if host == f"{name}:{expected}" or (expected == default_port and host == name):
+            return True
+    return False
+
+
+class _AuthAndCsrfMiddleware:
+    """Bearer-token and CSRF checks for ``/api`` as plain ASGI middleware.
+
+    The token is fixed when the middleware is constructed, not read back from
+    ``scope["app"]``: a request must never be able to make the guard skip
+    authentication by presenting a scope without that state. Constructing the
+    middleware without a token and without ``allow_anonymous`` fails closed with
+    a 500 for every ``/api`` request. ``allow_anonymous`` is the explicit
+    loopback-only mode ``create_app`` opts into when it has no token; the CSRF
+    check still runs in both modes. Whether a request is ``/api`` is decided on
+    the route path (``root_path`` removed), the path the router serves.
+
+    ``loopback_port`` (``coperceive serve`` without a token) also refuses, with
+    a 400, every HTTP request whose Host is not 127.0.0.1, localhost or [::1] on
+    that port, so a DNS-rebinding page cannot use the token-less API.
+    """
+
+    def __init__(
+        self,
+        app: object,
+        token: str | None = None,
+        *,
+        allow_anonymous: bool = False,
+        loopback_port: int | None = None,
+    ) -> None:
+        self.app = app
+        self.token = token
+        self.allow_anonymous = allow_anonymous
+        self.loopback_port = loopback_port
+
+    async def __call__(self, scope: dict[str, object], receive: object, send: object) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)  # type: ignore[operator]
+            return
+        headers = Headers(scope=scope)  # type: ignore[arg-type]
+        if self.loopback_port is not None and not _loopback_host(
+            scope, headers, self.loopback_port
+        ):
+            await _json_error(
+                400,
+                "host not allowed: without a token this server answers only "
+                "127.0.0.1, localhost or [::1] on its own port",
+            )(scope, receive, send)  # type: ignore[arg-type]
+            return
+        if scope.get("method") == "OPTIONS" or not _is_api(_route_path(scope)):
+            await self.app(scope, receive, send)  # type: ignore[operator]
+            return
+        if not self.token:
+            if not self.allow_anonymous:
+                await _json_error(500, "server authentication is not configured")(
+                    scope, receive, send
+                )
+                return
+        else:
+            header = headers.get("authorization", "")
+            prefix = "Bearer "
+            if not (
+                header.startswith(prefix) and hmac.compare_digest(header[len(prefix) :], self.token)
+            ):
+                await _json_error(401, "bearer token required")(scope, receive, send)
+                return
+        if scope.get("method") in _CSRF_METHODS and headers.get(CSRF_HEADER) != "1":
+            await _json_error(403, f"missing {CSRF_HEADER}: 1")(scope, receive, send)
+            return
+        await self.app(scope, receive, send)  # type: ignore[operator]
+
+
+class _StreamHttpStats:
+    """Bounded, thread-safe timings for the viewer's stream-backed HTTP requests.
+
+    ``http_ms`` is the viewer-side start→done time of ``/frame``, ``/points``
+    and ``/image`` (with the bytes each served); ``queue_ms``/``read_ms``/
+    ``transfer_ms`` come from the StreamClient, one sample per stream request it
+    answered. Counters are exact; the sample rings hold the last
+    ``_STREAM_STATS_CAPACITY`` values.
+    """
+
+    def __init__(self, capacity: int = _STREAM_STATS_CAPACITY) -> None:
+        self._lock = threading.Lock()
+        self._http_ms = SampleStats(capacity)
+        self._requests = 0
+        self._bytes = 0
+        self._active = 0
+        self._cancelled = 0
+        self._endpoint_http = {name: SampleStats(capacity) for name in _STREAM_ENDPOINTS}
+        self._endpoint_requests = dict.fromkeys(_STREAM_ENDPOINTS, 0)
+        self._endpoint_bytes = dict.fromkeys(_STREAM_ENDPOINTS, 0)
+
+    def begin(self) -> None:
+        with self._lock:
+            self._active += 1
+
+    def finish(
+        self, endpoint: str, started: float, nbytes: int = 0, *, cancelled: bool = False
+    ) -> None:
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        with self._lock:
+            self._active = max(0, self._active - 1)
+            self._requests += 1
+            self._bytes += max(0, nbytes)
+            if cancelled:
+                self._cancelled += 1
+            if endpoint in self._endpoint_http:
+                self._endpoint_requests[endpoint] += 1
+                self._endpoint_bytes[endpoint] += max(0, nbytes)
+                self._endpoint_http[endpoint].add(elapsed_ms)
+        self._http_ms.add(elapsed_ms)
+
+    def snapshot(self, client: object | None) -> dict[str, object]:
+        client_stats: dict[str, object] = {}
+        if client is not None:
+            stats_reader = getattr(client, "stats", None)
+            if callable(stats_reader):
+                try:
+                    loaded = stats_reader()
+                except Exception:  # stats must never break the endpoint
+                    loaded = None
+                if isinstance(loaded, dict):
+                    client_stats = loaded
+        with self._lock:
+            by_endpoint = {
+                name: {
+                    "requests": self._endpoint_requests[name],
+                    "bytes": self._endpoint_bytes[name],
+                    "http_ms": (
+                        self._endpoint_http[name].snapshot()
+                        if len(self._endpoint_http[name])
+                        else dict(_EMPTY_TIMING)
+                    ),
+                }
+                for name in _STREAM_ENDPOINTS
+            }
+            active = self._active
+            cancelled = self._cancelled
+            requests = self._requests
+            bytes_served = self._bytes
+            http_ms = self._http_ms.snapshot() if len(self._http_ms) else dict(_EMPTY_TIMING)
+
+        def timing(key: str) -> object:
+            return client_stats.get(key) or dict(_EMPTY_TIMING)
+
+        return {
+            "schema": _STREAM_STATS_SCHEMA,
+            "requests": requests,
+            "bytes": bytes_served,
+            "queue_ms": timing("queue_ms"),
+            "read_ms": timing("read_ms"),
+            "transfer_ms": timing("transfer_ms"),
+            "active": active,
+            "queued": int(client_stats.get("outstanding") or 0),
+            "samples": len(self._http_ms),
+            "cancelled": cancelled,
+            "http_ms": http_ms,
+            "by_endpoint": by_endpoint,
+            "remote": client_stats,
+        }
 
 
 @functools.lru_cache(maxsize=256)
@@ -181,59 +421,6 @@ class ViewSequenceRequest(BaseModel):
 
 _EXPORT_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
-_CSRF_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-
-# The names a browser on this machine uses for a loopback server. A page served
-# from any other name (a DNS-rebinding domain, a LAN name) keeps that name in
-# its Host header even when it resolves to 127.0.0.1.
-_LOOPBACK_HOSTNAMES = ("127.0.0.1", "localhost", "[::1]")
-
-
-def _route_path(scope: dict[str, object]) -> str:
-    """The path Starlette's router matches: ``scope["path"]`` without ``root_path``.
-
-    Uvicorn puts ``--root-path`` in front of the request path and the router
-    strips it again (``starlette._utils.get_route_path``, mirrored here), so the
-    guard has to decide on the same path or a prefixed request skips it.
-    """
-    path = str(scope.get("path", ""))
-    root_path = str(scope.get("root_path", "") or "")
-    if not root_path or not path.startswith(root_path):
-        return path
-    if path == root_path:
-        return ""
-    if path[len(root_path)] == "/":
-        return path[len(root_path) :]
-    return path
-
-
-def _is_api(path: str) -> bool:
-    return path == "/api" or path.startswith("/api/")
-
-
-def _loopback_host(scope: dict[str, object], headers: Headers, port: int) -> bool:
-    """True when the one Host header names a loopback address on ``port``.
-
-    ``port`` 0 means the port the server listens on (``scope["server"]``), for a
-    server started on an ephemeral port.
-    """
-    values = headers.getlist("host")
-    if len(values) != 1:
-        return False
-    expected = port
-    if expected == 0:
-        server = scope.get("server")
-        listening = list(cast(Sequence[object], server)) if isinstance(server, tuple | list) else []
-        if len(listening) != 2 or not isinstance(listening[1], int):
-            return False
-        expected = listening[1]
-    host = values[0].strip().lower()
-    default_port = 443 if scope.get("scheme") == "https" else 80
-    for name in _LOOPBACK_HOSTNAMES:
-        if host == f"{name}:{expected}" or (expected == default_port and host == name):
-            return True
-    return False
-
 
 def create_app(
     *,
@@ -247,6 +434,7 @@ def create_app(
     allow_origin: str | None = None,
     remote: RemoteScenes | None = None,
     loopback_port: int | None = None,
+    bundle_info: str | Path | None = None,
 ) -> FastAPI:
     """The app over ``root``.
 
@@ -259,14 +447,31 @@ def create_app(
     ``loopback_port`` makes every request carry a loopback Host header on that
     port (0: the listening port); ``coperceive serve`` sets it when it has no
     token.
+    ``bundle_info`` is an opened result bundle's ``open.json``: its per-scene
+    sensor decision (included, from the recipient's local copy, or omitted with
+    the dataset-licence note) is added to the scene summary, and the viewer says so.
     """
     root_path_obj = Path(root).resolve()
     root_path_obj.mkdir(parents=True, exist_ok=True)
+    # A bundle is read-only: its viewer jobs database lives in a private temp
+    # folder, never inside the extracted bundle or the library. The folder is
+    # removed at shutdown; stale ones are swept when the next one is made.
+    jobs_folder = bundle_jobs.create() if bundle_info is not None else None
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            if jobs_folder is not None:
+                jobs_folder.remove()
+
     app = FastAPI(
         title="coperceive",
         version="0.0.0",
         root_path=root_path,
         description="Local cooperative-perception data app.",
+        lifespan=lifespan,
     )
     if allow_origin:
         app.add_middleware(
@@ -278,8 +483,12 @@ def create_app(
         )
     app.state.root = root_path_obj
     app.state.token = token
-    app.state.db_path = root_path_obj / "jobs.sqlite"
+    app.state.db_path = (
+        jobs_folder.database if jobs_folder is not None else root_path_obj / "jobs.sqlite"
+    )
     app.state.scene_cache = _SceneCache()
+    # The recipient's own copy of a bundle's scene (sensor bytes only), read in place.
+    app.state.bundle_local_cache = _SceneCache()
     app.state.maps = _maps_root(root_path_obj, maps)
     app.state.map_cache = {}
     app.state.predictions = predictions_root(
@@ -289,49 +498,46 @@ def create_app(
     # A cluster dataset viewed over SSH: `root` is the local mirror, the scenes
     # and their point sweeps and images come from `remote` (docs/datasets/cluster-datasets.md).
     app.state.remote = remote
+    app.state.bundle_info = _load_bundle_info(bundle_info)
+    # Bounded per-request timings for the viewer (GET /api/stream-stats); the
+    # data plane is the sidecar -> StreamClient -> streamer, not Rust.
+    app.state.stream_stats = _StreamHttpStats()
     static_dir = _STATIC if static is None else Path(static).resolve()
 
-    # Whether a request is `/api` is decided on the route path (`root_path`
-    # removed), the path the router serves: uvicorn puts --root-path in front of
-    # the request path, so the raw path would let every prefixed route skip the
-    # token and CSRF checks. `loopback_port` (`coperceive serve` without a token)
-    # also refuses, with a 400, every HTTP request whose Host is not 127.0.0.1,
-    # localhost or [::1] on that port, so a DNS-rebinding page cannot use the
-    # token-less API.
-    @app.middleware("http")
-    async def auth_and_csrf(request: Request, call_next):  # type: ignore[no-untyped-def]
-        if loopback_port is not None and not _loopback_host(
-            request.scope, request.headers, loopback_port
-        ):
-            return _json_error(
-                400,
-                "host not allowed: without a token this server answers only "
-                "127.0.0.1, localhost or [::1] on its own port",
-            )
-        if request.method == "OPTIONS":
-            return await call_next(request)
-        if _is_api(_route_path(request.scope)):
-            expected = request.app.state.token
-            if expected:
-                header = request.headers.get("authorization", "")
-                prefix = "Bearer "
-                if not (
-                    header.startswith(prefix)
-                    and hmac.compare_digest(header[len(prefix) :], expected)
-                ):
-                    return _json_error(401, "bearer token required")
-            if request.method in _CSRF_METHODS:
-                if request.headers.get(CSRF_HEADER) != "1":
-                    return _json_error(403, f"missing {CSRF_HEADER}: 1")
-        return await call_next(request)
+    # A pure ASGI guard, not BaseHTTPMiddleware: that wrapper hides the receive
+    # channel, so downstream request.is_disconnected() never sees a browser
+    # that went away (the points endpoint relies on it to cancel a remote read).
+    # The token is passed in at construction so the guard cannot fail open; with
+    # no token this app is the loopback-only mode (`coperceive serve` refuses a
+    # non-loopback host without a token, and passes loopback_port so a foreign
+    # Host is refused too), and the guard still enforces CSRF.
+    app.add_middleware(
+        _AuthAndCsrfMiddleware,
+        token=token,
+        allow_anonymous=token is None,
+        loopback_port=loopback_port,
+    )
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "root_path": root_path}
 
+    @app.get("/api/stream-stats")
+    def stream_stats() -> dict[str, object]:
+        """Versioned, bounded timings for streamed viewing (frame/points/image).
+
+        The data plane is webview -> this Python sidecar -> StreamClient -> one
+        SSH pipe -> the Python streamer; Rust only spawns the sidecar. The
+        queue/read/transfer percentiles are the streamer's and client's own
+        timings, so the viewer can show where a frame's time went.
+        """
+        remote = app.state.remote
+        client = None if remote is None else remote.client
+        return app.state.stream_stats.snapshot(client)
+
     @app.get("/api/jobs")
     def jobs() -> list[dict[str, object]]:
-        conn = open_db(app.state.db_path)
+        conn = _open_jobs_db(app.state.db_path)
         try:
             return list_jobs(conn)
         finally:
@@ -339,7 +545,7 @@ def create_app(
 
     @app.post("/api/jobs")
     def create_job(body: JobRequest) -> dict[str, int]:
-        conn = open_db(app.state.db_path)
+        conn = _open_jobs_db(app.state.db_path)
         try:
             try:
                 job_id = run_job(conn, app.state.root, body.name, body.args)
@@ -351,6 +557,8 @@ def create_app(
 
     @app.get("/api/events")
     async def events() -> StreamingResponse:
+        # Refuse an unusable database before the stream starts, as a 400.
+        _open_jobs_db(app.state.db_path).close()
         return StreamingResponse(_event_stream(app.state.db_path), media_type="text/event-stream")
 
     @app.get("/api/scenes")
@@ -366,7 +574,7 @@ def create_app(
 
     @app.get("/api/scenes/{scene_id}")
     def scene_summary(scene_id: str) -> dict[str, object]:
-        scene = _cached_scene(app, scene_id)
+        scene, local_sensor = _view_scene(app, scene_id)
         body = summarize(scene)
         if app.state.remote is not None:
             body["point_sweeps"] = len(_remote_call(lambda: app.state.remote.sweeps(scene_id)))
@@ -374,21 +582,31 @@ def create_app(
             mirrored = _remote_call(lambda: app.state.remote.ensure(scene_id))
             body["seen_by"] = seen_by_for_scene(scene, adapter_name(mirrored))
             return body
-        directory = _scene_dir(app.state.root, scene_id)
+        directory = local_sensor or _scene_dir(app.state.root, scene_id)
         body["images_staged"] = _images_staged(app, scene, directory)
         body["seen_by"] = seen_by_for_scene(scene, adapter_name(directory))
+        bundle = _bundle_scene_view(app, scene_id)
+        if bundle is not None:
+            body["bundle"] = bundle
         return body
 
     @app.get("/api/scenes/{scene_id}/frame")
     def scene_frame(scene_id: str, time_us: int) -> dict[str, object]:
-        document = frame_document(_cached_scene(app, scene_id), time_us)
-        if app.state.remote is not None:
-            document["point_sensors"] = [
-                {"agent_id": sweep.agent_id, "sensor_id": sweep.sensor_id, "count": sweep.count}
-                for sweep in _remote_call(lambda: app.state.remote.sweeps(scene_id)).values()
-                if sweep.time_us == time_us
-            ]
-        return document
+        stats = app.state.stream_stats
+        stats.begin()
+        started = time.perf_counter()
+        try:
+            scene, _local = _view_scene(app, scene_id)
+            document = frame_document(scene, time_us)
+            if app.state.remote is not None:
+                document["point_sensors"] = [
+                    {"agent_id": sweep.agent_id, "sensor_id": sweep.sensor_id, "count": sweep.count}
+                    for sweep in _remote_call(lambda: app.state.remote.sweeps(scene_id)).values()
+                    if sweep.time_us == time_us
+                ]
+            return document
+        finally:
+            stats.finish("frame", started)
 
     @app.get("/api/scenes/{scene_id}/map")
     def scene_map(scene_id: str, refresh: bool = False) -> dict[str, object]:
@@ -447,13 +665,35 @@ def create_app(
         width: int | None = None,
         full: bool = False,
     ) -> Response:
-        scene = _cached_scene(app, scene_id)
+        stats = app.state.stream_stats
+        stats.begin()
+        started = time.perf_counter()
+        response: Response | None = None
+        try:
+            response = _scene_image_response(
+                scene_id, time_us, agent_id, sensor_id, width=width, full=full
+            )
+            return response
+        finally:
+            body = getattr(response, "body", b"")
+            stats.finish("image", started, len(body) if isinstance(body, (bytes, bytearray)) else 0)
+
+    def _scene_image_response(
+        scene_id: str,
+        time_us: int,
+        agent_id: str,
+        sensor_id: str,
+        *,
+        width: int | None,
+        full: bool,
+    ) -> Response:
+        scene, local = _view_scene(app, scene_id)
+        scene_dir = local or _scene_dir(app.state.root, scene_id)
         relative = image_path(scene, time_us, agent_id, sensor_id)
         if relative is None:
             raise HTTPException(status_code=404, detail="image not found")
         if app.state.remote is not None:
             return _remote_image(app, scene_id, relative, width=width, full=full)
-        scene_dir = _scene_dir(app.state.root, scene_id)
         # A cluster scene's preview falls back to its original, and `full` asks
         # for the original (docs/datasets/cluster-datasets.md, "Camera images").
         target: Path | None = None
@@ -488,27 +728,41 @@ def create_app(
         return FileResponse(target, media_type=media)
 
     @app.get("/api/scenes/{scene_id}/points")
-    def scene_points(scene_id: str, time_us: int, agent_id: str, sensor_id: str) -> Response:
-        scene = _cached_scene(app, scene_id)
-        if app.state.remote is not None:
-            remote = app.state.remote
-            sweep = _remote_call(lambda: remote.sweeps(scene_id)).get(
-                (agent_id, sensor_id, time_us)
-            )
-            if sweep is None:
-                return Response(content=b"", media_type="application/octet-stream")
-            data = _remote_call(lambda: remote.sweep_bytes(scene_id, sweep))
-            cloud = PointCloud(agent_id, sensor_id, time_us, sweep.count, data)
-            return Response(
-                content=world_points(scene, cloud), media_type="application/octet-stream"
-            )
-        blob = frame_points(scene, time_us, agent_id, sensor_id)
-        return Response(content=blob, media_type="application/octet-stream")
+    async def scene_points(
+        scene_id: str, time_us: int, agent_id: str, sensor_id: str, request: Request
+    ) -> Response:
+        remote = app.state.remote
+        stats = app.state.stream_stats
+        stats.begin()
+        started = time.perf_counter()
+        served = 0
+        cancelled = False
+        try:
+            if remote is not None:
+                payload = await _remote_points(
+                    app, remote, scene_id, time_us, agent_id, sensor_id, request
+                )
+                if payload is None:
+                    # The browser went away mid-read: stop waiting for bytes that
+                    # would only be dropped. The streamer finishes the read and
+                    # sends no reply for it.
+                    cancelled = True
+                    return Response(status_code=499)
+                served = len(payload)
+                return Response(content=payload, media_type="application/octet-stream")
+            scene, _local = await asyncio.to_thread(_view_scene, app, scene_id)
+            blob = frame_points(scene, time_us, agent_id, sensor_id)
+            served = len(blob)
+            return Response(content=blob, media_type="application/octet-stream")
+        finally:
+            stats.finish("points", started, served, cancelled=cancelled)
 
     @app.post("/api/scenes/{scene_id}/export/rerun")
     def scene_rerun(scene_id: str) -> dict[str, object]:
         scene = _cached_scene(app, scene_id)
-        relative = Path("exports") / f"{scene.scene_id}.rrd"
+        # manifest.json's scene_id comes from the scene folder, which may be
+        # someone else's: like every other export, only a plain name is used.
+        relative = Path("exports") / f"{_export_stem(scene.scene_id, scene_id)}.rrd"
         try:
             dest = confine(app.state.root, str(relative))
         except ValueError as exc:
@@ -717,6 +971,52 @@ def create_app(
     return app
 
 
+async def _remote_points(
+    app: FastAPI,
+    remote: RemoteScenes,
+    scene_id: str,
+    time_us: int,
+    agent_id: str,
+    sensor_id: str,
+    request: Request,
+) -> bytes | None:
+    """The remote sweep as world points; None when the browser disconnected mid-read."""
+    token = remote.client.token()
+
+    def read() -> bytes:
+        # One thread hop for the whole request: the scene is cached after the
+        # first frame, so the sweep read dominates and is the part cancellable.
+        scene = _cached_scene(app, scene_id)
+        sweep = _remote_call(lambda: remote.sweeps(scene_id)).get((agent_id, sensor_id, time_us))
+        if sweep is None:
+            return b""
+        data = _remote_call(lambda: remote.sweep_bytes(scene_id, sweep, token=token))
+        cloud = PointCloud(agent_id, sensor_id, time_us, sweep.count, data)
+        return world_points(scene, cloud)
+
+    worker: asyncio.Future[bytes] = asyncio.ensure_future(asyncio.to_thread(read))
+    while True:
+        done, _ = await asyncio.wait({worker}, timeout=_DISCONNECT_POLL_S)
+        if worker in done:
+            return worker.result()
+        if await request.is_disconnected():
+            # Best effort: the queued read is skipped, an in-flight one finishes
+            # on the cluster side but its reply is dropped.
+            token.cancel()
+            retired, _ = await asyncio.wait({worker}, timeout=_DISCONNECT_CANCEL_WAIT_S)
+            if worker not in retired:
+                worker.add_done_callback(_consume_worker)
+            elif not worker.cancelled():
+                worker.exception()  # not served: retire it without logging
+            return None
+
+
+def _consume_worker(future: asyncio.Future[bytes]) -> None:
+    """Read a not-served worker's exception so it is not reported as unretrieved."""
+    if not future.cancelled():
+        future.exception()
+
+
 def _images_staged(app: FastAPI, scene: Scene, scene_dir: Path) -> bool | None:
     """Whether any recorded image file is present. ``None`` when the scene records no
     images. The table is sensor-major, so the sample is the first, middle and last row
@@ -894,6 +1194,110 @@ def _remote_image(
     return Response(content=data, media_type=_IMAGE_TYPES.get(suffix, "application/octet-stream"))
 
 
+def _load_bundle_info(path: str | Path | None) -> dict[str, object] | None:
+    """The opened bundle's ``open.json``, or None when the app is not serving a bundle.
+
+    An unreadable or older report is not a server error: the viewer simply has
+    no bundle note, which is the same as any dataset root.
+    """
+    if path is None:
+        return None
+    try:
+        payload: object = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema") != "coperceive-bundle-open":
+        return None
+    return dict(payload)
+
+
+def _bundle_scene_view(app: FastAPI, scene_id: str) -> dict[str, object] | None:
+    """The opened bundle's sensor decision for one scene, if it names that scene."""
+    info = getattr(app.state, "bundle_info", None)
+    if not isinstance(info, dict):
+        return None
+    dataset = info.get("dataset")
+    dataset = dataset if isinstance(dataset, dict) else {}
+    scenes = info.get("scenes")
+    if not isinstance(scenes, list):
+        return None
+    for row in scenes:
+        if not isinstance(row, dict) or row.get("scene_id") != scene_id:
+            continue
+        licence = dataset.get("licence")
+        return {
+            "sensor_data": row.get("sensor_data", "omitted"),
+            "dataset": dataset.get("label") or dataset.get("id"),
+            "licence": licence if isinstance(licence, str) else None,
+            "label": row.get("label"),
+            "note": row.get("note"),
+            "local_copy": row.get("local_copy"),
+            "title": info.get("title"),
+            "run_id": info.get("run_id"),
+            "rerun_command": info.get("rerun_command"),
+        }
+    return None
+
+
+def _bundle_local_scene(app: FastAPI, scene_id: str) -> Path | None:
+    """A local-copy bundle reads sensors from the recipient's own scene, in place.
+
+    ``open.json`` records the path only after ``open_bundle`` checked it resolves
+    inside a library root. Here it must still be an absolute scene folder with
+    the same scene id, outside the served bundle, and still resolve inside one
+    of the library roots ``open.json`` records (a link swapped in since is refused).
+    """
+    view = _bundle_scene_view(app, scene_id)
+    if view is None or view.get("sensor_data") != "local-copy":
+        return None
+    raw = view.get("local_copy")
+    if not isinstance(raw, str) or not raw or not Path(raw).is_absolute():
+        return None
+    try:
+        resolved = Path(raw).resolve(strict=True)
+        manifest = json.loads((resolved / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(manifest, dict) or manifest.get("scene_id") != scene_id:
+        return None
+    if resolved.is_relative_to(app.state.root):
+        return None
+    info = app.state.bundle_info
+    recorded = info.get("library_roots") if isinstance(info, dict) else None
+    roots: list[Path] = []
+    for item in recorded if isinstance(recorded, list) else []:
+        if isinstance(item, str) and Path(item).is_absolute():
+            try:
+                roots.append(Path(item).resolve(strict=True))
+            except OSError:
+                continue
+    if not any(resolved.is_relative_to(root) for root in roots):
+        return None
+    return resolved
+
+
+def _view_scene(app: FastAPI, scene_id: str) -> tuple[Scene, Path | None]:
+    """The scene the viewer shows, and the folder its sensor files come from.
+
+    For a bundle whose sensor data comes from the recipient's local copy, the
+    bundle stays the source of truth: its poses, boxes and frames, with only the
+    local copy's LiDAR sweeps and camera rows at those frames. Otherwise this is
+    the cached scene, with ``None`` (the scene's own folder).
+    """
+    scene = _cached_scene(app, scene_id)
+    local = _bundle_local_scene(app, scene_id)
+    if local is None:
+        return scene, None
+    sensors: Scene = app.state.bundle_local_cache.load(local)
+    times = {pose.time_us for agent in scene.agents for pose in agent.poses}
+    merged = dataclasses.replace(
+        scene,
+        point_clouds=tuple(cloud for cloud in sensors.point_clouds if cloud.time_us in times),
+        images=tuple(image for image in sensors.images if image.time_us in times),
+    )
+    return merged, local
+
+
 def _predictions_root(app: FastAPI) -> Path:
     root = app.state.predictions
     if not isinstance(root, Path):
@@ -968,6 +1372,21 @@ def _map_summary(app: FastAPI, scene: Scene) -> dict[str, object]:
         "sample_step_m": hdmap.sample_step_m,
         "layers": counts,
     }
+
+
+def _export_stem(*names: str) -> str:
+    """The first of ``names`` that is a plain export name, else ``scene``."""
+    for name in names:
+        if _EXPORT_NAME.fullmatch(name):
+            return name
+    return "scene"
+
+
+def _open_jobs_db(path: Path) -> sqlite3.Connection:
+    try:
+        return open_db(path)
+    except JobsDatabaseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _export_label(agent_id: str, sensor_id: str) -> str:

@@ -51,22 +51,30 @@ export function chipFor(status: string): StatusChip {
   return "ignored";
 }
 
-/** The four named cooperative views a ground-truth row belongs to, §Cooperative views. */
+/** The four named cooperative views a ground-truth row belongs to, docs/eval-spec.md §A.9. */
 export function cooperativeViews(row: PredictionRow): CooperativeView[] {
-  const views: CooperativeView[] = [];
   const single = row.status_single;
   const fused = row.status_fused;
-  if (single === "miss" && fused === "tp") {
+  // Connected-agent additions under `connected_union` have no `(X, single)` status.
+  const added = single === null && row.seen_by_other_gt === true && row.other_kind === null;
+  if (typeof fused !== "string" || (typeof single !== "string" && !added)) {
+    return [];
+  }
+  if (single === "ignored" || fused === "ignored") {
+    return [];
+  }
+  const views: CooperativeView[] = [];
+  const missedAlone = single === "miss" || added;
+  if (missedAlone && fused === "tp") {
     views.push("recovered");
   }
   if (single === "tp" && fused === "miss") {
     views.push("lost_by_fusion");
   }
-  if (single === "miss" && row.other_agent_tp === true) {
+  if (missedAlone && row.other_agent_tp === true) {
     views.push("only_other_agent");
   }
-  const known = [single, fused].filter((status): status is string => typeof status === "string");
-  if (known.length > 0 && known.every((status) => status === "miss") && row.other_agent_tp !== true) {
+  if (missedAlone && fused === "miss" && row.other_agent_tp !== true) {
     views.push("nobody");
   }
   return views;

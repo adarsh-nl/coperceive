@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from coperceive import cluster_datasets
 from coperceive.cluster_datasets import (
     CACHE_DIR,
     DETECT_SCHEMA,
@@ -25,7 +26,7 @@ from coperceive.cluster_datasets import (
 )
 
 from tests.griffin_release import write_release as write_griffin
-from tests.opencood_release import two_cav_scene
+from tests.opencood_release import AgentTrack, SceneSpec, two_cav_scene
 from tests.opencood_release import write_release as write_opencood
 
 
@@ -154,6 +155,56 @@ def _two_splits(root: Path) -> Path:
     )
     write_opencood(root, "test", [two_cav_scene("test_0001")])
     return root
+
+
+def test_detect_lists_every_split_the_folder_holds(tmp_path: Path) -> None:
+    """The sidebar lists all recognised splits, not only the one detect opened."""
+    raw = _two_splits(tmp_path / "opv2v")
+    result = detect_cluster_dataset(raw)
+    assert result["status"] == "ok"
+    assert result["split"] == "train"
+    assert result["splits"] == [
+        {"name": "train", "scene_count": 3, "adapter": "opv2v"},
+        {"name": "test", "scene_count": 1, "adapter": "opv2v"},
+    ]
+    # The split directory's own detect lists the sibling splits too.
+    from_parent = detect_cluster_dataset(raw / "test")
+    assert from_parent["split"] == "test"
+    assert from_parent["splits"] == result["splits"]
+
+
+def test_detect_split_entries_name_the_adapter_that_recognises_them(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "v2v4real"
+    scene = two_cav_scene("testoutput_CAV_data_2022-06-01-10-00-00_1")
+    write_opencood(
+        root,
+        "test",
+        [
+            SceneSpec(
+                scene.name,
+                [
+                    AgentTrack("0", scene.agents[0].poses, scene.agents[0].boxes),
+                    AgentTrack("1", scene.agents[1].poses, scene.agents[1].boxes),
+                ],
+            )
+        ],
+    )
+    result = detect_cluster_dataset(root / "test")
+    assert result["adapter"] == "v2v4real"
+    assert result["splits"] == [{"name": "test", "scene_count": 1, "adapter": "v2v4real"}]
+
+
+def test_detect_split_entries_are_bounded_and_empty_for_a_flat_release(
+    tmp_path: Path,
+) -> None:
+    raw = _two_splits(tmp_path / "opv2v")
+    bounded = detect_cluster_dataset(raw, max_scenes=1)
+    assert [entry["scene_count"] for entry in bounded["splits"]] == [1, 1]
+    griffin = tmp_path / "griffin"
+    write_griffin(griffin, {"scene-a": [0, 1]})
+    assert detect_cluster_dataset(griffin)["splits"] == []
 
 
 def test_index_with_a_split_indexes_exactly_that_split(tmp_path: Path) -> None:
@@ -370,6 +421,83 @@ def test_status_marks_ready_scenes_stale_when_the_raw_files_change(tmp_path: Pat
     states = {scene["scene_id"]: scene["state"] for scene in again["scenes"]}
     assert states["scene_0001"] == "ready"
     assert dataset_status_document(cache)["scenes"][0]["state"] == "ready"
+
+
+def _cut_off_walks(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Every raw walk stops early, and covers different entries each time.
+
+    That is what a walk cut off by the 30 s clock does on a large split: the
+    digest changes from run to run although no raw file changed.
+    """
+    real = cluster_datasets._fingerprint
+    calls: list[int] = []
+
+    def cut_off(root: Path, **kwargs: object) -> dict[str, object]:
+        calls.append(1)
+        document = real(root, **kwargs)  # type: ignore[arg-type]
+        return {**document, "digest": f"{document['digest']}-{len(calls)}", "truncated": True}
+
+    monkeypatch.setattr(cluster_datasets, "_fingerprint", cut_off)
+    return calls
+
+
+def test_a_truncated_raw_walk_never_marks_a_ready_scene_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Status and a later prepare keep ready scenes ready when the raw walk was cut off."""
+    raw = _opv2v(tmp_path / "opv2v")
+    cache = _cache(tmp_path, raw)
+    prepare_cluster_dataset("opv2v", raw / "test", cache, scenes=["scene_0001"])
+
+    calls = _cut_off_walks(monkeypatch)
+    status = dataset_status_document(cache)
+    assert calls, "status must still walk the raw split"
+    states = {scene["scene_id"]: scene for scene in status["scenes"]}
+    assert states["scene_0001"]["state"] == "ready"
+    assert states["scene_0001"]["reason"] is None
+    assert status["raw_check"] == {"state": "incomplete", "reason": "raw check incomplete"}
+
+    # Preparing the other scene walks the raw split again (cut off once more):
+    # the scene prepared earlier stays ready, and its complete fingerprint is kept.
+    stored = json.loads((cache / "dataset.json").read_text(encoding="utf-8"))["raw_fingerprint"]
+    again = prepare_cluster_dataset("opv2v", raw / "test", cache, scenes=["scene_0002"])
+    states = {scene["scene_id"]: scene["state"] for scene in again["scenes"]}
+    assert states == {"scene_0001": "ready", "scene_0002": "ready"}
+    kept = json.loads((cache / "dataset.json").read_text(encoding="utf-8"))["raw_fingerprint"]
+    assert kept == stored
+    assert kept["truncated"] is False
+
+
+def test_a_complete_raw_walk_with_a_changed_digest_still_marks_scenes_stale(
+    tmp_path: Path,
+) -> None:
+    """The truncation rule must not hide a real raw change seen by a complete walk."""
+    raw = _opv2v(tmp_path / "opv2v")
+    cache = _cache(tmp_path, raw)
+    prepare_cluster_dataset("opv2v", raw / "test", cache, scenes=["scene_0001"])
+    record = sorted((raw / "test" / "scene_0001").rglob("*.yaml"))[0]
+    record.write_text(record.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+
+    status = dataset_status_document(cache)
+    states = {scene["scene_id"]: scene for scene in status["scenes"]}
+    assert states["scene_0001"]["state"] == "stale"
+    assert states["scene_0001"]["reason"] == "raw dataset fingerprint changed"
+    assert status["raw_check"] == {"state": "complete", "reason": None}
+
+    # The prepare path decides the same way, and records it in dataset.json.
+    again = prepare_cluster_dataset("opv2v", raw / "test", cache, scenes=["scene_0002"])
+    states = {scene["scene_id"]: scene["state"] for scene in again["scenes"]}
+    assert states == {"scene_0001": "stale", "scene_0002": "ready"}
+    saved = json.loads((cache / "dataset.json").read_text(encoding="utf-8"))
+    assert saved["scenes"]["scene_0001"]["reason"] == "raw dataset fingerprint changed"
+
+
+def test_status_without_a_refresh_reports_the_raw_check_not_run(tmp_path: Path) -> None:
+    raw = _opv2v(tmp_path / "opv2v")
+    cache = _cache(tmp_path, raw)
+    prepare_cluster_dataset("opv2v", raw / "test", cache, scenes=["scene_0001"])
+    status = dataset_status_document(cache, refresh_stale=False)
+    assert status["raw_check"] == {"state": "not_run", "reason": None}
 
 
 def test_cache_inside_the_raw_root_is_refused(tmp_path: Path) -> None:

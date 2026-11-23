@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from coperceive.app.jobs import confine
-from coperceive.app.server import create_app
+from coperceive.app.server import _AuthAndCsrfMiddleware, create_app
 from coperceive.cli import build_parser, main
 from coperceive.evaluation.config import DEFAULT_CONFIG
 from coperceive.evaluation.evaluate import evaluate_run
@@ -29,6 +29,7 @@ from coperceive.model import (
 )
 from coperceive.se3 import SE3
 from coperceive.store import write_scene
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tests.cooperative import cooperative_scene
@@ -825,6 +826,31 @@ def test_summary_reports_what_media_is_staged(tmp_path: Path) -> None:
     assert image.status_code == 404
 
 
+def test_auth_middleware_without_a_token_fails_closed() -> None:
+    """No token at construction must refuse /api requests, not skip auth.
+
+    The guard used to read the token from ``scope["app"].state``; a scope that
+    lacked it silently skipped the bearer check. The token is now captured at
+    construction, so building the middleware without one (and without the
+    explicit loopback ``allow_anonymous`` opt-in) must answer 500.
+    """
+    app = FastAPI()
+
+    @app.get("/api/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    app.add_middleware(_AuthAndCsrfMiddleware)  # constructed without a token
+    client = TestClient(app)
+    response = client.get("/api/health")
+    assert response.status_code == 500
+    assert response.json() == {"detail": "server authentication is not configured"}
+
+    # Even a request that supplies a bearer token is refused: there is nothing
+    # to compare it with.
+    assert client.get("/api/health", headers={"Authorization": "Bearer x"}).status_code == 500
+
+
 def test_non_loopback_token_auth_protects_all_api_routes(tmp_path: Path) -> None:
     """When a token is configured (e.g. binding non-loopback on a cluster node), every /api
     route (GET included: scenes, frames, points, images, map lines, jobs, predictions)
@@ -837,6 +863,7 @@ def test_non_loopback_token_auth_protects_all_api_routes(tmp_path: Path) -> None
 
     routes = [
         "/api/health",
+        "/api/stream-stats",
         "/api/scenes",
         "/api/scenes/desk",
         "/api/scenes/desk/frame",

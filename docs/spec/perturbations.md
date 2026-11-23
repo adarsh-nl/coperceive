@@ -30,3 +30,12 @@ These are the axes cooperative-perception papers report, not their code or their
 - Hu et al., "Where2comm: Communication-Efficient Collaborative Perception via Spatial Confidence Maps", NeurIPS 2022. How many agents' messages are worth sending.
 
 coperceive does not reuse those implementations. The definitions above are the ones the tests check.
+
+## Sweeps
+
+`coperceive robustness sweep` crosses a grid of these fields with a list of seeds, runs one
+`model run --perturb` per cell, evaluates every cell and writes `sweep.json` with the mAP
+per cell, the mean and standard deviation over seeds and the mAP-versus-value chart data.
+The sweep definition, the `sweep.json` contract and the Slurm emitter are documented in
+[Robustness sweeps](../robustness.md); the output data schema is
+[robustness-sweep.schema.json](robustness-sweep.schema.json).

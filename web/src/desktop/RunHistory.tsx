@@ -17,6 +17,7 @@ import type { ServerEntry } from "./hpc";
 import {
   historyCanRerun,
   historyStateLabel,
+  evalProtocolLabel,
   reproPreviewLines,
   slurmSeconds,
   type JobSubmitOutcome,
@@ -25,6 +26,8 @@ import {
   type SubmitOptions,
 } from "./runPlan";
 import { errorText } from "./errors";
+import BundlePanel from "./BundlePanel";
+import { openBundleViewer, pickBundleFile } from "./local";
 import {
   Facts,
   GridTable,
@@ -110,6 +113,9 @@ export default function RunHistory() {
   const [confirmCancel, setConfirmCancel] = useState<string | null>(null);
   const [opened, setOpened] = useState("");
   const [savedCard, setSavedCard] = useState("");
+  const [bundleOpen, setBundleOpen] = useState(false);
+  const [openedBundle, setOpenedBundle] = useState("");
+  const [bundleError, setBundleError] = useState("");
   const [repro, setRepro] = useState<{
     planId: string;
     included: string[];
@@ -224,6 +230,18 @@ export default function RunHistory() {
     }
   };
 
+  const openBundleFile = async () => {
+    setBundleError("");
+    try {
+      const file = await pickBundleFile();
+      if (!file) return;
+      const opened = await openBundleViewer(file);
+      setOpenedBundle(`Opened read-only: ${opened.manifest.title || opened.manifest.run_id}.`);
+    } catch (e) {
+      setBundleError(errorText(e));
+    }
+  };
+
   const exportCard = async (entry: RunHistoryEntry) => {
     setBusy(entry.job_id);
     setError("");
@@ -315,6 +333,17 @@ export default function RunHistory() {
         </span>
       ),
     },
+    {
+      key: "protocol",
+      header: "AP protocol",
+      min: 104,
+      max: 140,
+      render: (entry) => (
+        <span style={{ fontSize: "12px" }}>
+          {entry.eval_protocol === "legacy" ? "Legacy (v0.1.1)" : "Default"}
+        </span>
+      ),
+    },
     { key: "state", header: "State", min: 104, max: 130, render: (entry) => <StateLabel entry={entry} /> },
     { key: "time", header: "Time used / limit", min: 176, max: 260, render: (entry) => <TimeUsed entry={entry} /> },
     {
@@ -339,6 +368,7 @@ export default function RunHistory() {
           items={[
             ["Time used", selected.elapsed ?? "—"],
             ["Limit", selected.time_limit ?? "—"],
+            ["AP protocol", evalProtocolLabel(selected.eval_protocol)],
             selected.partition ? ["Partition", selected.partition] : null,
             ["Started", selected.started ?? "—"],
             selected.ended ? ["Ended", selected.ended] : null,
@@ -363,6 +393,9 @@ export default function RunHistory() {
         ) : (
           <span className="c-step-note">The saved plan is no longer on the server, so this run cannot be repeated.</span>
         )}
+        <button type="button" className="c-secondary" disabled={busy !== null} onClick={() => setBundleOpen(true)}>
+          Export bundle…
+        </button>
         {selected.active ? (
           confirmCancel === selected.job_id ? (
             <div style={{ display: "flex", gap: "8px" }}>
@@ -380,6 +413,18 @@ export default function RunHistory() {
           )
         ) : null}
       </InspectorSection>
+      {bundleOpen && selected ? (
+        <BundlePanel
+          runId={selected.plan_id}
+          markers={[
+            profiles.find((entry) => entry.id === profileId)?.profile.user ?? "",
+            profiles.find((entry) => entry.id === profileId)?.profile.host ?? "",
+            profiles.find((entry) => entry.id === profileId)?.profile.ssh_alias ?? "",
+            profiles.find((entry) => entry.id === profileId)?.ssh?.hostname ?? "",
+          ].filter(Boolean)}
+          onClose={() => setBundleOpen(false)}
+        />
+      ) : null}
       {repro ? (
         <InspectorSection title="Repro card">
           <span className="c-step-note">
@@ -479,6 +524,9 @@ export default function RunHistory() {
             ))}
           </select>
         ) : null}
+        <button type="button" className="c-secondary" onClick={() => void openBundleFile()}>
+          Open bundle…
+        </button>
         {profiles.length === 0 ? null : <div role="group" aria-label="Filter runs by state" className="c-chips">
           {FILTERS.map((item) => {
             const count = (entries ?? []).filter(item.match).length;
@@ -502,6 +550,12 @@ export default function RunHistory() {
         <p role="alert" className="c-page-note" style={{ color: "var(--danger)" }}>
           {error}
         </p>
+      ) : null}
+      {bundleError ? (
+        <p role="alert" className="c-page-note" style={{ color: "var(--danger)" }}>{bundleError}</p>
+      ) : null}
+      {openedBundle ? (
+        <p role="status" className="c-page-note" style={{ color: "var(--ok)" }}>{openedBundle}</p>
       ) : null}
       {opened ? (
         <p role="status" className="c-page-note" style={{ color: "var(--ok)" }}>

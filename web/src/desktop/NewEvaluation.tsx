@@ -27,6 +27,7 @@ import {
   type ServerEntry,
 } from "./hpc";
 import {
+  builtinPlanInputProblem,
   collectValues,
   emptyEnvironmentOverride,
   environmentSummary,
@@ -37,7 +38,12 @@ import {
   walltimeProblem,
   artifactFingerprintText,
   pipelineNeedsCheckpoint,
+  pipelineNeedsCkptRoot,
   pipelineNeedsSplit,
+  EVAL_PROTOCOL_CHOICES,
+  DEFAULT_EVAL_PROTOCOL,
+  evalProtocolLabel,
+  type EvalProtocol,
   planSummary,
   jobStateLabel,
   validateArgumentForm,
@@ -171,6 +177,8 @@ export default function NewEvaluation() {
   const [model, setModel] = useState("vehicle-side");
   const [rawRoot, setRawRoot] = useState("");
   const [mediaRoot, setMediaRoot] = useState("");
+  const [ckptRoot, setCkptRoot] = useState("");
+  const [evalProtocol, setEvalProtocol] = useState<EvalProtocol>(DEFAULT_EVAL_PROTOCOL);
   const [overrideEnv, setOverrideEnv] = useState(false);
   const [environment, setEnvironment] = useState<EnvironmentSetup>(emptyEnvironmentOverride());
   const [plan, setPlan] = useState<RunPlan | null>(null);
@@ -194,6 +202,7 @@ export default function NewEvaluation() {
   // pipeline gets these fields when its registration declares the role; otherwise its
   // own typed arguments are the complete input set.
   const needsCheckpoint = pipelineNeedsCheckpoint(selectedPipeline, model);
+  const needsCkptRoot = pipelineNeedsCkptRoot(selectedPipeline, model);
   const needsSplit = pipelineNeedsSplit(selectedPipeline);
   const seeded = useRef(false);
   const stepArguments = (selectedPipeline?.spec.arguments ?? []).filter(
@@ -392,11 +401,17 @@ export default function NewEvaluation() {
       );
       return;
     }
-    if (
-      selectedPipeline.source === "builtin" &&
-      (!model.trim() || !rawRoot.trim() || !mediaRoot.trim())
-    ) {
-      setError("Choose the model key, raw root and media root for this built-in model.");
+    if (selectedPipeline.source === "builtin") {
+      const inputProblem = builtinPlanInputProblem({ model, rawRoot, mediaRoot });
+      if (inputProblem) {
+        setError(inputProblem);
+        return;
+      }
+    }
+    if (needsCkptRoot && !ckptRoot.trim()) {
+      setError(
+        "Choose the ckpt_root parameter (the released checkpoints root) for this built-in model.",
+      );
       return;
     }
     setError("");
@@ -416,6 +431,8 @@ export default function NewEvaluation() {
         model: selectedPipeline.source === "builtin" ? model.trim() : "",
         raw_root: selectedPipeline.source === "builtin" ? rawRoot.trim() : "",
         media_root: selectedPipeline.source === "builtin" ? mediaRoot.trim() : "",
+        ckpt_root: selectedPipeline.source === "builtin" && needsCkptRoot ? ckptRoot.trim() : "",
+        eval_protocol: evalProtocol,
         environment_override: overrideEnv ? environment : null,
       };
       const built = await buildRunPlan(selectedProfile.id, request);
@@ -494,8 +511,16 @@ export default function NewEvaluation() {
                     <dd className="c-mono">{model.trim() || "—"}</dd>
                     <dt>Raw root</dt>
                     <dd className="c-mono">{rawRoot.trim() || "—"}</dd>
+                    {needsCkptRoot ? (
+                      <>
+                        <dt>Checkpoint root</dt>
+                        <dd className="c-mono">{ckptRoot.trim() || "—"}</dd>
+                      </>
+                    ) : null}
                     <dt>Media root</dt>
                     <dd className="c-mono">{mediaRoot.trim() || "—"}</dd>
+                    <dt>AP protocol</dt>
+                    <dd>{evalProtocolLabel(evalProtocol)}</dd>
                   </>
                 ) : null}
                 <dt>Environment</dt>
@@ -630,6 +655,23 @@ export default function NewEvaluation() {
                             placeholder="/data/griffin-release"
                           />
                         </div>
+                        {needsCkptRoot ? (
+                          <div style={field}>
+                            <label style={labelStyle} htmlFor="plan-ckpt-root">
+                              Checkpoint root (ckpt_root)
+                            </label>
+                            <input
+                              id="plan-ckpt-root"
+                              className="c-path-input"
+                              value={ckptRoot}
+                              onChange={(event) => setCkptRoot(event.target.value)}
+                              placeholder="/data/griffin/ckpts"
+                            />
+                            <span className="c-step-note">
+                              Required: the released checkpoints folder. The model declares no default.
+                            </span>
+                          </div>
+                        ) : null}
                         <div style={field}>
                           <label style={labelStyle} htmlFor="plan-media">Media root</label>
                           <input
@@ -639,6 +681,32 @@ export default function NewEvaluation() {
                             onChange={(event) => setMediaRoot(event.target.value)}
                             placeholder="/data/griffin-release"
                           />
+                          <span className="c-step-note">
+                            Optional: leave it empty and the job passes no --media-root, as the CLI does.
+                          </span>
+                        </div>
+                        <div style={field} role="radiogroup" aria-label="AP protocol">
+                          <span style={labelStyle}>AP protocol</span>
+                          {EVAL_PROTOCOL_CHOICES.map((choice) => (
+                            <label
+                              key={choice.value}
+                              style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", fontSize: "0.82rem", color: "var(--text)" }}
+                            >
+                              <input
+                                type="radio"
+                                name="plan-eval-protocol"
+                                value={choice.value}
+                                checked={evalProtocol === choice.value}
+                                onChange={() => setEvalProtocol(choice.value)}
+                              />
+                              <span>
+                                <strong>{choice.label}</strong>: {choice.description}
+                              </span>
+                            </label>
+                          ))}
+                          <span className="c-step-note">
+                            Recorded with the run; a later eval run uses it unless told otherwise.
+                          </span>
                         </div>
                       </>
                     ) : null}
@@ -1076,6 +1144,7 @@ export default function NewEvaluation() {
                         profileId={profileId}
                         planId={plan.id}
                         initialOutcome={submitOutcome}
+                        evalProtocol={plan.eval_protocol}
                       />
                     </div>
                   ) : null}

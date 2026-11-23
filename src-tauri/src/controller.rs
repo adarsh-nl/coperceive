@@ -1085,6 +1085,56 @@ pub mod tests {
     }
 
     #[test]
+    fn test_streaming_settings_saved_and_invalid_values_ignored() {
+        let temp_dir = std::env::temp_dir().join(format!("cp-stream-state-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let state_file = temp_dir.join("state.json");
+
+        let mut config = make_test_config();
+        config.state_path = Some(state_file.clone());
+
+        let payload = r#"{"buffer_target_seconds":5,"client_memory_limit_bytes":268435456,"show_stream_stats":true}"#;
+        let header = format!(
+            "POST /state HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n",
+            payload.len()
+        );
+        let mut reader = Cursor::new([header.as_bytes(), payload.as_bytes()].concat());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {}", resp);
+        let loaded = state::load_state_from_path(&state_file);
+        assert_eq!(loaded.buffer_target_seconds, 5);
+        assert_eq!(loaded.client_memory_limit_bytes, 268435456);
+        assert!(loaded.show_stream_stats);
+
+        // A hand-edited or stale value is ignored, never stored.
+        let payload = r#"{"buffer_target_seconds":60,"client_memory_limit_bytes":8192}"#;
+        let header = format!(
+            "POST /state HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n",
+            payload.len()
+        );
+        let mut reader = Cursor::new([header.as_bytes(), payload.as_bytes()].concat());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let loaded = state::load_state_from_path(&state_file);
+        assert_eq!(loaded.buffer_target_seconds, 5);
+        assert_eq!(loaded.client_memory_limit_bytes, 268435456);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn test_rate_limit_open_dialog() {
         let config = make_test_config();
         let req = b"POST /open-dialog HTTP/1.1\r\n\

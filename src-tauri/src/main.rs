@@ -115,8 +115,8 @@ fn set_auto_connect_state(
 }
 
 /// Disconnects any active remote session off the `state.remote` mutex in a
-/// background thread with a bounded timeout so switching to a local scene
-/// never blocks on SSH teardown.
+/// background thread with a bounded timeout that kills the SSH child process if
+/// teardown hangs, so switching to a local scene never blocks or leaks SSH.
 fn disconnect_remote_in_background(state: &AppState) {
     let existing = state.remote.lock().ok().and_then(|mut lock| lock.take());
     if let Ok(mut current) = state.remote_key.lock() {
@@ -124,12 +124,7 @@ fn disconnect_remote_in_background(state: &AppState) {
     }
     if let Some(mut remote) = existing {
         std::thread::spawn(move || {
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let _ = remote.disconnect();
-                let _ = tx.send(());
-            });
-            let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+            let _ = remote.disconnect_with_timeout(std::time::Duration::from_secs(5));
         });
     }
 }
@@ -206,6 +201,225 @@ async fn pick_data_root(app: tauri::AppHandle) -> Result<Option<String>, String>
 
     let folder = app.dialog().file().blocking_pick_folder();
     Ok(folder.and_then(|fp| fp.into_path().ok()).map(|p| p.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+async fn pick_bundle_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    if let Some(path) = coperceive_desktop::test_seams::take_mock_dialog_path() {
+        return Ok(Some(path));
+    }
+    use tauri_plugin_dialog::DialogExt;
+
+    let choice = app
+        .dialog()
+        .file()
+        .add_filter("Coperceive result bundle", &["cpbundle"])
+        .blocking_pick_file();
+    Ok(choice
+        .and_then(|fp| fp.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned()))
+}
+
+fn bundle_python_args(app: &tauri::AppHandle) -> (std::path::PathBuf,) {
+    (resolve_python_binary(app),)
+}
+
+fn run_bundle_python(app: &tauri::AppHandle, args: &[String]) -> Result<String, String> {
+    let (python,) = bundle_python_args(app);
+    let output = std::process::Command::new(python)
+        .args(["-m", "coperceive.cli", "bundle"])
+        .args(args)
+        .output()
+        .map_err(|err| format!("could not start bundle command: {err}"))?;
+    if !output.status.success() {
+        let text = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if text.is_empty() {
+            "bundle command failed".to_string()
+        } else {
+            text
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[tauri::command]
+async fn bundle_preview(
+    app: tauri::AppHandle,
+    run_id: String,
+    scenes_root: String,
+    predictions_root: String,
+    frames: String,
+    title: String,
+    dataset_id: Option<String>,
+    include_sensor_data: bool,
+    sensor_max_bytes: Option<u64>,
+    include_full_predictions: bool,
+    markers: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    let mut args = vec![
+        "preview".to_string(), run_id,
+        "--root".to_string(), scenes_root,
+        "--predictions".to_string(), predictions_root,
+        "--frames".to_string(), frames,
+        "--title".to_string(), title,
+    ];
+    if let Some(dataset_id) = dataset_id {
+        args.push("--dataset-id".to_string());
+        args.push(dataset_id);
+    }
+    if include_sensor_data {
+        args.push("--include-sensor-data".to_string());
+    }
+    if let Some(cap) = sensor_max_bytes {
+        args.push("--sensor-max-bytes".to_string());
+        args.push(cap.to_string());
+    }
+    if include_full_predictions {
+        args.push("--include-full-predictions".to_string());
+    }
+    for marker in markers {
+        args.push("--marker".to_string());
+        args.push(marker);
+    }
+    let stdout = run_bundle_python(&app, &args)?;
+    serde_json::from_str(&stdout).map_err(|err| format!("bundle preview is not JSON: {err}"))
+}
+
+#[tauri::command]
+async fn bundle_export(
+    app: tauri::AppHandle,
+    run_id: String,
+    scenes_root: String,
+    predictions_root: String,
+    out: String,
+    frames: String,
+    title: String,
+    dataset_id: Option<String>,
+    include_sensor_data: bool,
+    sensor_max_bytes: Option<u64>,
+    include_full_predictions: bool,
+    markers: Vec<String>,
+) -> Result<String, String> {
+    let mut args = vec![
+        "export".to_string(), run_id,
+        "--root".to_string(), scenes_root,
+        "--predictions".to_string(), predictions_root,
+        "-o".to_string(), out.clone(),
+        "--frames".to_string(), frames,
+        "--title".to_string(), title,
+    ];
+    if let Some(dataset_id) = dataset_id {
+        args.push("--dataset-id".to_string());
+        args.push(dataset_id);
+    }
+    if include_sensor_data {
+        args.push("--include-sensor-data".to_string());
+    }
+    if let Some(cap) = sensor_max_bytes {
+        args.push("--sensor-max-bytes".to_string());
+        args.push(cap.to_string());
+    }
+    if include_full_predictions {
+        args.push("--include-full-predictions".to_string());
+    }
+    for marker in markers {
+        args.push("--marker".to_string());
+        args.push(marker);
+    }
+    run_bundle_python(&app, &args)?;
+    Ok(out)
+}
+
+#[tauri::command]
+async fn bundle_open(
+    app: tauri::AppHandle,
+    _state: tauri::State<'_, Arc<AppState>>,
+    file: String,
+) -> Result<serde_json::Value, String> {
+    use tauri::Manager;
+    let data_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("no app data folder: {err}"))?;
+    let mut args = vec![
+        "open".to_string(),
+        file,
+        "--data-root".to_string(),
+        data_root.to_string_lossy().into_owned(),
+    ];
+    // The recipient's local copy of an omitted scene is looked up in the
+    // library (the configured root, else the default one when it exists).
+    let library = state::load_state()
+        .library_root
+        .map(PathBuf::from)
+        .unwrap_or_else(state::default_library_root);
+    if library.is_dir() {
+        args.push("--library-root".to_string());
+        args.push(library.to_string_lossy().into_owned());
+    }
+    let stdout = run_bundle_python(&app, &args)?;
+    let opened = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("opened "))
+        .ok_or_else(|| "bundle open printed no path".to_string())?;
+    let manifest = std::fs::read_to_string(std::path::Path::new(opened).join("bundle.json"))
+        .map_err(|err| format!("bundle manifest cannot be read: {err}"))?;
+    let value: serde_json::Value = serde_json::from_str(&manifest)
+        .map_err(|err| format!("bundle manifest is not JSON: {err}"))?;
+    Ok(serde_json::json!({"root": opened, "manifest": value}))
+}
+
+#[tauri::command]
+async fn bundle_open_viewer(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    file: String,
+) -> Result<serde_json::Value, String> {
+    let opened = bundle_open(app.clone(), state.clone(), file).await?;
+    let root = opened
+        .get("root")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "bundle open returned no root".to_string())?;
+    // The viewer serves the bundle's scenes folder; switch_data_root adds the
+    // bundle's predictions and open.json (see opened_bundle_dir).
+    let scenes = PathBuf::from(root).join("scenes");
+    switch_data_root(&app, state.inner(), scenes.clone()).await?;
+    // switch_data_root only re-points a viewer window that is already open;
+    // Open bundle… is started from Run history, often with none, so open one.
+    use tauri::Manager;
+    if app.get_webview_window("viewer").is_none() {
+        let (origin, token) = {
+            let lock = state.sidecar.lock().map_err(|e| e.to_string())?;
+            let session = lock
+                .as_ref()
+                .ok_or_else(|| "the bundle's viewer server is not running".to_string())?;
+            (format!("http://127.0.0.1:{}", session.port), session.token.clone())
+        };
+        let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
+        open_viewer_window(
+            &app,
+            &origin,
+            &token,
+            &scenes.to_string_lossy(),
+            ctrl_port,
+            state.inner(),
+            None,
+        )?;
+    }
+    Ok(opened)
+}
+
+/// The opened result bundle that `scenes_root` (`<bundles>/<sha>/scenes`) belongs
+/// to, when it is one: its folder holds the bundle's `predictions` and `open.json`.
+fn opened_bundle_dir(scenes_root: &Path, bundles_dir: &Path) -> Option<PathBuf> {
+    if scenes_root.file_name()? != "scenes" {
+        return None;
+    }
+    let bundle = scenes_root.parent()?;
+    if bundle.parent()? != bundles_dir {
+        return None;
+    }
+    bundle.join("open.json").is_file().then(|| bundle.to_path_buf())
 }
 
 fn pick_save_path_inner(
@@ -560,6 +774,17 @@ async fn switch_data_root(
         extra_args.push("--predictions".to_string());
         extra_args.push(pred_dir.to_string_lossy().into_owned());
     }
+    let opened_bundle = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .and_then(|dir| opened_bundle_dir(&new_path, &dir.join("bundles")));
+    if let Some(bundle) = &opened_bundle {
+        extra_args.push("--predictions".to_string());
+        extra_args.push(bundle.join("predictions").to_string_lossy().into_owned());
+        extra_args.push("--bundle-info".to_string());
+        extra_args.push(bundle.join("open.json").to_string_lossy().into_owned());
+    }
 
     let mut new_session = SidecarSession::spawn_with_args(
         &python_bin,
@@ -609,8 +834,9 @@ async fn switch_data_root(
         }
     }
 
-    // Update state.json with new root and prepend to recent_roots
-    {
+    // Update state.json with new root and prepend to recent_roots. A shared
+    // bundle is not a library root and must not appear in Recent.
+    if opened_bundle.is_none() {
         let mut persistent = state::load_state();
         let previous_recent = persistent.recent_roots.clone();
         persistent.last_data_root = Some(new_path_str.clone());
@@ -3425,14 +3651,6 @@ async fn dataset_status(
     .map_err(|error| format!("Dataset status could not finish: {error}"))?
 }
 
-fn resolve_viewer_dataset_scenes(has_remote: bool, dataset: serde_json::Value) -> serde_json::Value {
-    if has_remote {
-        dataset
-    } else {
-        serde_json::Value::Null
-    }
-}
-
 /// The open cluster dataset's scenes (id, state) from the dataset view, so the
 /// viewer's scene list can show the ones that are not prepared yet.
 #[tauri::command]
@@ -3440,7 +3658,7 @@ fn set_viewer_dataset_scenes(state: tauri::State<'_, Arc<AppState>>, dataset: se
     let has_remote = state.stream_key.lock().ok().and_then(|k| k.clone()).is_some()
         || state.remote_key.lock().ok().and_then(|k| k.clone()).is_some();
     if let Ok(mut scenes) = state.dataset_scenes.lock() {
-        *scenes = resolve_viewer_dataset_scenes(has_remote, dataset);
+        *scenes = coperceive_desktop::remote::resolve_viewer_dataset_scenes(has_remote, dataset);
     }
 }
 
@@ -4293,6 +4511,11 @@ fn main() {
             remote_disconnect,
             remote_scan,
             pick_save_path,
+            pick_bundle_file,
+            bundle_preview,
+            bundle_export,
+            bundle_open,
+            bundle_open_viewer,
             save_exported_file,
         ])
         .on_page_load(|webview, payload| {
@@ -5416,26 +5639,5 @@ fn main() {
             _ => {}
         }
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::resolve_viewer_dataset_scenes;
-
-    #[test]
-    fn dataset_scenes_is_cleared_when_no_remote_session_is_active() {
-        let cluster_dataset = serde_json::json!({
-            "scenes": [{ "scene_id": "train_0000", "state": "ready" }],
-            "about": { "label": "V2XSET train", "server": "HPC" }
-        });
-        assert_eq!(
-            resolve_viewer_dataset_scenes(false, cluster_dataset.clone()),
-            serde_json::Value::Null
-        );
-        assert_eq!(
-            resolve_viewer_dataset_scenes(true, cluster_dataset.clone()),
-            cluster_dataset
-        );
-    }
 }
 

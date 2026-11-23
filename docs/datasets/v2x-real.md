@@ -104,6 +104,10 @@ Verified from the authors' loader (`ucla-mobility/V2X-Real` and
   intensity (`basedataset.py`, `pcd_utils.py`).
 - **Box class field:** `obj_type` on each entry of `vehicles` (`box_utils.py`,
   `opencood/data_utils/__init__.py`).
+- **Box coordinate frame:** the official `box_utils.py` loader documents the
+  `vehicles` objects as world-coordinate objects, builds `object_pose` from
+  `location + center`, and transforms it to the target LiDAR frame with
+  `x1_to_x2(object_pose, lidar_pose)` ([official source lines 456-519](https://github.com/ucla-mobility/V2X-Real/blob/main/opencood/utils/box_utils.py#L456-L519)).
 
 **Unverified against a real extracted V2X-Real release** (no real V2X-Real
 files were inspected when authoring this manifest):
@@ -120,11 +124,13 @@ files were inspected when authoring this manifest):
   10 Hz (`0.1 s` per step, matching `time_delay // 100` in `basedataset.py`).
   If a real release uses 5-digit stems or step-2 ticks, update the template and
   `clock.scale_us`.
-- **Box `center` offset frame:** `box_utils.py` adds `location + center`
-  directly in world coordinates, whereas OpenCOOD's annotation tutorial defines
-  `center` in the box frame. The manifest follows `opv2v.yaml` / `v2v4real.yaml`
-  (`offset_frame: box`), which agrees whenever `center` is `[0, 0, z]` with
-  zero roll and pitch.
+- **Box `center` offset semantics:** the loader's world-coordinate operation is
+  verified above. The separate question of whether nonzero `center` x/y values
+  should be rotated remains unresolved because the loader adds `location +
+  center` component-wise while the annotation tutorial describes `center` in a
+  box frame. The synthetic fixture keeps `center` on z only, and the manifest
+  retains the schema 1 `offset_frame: box` rule until that source discrepancy is
+  resolved.
 - **Additional infrastructure agent IDs:** `agents.discover.types` maps `-1`
   and `-2` to `infrastructure`. If any scenario uses further negative IDs, add
   them to `types`.

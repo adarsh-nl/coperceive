@@ -33,10 +33,6 @@ _HOSTNAME = re.compile(
 _USER_AT = re.compile(r"\b[A-Za-z0-9._-]{1,32}@[A-Za-z0-9.-]+\b")
 _HOME_PATH = re.compile(r"(?:^|[\s\"'])(?:/(?:home|Users)/[A-Za-z0-9._-]+)(?:/|\b)")
 _ABS_PATH = re.compile(r"(?:^|[\s\"'])(?:~|/|/[A-Za-z0-9._-]+)(?:/[^\s\"']+)+")
-# The repository's personal-identifier list (tests/test_docs_links.py and
-# tests/test_design_system_visual.py) must never survive in a card. Runtime
-# markers are added per call, so any user's own names are covered too.
-_PERSONAL_IDENTIFIER = re.compile(r"(?i)(nanjaiyalathaa|ewi\.utwente\.nl)")
 
 
 def _runtime_markers() -> tuple[str, ...]:
@@ -49,7 +45,9 @@ def _runtime_markers() -> tuple[str, ...]:
         value = os.environ.get(name)
         if value:
             values.append(value)
-    return tuple(value for value in dict.fromkeys(values) if len(value) >= 2)
+    return tuple(
+        sorted((value for value in dict.fromkeys(values) if len(value) >= 2), key=len, reverse=True)
+    )
 
 
 # sha256 and git commits are hex, not hostnames. Package versions like 1.26.4
@@ -86,8 +84,6 @@ def _scan(value: object, path: str, found: list[str], markers: tuple[str, ...]) 
             found.append(f"{path} contains a runtime identifier")
         if _TOKEN_VALUE.search(value):
             found.append(f"{path} looks like a credential")
-        if _PERSONAL_IDENTIFIER.search(value):
-            found.append(f"{path} contains a personal identifier")
         if _HOSTNAME.search(value) or _USER_AT.search(value):
             found.append(f"{path} contains a hostname or an account name")
         if _looks_absolute(value) or _HOME_PATH.search(value):
@@ -144,7 +140,7 @@ def _scrub_object(
 def _scrub_string(value: str, path: str, markers: tuple[str, ...]) -> tuple[object, list[str]]:
     if any(marker in value for marker in markers):
         return None, [path]
-    if _TOKEN_VALUE.search(value) or _USER_AT.search(value) or _PERSONAL_IDENTIFIER.search(value):
+    if _TOKEN_VALUE.search(value) or _USER_AT.search(value):
         return None, [path]
     if _looks_absolute(value):
         return None, [path]
@@ -208,3 +204,96 @@ def file_name(path: str) -> str | None:
     if _SECRET_KEY.search(name) or _TOKEN_VALUE.search(name):
         return None
     return name
+
+
+_ABS_POSIX = re.compile(r"(?<![A-Za-z0-9:/])/(?:[^\s\"'<>|]+/)*[^\s\"'<>|/]+")
+_ABS_WINDOWS = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:\\[^\s\"'<>|]+")
+_UNC = re.compile(r"\\\\[^\s\"'<>|]+\\[^\s\"'<>|]+")
+_FILE_URL = re.compile(r"file://[^\s\"'<>|]+")
+
+
+def _redact_path(value: str, roots: tuple[tuple[str, str], ...]) -> str:
+    normal = value.replace("\\", "/")
+    if normal.startswith("file://"):
+        normal = normal[len("file://") :]
+    for role, root in roots:
+        base = root.replace("\\", "/").rstrip("/")
+        if normal == base or normal.startswith(base + "/"):
+            rel = normal[len(base) :].lstrip("/")
+            return f"<{role}>/{rel}" if rel else f"<{role}>"
+    last = [part for part in normal.split("/") if part]
+    if last and "." in last[-1] and not last[-1].startswith("."):
+        return "<path>/" + last[-1]
+    return "<path>"
+
+
+def scrub_text(
+    text: str,
+    markers: tuple[str, ...] = (),
+    roots: tuple[tuple[str, str], ...] = (),
+) -> str:
+    """Remove runtime/personal identifiers and secret-shaped values from plain text."""
+    out = text
+    for marker in (*markers, *_runtime_markers()):
+        out = out.replace(marker, "[redacted]")
+    out = _TOKEN_VALUE.sub("[redacted]", out)
+    out = _USER_AT.sub("[redacted]", out)
+    out = _HOSTNAME.sub("[redacted]", out)
+    out = _HOME_PATH.sub(" [redacted] ", out)
+    out = _FILE_URL.sub(lambda m: _redact_path(m.group(0), roots), out)
+    out = _ABS_POSIX.sub(lambda m: _redact_path(m.group(0), roots), out)
+    out = _ABS_WINDOWS.sub(lambda m: _redact_path(m.group(0), roots), out)
+    out = _UNC.sub(lambda m: _redact_path(m.group(0), roots), out)
+    return out
+
+
+#: Keys whose values are credentials, after ``-`` and ``.`` are read as ``_``.
+CREDENTIAL_KEYS = frozenset(
+    {
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "api_key",
+        "apikey",
+        "access_key",
+        "private_key",
+        "authorization",
+    }
+)
+REDACTED_VALUE = "<redacted>"
+
+
+def is_credential_key(key: str) -> bool:
+    """A whole credential key, or one as a suffix after ``_``, ``-`` or ``.``.
+
+    Case-insensitive. A suffix needs the separator, so ``hf_token`` and
+    ``X-Api-Key`` match while ``tokenizer``, ``max_tokens`` and ``secretariat`` do not.
+    """
+    name = key.lower().replace("-", "_").replace(".", "_")
+    return any(name == word or name.endswith("_" + word) for word in CREDENTIAL_KEYS)
+
+
+def scrub_json(
+    value: object,
+    markers: tuple[str, ...] = (),
+    roots: tuple[tuple[str, str], ...] = (),
+) -> object:
+    """Scrub a decoded JSON value, including keys/strings in arbitrary schemas.
+
+    The value under a credential key (see :func:`is_credential_key`), whatever its
+    type and at any depth, becomes ``"<redacted>"``. Strings elsewhere keep the
+    path, host and marker scrubbing of :func:`scrub_text`.
+    """
+    if isinstance(value, str):
+        return scrub_text(value, markers, roots)
+    if isinstance(value, list):
+        return [scrub_json(item, markers, roots) for item in value]
+    if isinstance(value, dict):
+        return {
+            scrub_text(str(key), markers, roots): (
+                REDACTED_VALUE if is_credential_key(str(key)) else scrub_json(item, markers, roots)
+            )
+            for key, item in value.items()
+        }
+    return value

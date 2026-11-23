@@ -1,6 +1,6 @@
 # ADR 0010 — Evaluation engine, step A: predictions
 
-Status: accepted on 2026-10-17. Adarsh's decisions are recorded at the end; where they changed the text below, the decision wins and the normative contract is `docs/spec/predictions.md`. Schema 1 (`docs/spec/format.md`) is unchanged. Predictions are a sidecar, like the HD map (ADR 0008).
+Status: accepted on 2026-10-17. the maintainer's decisions are recorded at the end; where they changed the text below, the decision wins and the normative contract is `docs/spec/predictions.md`. Schema 1 (`docs/spec/format.md`) is unchanged. Predictions are a sidecar, like the HD map (ADR 0008).
 
 ## Context
 
@@ -173,7 +173,7 @@ Live models (step B), tracking metrics (MOTA/HOTA), 2D detections in image space
 - `eval run` is the only matcher. The viewer and the figures read `matches.parquet` and `metrics.json`. Changing a rule means re-running `eval run`, and the config in `metrics.json` says which rules a file used.
 - The predictions root is a third confined root beside scenes and maps. `serve` gains `--predictions`.
 - Step B writes `boxes.parquet` row groups as frames arrive and calls the same matcher per frame; nothing in this format assumes a finished run.
-- Griffin-25m has two agents and no model output in the repository. The first real run has to come from Adarsh's training code; the tests use synthetic predictions over the synthetic fixtures.
+- Griffin-25m has two agents and no model output in the repository. The first real run has to come from the maintainer's training code; the tests use synthetic predictions over the synthetic fixtures.
 
 ## As built
 
@@ -194,7 +194,7 @@ Where the code (`coperceive/evaluation/`, `coperceive/evalview.py`, `coperceive/
 
 ## Decisions
 
-Taken by Adarsh on 2026-10-17. Items 1, 3 and 5 are his words; the rest are the draft's recommendations, which he accepted.
+Taken by the maintainer on 2026-10-17. Items 1, 3 and 5 are his words; the rest are the draft's recommendations, which he accepted.
 
 1. **Matching default.** BEV IoU at 0.5 and 0.7, because that is what OPV2V, V2XSet and V2X-ViT report and reviewers expect comparable numbers. Centre distance stays a config option (`criterion: centre`).
 2. **AP rule.** All-points area under the monotone precision envelope.
@@ -205,6 +205,6 @@ Taken by Adarsh on 2026-10-17. Items 1, 3 and 5 are his words; the rest are the 
 7. **Visibility.** Every GT box is kept by default.
 8. **Compare UX.** Overlay plus a delta table; split viewport later if needed.
 9. **Import formats.** JSON lines and Parquet.
-10. **First real run.** From a detector on Griffin; even one single-agent detector is enough. The released Griffin checkpoints (`vehicle-side.pth`, `drone-side.pth`, `cooperative.pth`, early-fusion and instance-fusion weights for every subset, under `/data/huggingface/griffin/ckpts/` on the HPC) are the candidate source; they need the Griffin toolkit's inference code and environment, which this repository does not contain. Planned as the acceptance check, run on the HPC as a GPU job, after step A's code is in.
+10. **First real run.** From a detector on Griffin; even one single-agent detector is enough. The released Griffin checkpoints (`vehicle-side.pth`, `drone-side.pth`, `cooperative.pth`, early-fusion and instance-fusion weights for every subset, under `/data/griffin/ckpts/` on the HPC) are the candidate source; they need the Griffin toolkit's inference code and environment, which this repository does not contain. Planned as the acceptance check, run on the HPC as a GPU job, after step A's code is in.
 
 The reference copy `tests/griffin_reference.py` stays (same session): checksums would say that something changed, the reference code says what changed, which is how the quaternion sign flip was found.

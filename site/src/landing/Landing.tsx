@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { DownloadPanel } from "../download/DownloadPanel.tsx";
+import { TourSlot } from "../tour/TourSlot.tsx";
 import type { EvalChoice, EvalScene } from "./evalScene";
 import type { StoryScene } from "./story";
 
@@ -198,7 +199,7 @@ export function Landing() {
 
   return (
     <div className="lm-root" style={{ background: "#000", color: "#f5f5f7" }}>
-      <a href="#pipeline" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-full focus:bg-primary focus:px-4 focus:py-2 focus:text-black">
+      <a href="#tour" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-full focus:bg-primary focus:px-4 focus:py-2 focus:text-black">
         Skip to content
       </a>
       <div ref={storyRef} data-screen-label="Story" style={{ position: "relative", height: "600vh" }}>
@@ -217,6 +218,7 @@ export function Landing() {
             <nav aria-label="Page" className="lm-nav" style={{ display: "flex", alignItems: "center", gap: 28, fontSize: 14, color: "#a1a1a6" }}>
               <a href="#pipeline" className="lm-link lm-anchor">Pipeline</a>
               <a href="#install" className="lm-link lm-anchor">Install</a>
+              <a href="/coperceive/docs/" className="lm-link">Docs</a>
               <a href={REPO} className="lm-link" style={{ padding: "9px 16px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.18)", color: "#f5f5f7" }}>GitHub</a>
             </nav>
           </header>
@@ -255,6 +257,13 @@ export function Landing() {
       </div>
 
       <main ref={restRef}>
+        <section id="tour" data-screen-label="Product tour" style={{ padding: "160px var(--gx) 40px", maxWidth: 1360, margin: "0 auto", overflowX: "clip", display: "flex", flexDirection: "column", gap: 28 }}>
+          <div>
+            <div style={{ fontFamily: MONO_CSS, fontSize: 13, color: "#E03A22", marginBottom: 16 }}>Product tour</div>
+            <h2 style={{ margin: 0, fontSize: "clamp(40px,4.6vw,72px)", lineHeight: 1, letterSpacing: "-0.04em", fontWeight: 500, maxWidth: 760 }}>From the library to the cluster.</h2>
+          </div>
+          <TourSlot />
+        </section>
         <section id="pipeline" data-screen-label="Pipeline" style={{ padding: "160px var(--gx) 120px", maxWidth: 1360, margin: "0 auto", display: "flex", flexDirection: "column", gap: 64 }}>
           <div data-reveal="0" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 48, flexWrap: "wrap" }}>
             <h2 style={{ margin: 0, fontSize: "clamp(40px,4.6vw,72px)", lineHeight: 1, letterSpacing: "-0.04em", fontWeight: 500, maxWidth: 760 }}>From raw logs to a shared view.</h2>

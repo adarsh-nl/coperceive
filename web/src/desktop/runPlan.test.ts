@@ -24,8 +24,15 @@ import {
   initialArgumentForm,
   planIsSaveable,
   artifactFingerprintText,
+  builtinPlanInputProblem,
   pipelineNeedsCheckpoint,
+  pipelineNeedsCkptRoot,
   pipelineNeedsSplit,
+  DEFAULT_EVAL_PROTOCOL,
+  EVAL_PROTOCOL_CHOICES,
+  evalProtocolConfigLabel,
+  evalProtocolLabel,
+  sameEvalProtocol,
   planSummary,
   progressLabel,
   validateArgumentForm,
@@ -75,6 +82,9 @@ function plan(overrides: Partial<RunPlan> = {}): RunPlan {
     environment_note: "Environment from the server profile.",
     checkpoint: { path: "/data/code/checkpoints/model.pt", sha256: "abc", kind: "file", real_path: "/data/code/checkpoints/model.pt" },
     split: { path: "/data/code/splits/test.txt", sha256: "def", kind: "file", real_path: "/data/code/splits/test.txt" },
+    ckpt_root: { path: "", sha256: null, kind: "", real_path: null },
+    model_options: [],
+    eval_protocol: "default",
     output_dir: "/data/results/runs/plan-1",
     scratch_dir: "/work/alice",
     checks: [{ name: "checkpoint", label: "Checkpoint", ok: true, detail: "", hint: null, duration_ms: 1 }],
@@ -163,7 +173,7 @@ function griffinEntry(builtin: PipelineEntry["builtin"] | undefined = undefined)
             error: null,
             modules: ["nvidia/cuda-11.8"],
             models: {
-              "vehicle-side": { gpu: true, options: ["det_json", "min_score", "nusc_root", "subset"] },
+              "vehicle-side": { gpu: true, options: ["ckpt_root", "det_json", "min_score", "nusc_root", "subset"] },
               "weights-from-option": { gpu: false, options: ["checkpoint"] },
             },
           }
@@ -188,6 +198,85 @@ test("a built-in model needs a checkpoint only when its manifest declares the op
   assert.strictEqual(pipelineNeedsCheckpoint(bare, ""), false);
   assert.strictEqual(pipelineNeedsSplit(bare), false);
   assert.strictEqual(pipelineNeedsCheckpoint(null, ""), false);
+});
+
+test("a built-in plan requires the model and raw root but not a media root", () => {
+  const base = { model: "vehicle-side", rawRoot: "/data/griffin-release", mediaRoot: "" };
+  // An empty media root is a valid plan: the CLI's --media-root is optional, and the job
+  // script then contains no --media-root at all.
+  assert.strictEqual(builtinPlanInputProblem(base), null);
+  assert.strictEqual(builtinPlanInputProblem({ ...base, mediaRoot: "/data/griffin-release" }), null);
+  // The model key and the raw root are still required.
+  const message = "Choose the model key and raw root for this built-in model.";
+  assert.strictEqual(builtinPlanInputProblem({ ...base, model: "  " }), message);
+  assert.strictEqual(builtinPlanInputProblem({ ...base, rawRoot: " " }), message);
+});
+
+test("a built-in model needs a checkpoint root only when its manifest declares ckpt_root", () => {
+  // Griffin's released checkpoints root is a required parameter with no default.
+  assert.strictEqual(pipelineNeedsCkptRoot(griffinEntry(), "vehicle-side"), true);
+  assert.strictEqual(pipelineNeedsCkptRoot(griffinEntry(), "weights-from-option"), false);
+  assert.strictEqual(pipelineNeedsCkptRoot(griffinEntry(), "nope"), false);
+  assert.strictEqual(pipelineNeedsCkptRoot(griffinEntry(null), "vehicle-side"), false);
+  assert.strictEqual(pipelineNeedsCkptRoot({ ...griffinEntry(), source: "custom" }, "vehicle-side"), false);
+});
+
+test("the New evaluation panel shows the declared checkpoint root next to the raw root", () => {
+  const source = readFileSync(new URL("./NewEvaluation.tsx", import.meta.url), "utf8");
+  assert.ok(source.includes("pipelineNeedsCkptRoot(selectedPipeline, model)"), "ckpt_root rule");
+  assert.ok(source.includes('id="plan-ckpt-root"'), "ckpt_root field");
+  assert.ok(source.includes('ckpt_root: selectedPipeline.source === "builtin" && needsCkptRoot'), "request field");
+});
+
+test("the AP protocol choice defaults to OpenCOOD-style and records legacy when chosen", () => {
+  assert.strictEqual(DEFAULT_EVAL_PROTOCOL, "default");
+  assert.deepStrictEqual(
+    EVAL_PROTOCOL_CHOICES.map((choice) => choice.value),
+    ["default", "legacy"],
+  );
+  assert.strictEqual(EVAL_PROTOCOL_CHOICES[0]?.label, "Default");
+  assert.strictEqual(
+    EVAL_PROTOCOL_CHOICES[0]?.description,
+    "OpenCOOD-style: per-frame ranking, ground truth from every connected agent within 70 m",
+  );
+  assert.strictEqual(EVAL_PROTOCOL_CHOICES[1]?.label, "Legacy (v0.1.1)");
+  assert.strictEqual(EVAL_PROTOCOL_CHOICES[1]?.description, "for numbers comparable to v0.1.1");
+  assert.ok(evalProtocolLabel("legacy").includes("for numbers comparable to v0.1.1"));
+  // The form sends the choice; it starts on the default.
+  const source = readFileSync(new URL("./NewEvaluation.tsx", import.meta.url), "utf8");
+  assert.ok(source.includes("plan-eval-protocol"), "protocol radios");
+  assert.ok(source.includes("eval_protocol: evalProtocol"), "request field");
+  assert.ok(source.includes("useState<EvalProtocol>(DEFAULT_EVAL_PROTOCOL)"), "default preselected");
+});
+
+test("the evaluated-run protocol label matches eval report and eval compare", () => {
+  assert.strictEqual(evalProtocolConfigLabel(null), "legacy (pooled, ego-only)");
+  assert.strictEqual(
+    evalProtocolConfigLabel({ ranking_scope: "pooled", gt_scope: "ego_only" }),
+    "legacy (pooled, ego-only)",
+  );
+  assert.strictEqual(
+    evalProtocolConfigLabel({
+      ranking_scope: "per_frame",
+      gt_scope: "connected_union",
+      comm_range_m: 70,
+    }),
+    "ranking per_frame, ground truth connected_union (70 m)",
+  );
+  assert.strictEqual(
+    sameEvalProtocol(
+      { ranking_scope: "per_frame", gt_scope: "connected_union", comm_range_m: 70 },
+      { ranking_scope: "per_frame", gt_scope: "connected_union", comm_range_m: 50 },
+    ),
+    false,
+  );
+  assert.strictEqual(
+    sameEvalProtocol(
+      { ranking_scope: "pooled", gt_scope: "ego_only" },
+      { ranking_scope: "pooled", gt_scope: "ego_only", comm_range_m: 70 },
+    ),
+    true,
+  );
 });
 
 test("a Griffin plan with no checkpoint and a fingerprinted scenes folder can be saved", () => {

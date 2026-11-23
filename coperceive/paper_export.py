@@ -30,6 +30,7 @@ from coperceive.adapters.paths import PathError, confine
 from coperceive.errors import CoperceiveError
 from coperceive.evaluation.evaluate import read_metrics
 from coperceive.evaluation.predictions import PredictionError, check_run_id, check_scene_id
+from coperceive.evaluation.report import config_protocol_label, overlap_tag
 from coperceive.plot import PredictionDraw
 
 FORMAT = "coperceive-paper-export"
@@ -307,7 +308,8 @@ def metrics_tex(documents: Sequence[Mapping[str, object]], options: PaperOptions
     if not rows:
         return _plain_tex(NOTE_METRICS)
     thresholds = _threshold_keys(rows)
-    columns = _metric_columns(options, thresholds)
+    tag, caption = _metrics_protocol(documents)
+    columns = _metric_columns(options, thresholds, tag)
     header = ["Scene", "Agent", "Source", *[label for _key, label, _kind in columns]]
     body: list[list[str]] = []
     numeric: list[list[float | None]] = []
@@ -334,7 +336,45 @@ def metrics_tex(documents: Sequence[Mapping[str, object]], options: PaperOptions
         else:
             pieces.append(f" S[table-format=1.{options.decimals},detect-weight]")
     spec = "lll" + "".join(pieces)
-    return _tabular("Metrics", spec, header, body)
+    return _tabular(caption, spec, header, body)
+
+
+def _config_of(document: Mapping[str, object]) -> Mapping[str, object] | None:
+    config = document.get("config")
+    if not isinstance(config, dict):
+        return None
+    return {str(key): value for key, value in cast(dict[object, object], config).items()}
+
+
+def _metrics_protocol(documents: Sequence[Mapping[str, object]]) -> tuple[str, str]:
+    """The AP label tag and the table caption for ``documents`` (eval-spec A.12).
+
+    Every AP of the ``iou_bev`` criterion is a bird's-eye-view AP; the caption names
+    the protocol each scene was scored under, or every protocol when they differ.
+    """
+    criteria: list[object] = []
+    labels: list[str] = []
+    for document in documents:
+        config = _config_of(document)
+        criterion = (config or {}).get("criterion", "iou_bev")
+        if criterion not in criteria:
+            criteria.append(criterion)
+        label = config_protocol_label(config)
+        if label not in labels:
+            labels.append(label)
+    tag = overlap_tag(criteria[0]) if len(criteria) == 1 else "(mixed criteria)"
+    overlap = (
+        "AP is bird's-eye-view (BEV) IoU AP"
+        if criteria == ["iou_bev"]
+        else "AP is centre-distance AP"
+        if len(criteria) == 1
+        else "AP criteria differ between scenes"
+    )
+    if len(labels) == 1:
+        protocol = f"protocol: {labels[0]}"
+    else:
+        protocol = "protocols differ between scenes: " + "; ".join(labels)
+    return tag, f"Metrics. {overlap}; {protocol}."
 
 
 def comparison_tex(document: Mapping[str, object], options: PaperOptions) -> str:
@@ -343,8 +383,13 @@ def comparison_tex(document: Mapping[str, object], options: PaperOptions) -> str
     if not blocks:
         return _plain_tex(NOTE_COMPARISON)
     parts = [_PREAMBLE, "% comparison breakdowns", ""]
+    protocol = document.get("protocol")
+    recorded = cast(dict[object, object], protocol) if isinstance(protocol, dict) else {}
+    label = recorded.get("label")
+    criterion = recorded.get("criterion", "iou_bev")
+    note = f"protocol: {label}" if isinstance(label, str) else "protocol not recorded"
     for block in blocks:
-        parts.append(_breakdown_table(block, options))
+        parts.append(_breakdown_table(block, options, overlap_tag(criterion), note))
         parts.append("")
     return "\n".join(parts).rstrip() + "\n"
 
@@ -565,7 +610,9 @@ def _float_key(key: str) -> bool:
     return True
 
 
-def _metric_columns(options: PaperOptions, thresholds: Sequence[str]) -> list[tuple[str, str, str]]:
+def _metric_columns(
+    options: PaperOptions, thresholds: Sequence[str], tag: str = "(BEV)"
+) -> list[tuple[str, str, str]]:
     columns: list[tuple[str, str, str]] = []
     if options.include_counts:
         columns.append(("gt", "Objects", "count"))
@@ -577,7 +624,7 @@ def _metric_columns(options: PaperOptions, thresholds: Sequence[str]) -> list[tu
         columns.append(("recall", "Recall", "higher"))
     if "ap" in selected:
         for key in thresholds:
-            columns.append((f"ap@{key}", f"AP@{key}", "higher"))
+            columns.append((f"ap@{key}", f"AP@{key} {tag}", "higher"))
     if "recovered" in selected:
         columns.append(("recovered", "Recovered", "count"))
     if "lost_by_fusion" in selected:
@@ -673,21 +720,25 @@ def _bin_row(entry: Mapping[str, object]) -> dict[str, object] | None:
     if not isinstance(label, str) or not isinstance(runs, dict):
         return None
     cells: dict[str, tuple[float | None, int | None]] = {}
+    threshold: str | None = None
     for run_id, payload in cast(dict[object, object], runs).items():
         if not isinstance(run_id, str) or not isinstance(payload, dict):
             continue
         body = cast(dict[object, object], payload)
         count = body.get("n_objects")
-        mean = _first_mean(body.get("ap"))
+        key, mean = _first_mean(body.get("ap"))
+        if key is not None and threshold is None:
+            threshold = key
         cells[run_id] = (mean, int(count) if isinstance(count, int) else None)
     if not cells:
         return None
-    return {"bin": label, "runs": cells}
+    return {"bin": label, "runs": cells, "threshold": threshold}
 
 
-def _first_mean(ap: object) -> float | None:
+def _first_mean(ap: object) -> tuple[str | None, float | None]:
+    """``(threshold key, mean AP)`` of the first threshold with a mean, by key."""
     if not isinstance(ap, dict):
-        return None
+        return None, None
     pairs = sorted(
         (
             (key, value)
@@ -700,14 +751,21 @@ def _first_mean(ap: object) -> float | None:
         if isinstance(cell, dict):
             mean = cast(dict[object, object], cell).get("mean")
             if isinstance(mean, (int, float)):
-                return float(mean)
-    return None
+                return _key, float(mean)
+    return None, None
 
 
-def _breakdown_table(block: Mapping[str, object], options: PaperOptions) -> str:
+def _breakdown_table(
+    block: Mapping[str, object],
+    options: PaperOptions,
+    tag: str = "(BEV)",
+    note: str = "protocol not recorded",
+) -> str:
     bins = _dicts(block.get("bins"))
     if not bins:
         return _plain_tex(NOTE_COMPARISON)
+    thresholds = [row.get("threshold") for row in bins if isinstance(row.get("threshold"), str)]
+    shown = f"AP@{thresholds[0]} {tag}" if thresholds else f"AP {tag}"
     run_ids: list[str] = []
     for row in bins:
         runs = row.get("runs")
@@ -715,7 +773,7 @@ def _breakdown_table(block: Mapping[str, object], options: PaperOptions) -> str:
             for run_id in cast(dict[object, object], runs):
                 if isinstance(run_id, str) and run_id not in run_ids:
                     run_ids.append(run_id)
-    header = ["Bin", *[f"{run_id} AP" for run_id in run_ids]]
+    header = ["Bin", *[f"{run_id} {shown}" for run_id in run_ids]]
     if options.include_counts:
         header.extend(f"{run_id} objects" for run_id in run_ids)
     body: list[list[str]] = []
@@ -744,7 +802,7 @@ def _breakdown_table(block: Mapping[str, object], options: PaperOptions) -> str:
     if options.include_counts:
         spec += " S[table-format=4.0]" * len(run_ids)
     title = f"{block.get('agent', '')} {block.get('source', '')} by {block.get('name', '')}".strip()
-    return _tabular(title, spec, header, body)
+    return _tabular(f"{title}. {note}.", spec, header, body)
 
 
 def _try_pr(

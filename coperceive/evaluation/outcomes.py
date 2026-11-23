@@ -39,6 +39,7 @@ from coperceive.evaluation.evaluate import (
     KIND_PREDICTION,
     MATCH_SCHEMA,
     EvaluationError,
+    gt_row_at_columns,
     read_matches,
     read_metrics,
     scene_file,
@@ -173,6 +174,9 @@ class OutcomeRecord:
     center: tuple[float, float, float]
     size_lwh: tuple[float, float, float]
     rotation: tuple[float, float, float, float]
+    # Per threshold, the ground-truth row a prediction was paired with in the AP pass
+    # (null when it was not a true positive). Empty for a record written before it existed.
+    gt_row_at: tuple[int | None, ...] = ()
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -202,6 +206,7 @@ class OutcomeRecord:
             "center": [round(float(value), 6) for value in self.center],
             "size_lwh": [round(float(value), 6) for value in self.size_lwh],
             "rotation": [round(float(value), 6) for value in self.rotation],
+            "gt_row_at": list(self.gt_row_at),
         }
 
 
@@ -296,6 +301,7 @@ def records_from_rows(
                     _component(item.get("qy"), 0.0),
                     _component(item.get("qz"), 0.0),
                 ),
+                gt_row_at=_gt_row_at(item),
             )
         )
     return tuple(out)
@@ -362,10 +368,23 @@ def _status_at(row: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(value for _index, value in found)
 
 
+def _gt_row_at(row: Mapping[str, object]) -> tuple[int | None, ...]:
+    found: list[tuple[int, int | None]] = []
+    for key, value in row.items():
+        if not key.startswith("gt_row_at_"):
+            continue
+        suffix = key.removeprefix("gt_row_at_")
+        if suffix.isdigit():
+            found.append((int(suffix), _as_int(value)))
+    found.sort()
+    return tuple(value for _index, value in found)
+
+
 def match_rows(directory: Path) -> list[dict[str, object]]:
-    """The scene's match table, including every ``status_at_<i>`` column."""
+    """The scene's match table, including every ``status_at_<i>`` and ``gt_row_at_<i>`` column."""
     metrics = read_metrics(directory)
-    names = [*MATCH_SCHEMA.names, *status_columns(threshold_count(metrics))]
+    count = threshold_count(metrics)
+    names = [*MATCH_SCHEMA.names, *status_columns(count), *gt_row_at_columns(count)]
     table = read_matches(directory, columns=names)
     rows: list[dict[str, object]] = []
     for item in table.to_pylist():
@@ -499,9 +518,16 @@ def _record_from_json(value: object, path: Path) -> OutcomeRecord:
             center=_vec3(item.get("center"), path, "center"),
             size_lwh=_vec3(item.get("size_lwh"), path, "size_lwh"),
             rotation=_vec4(item.get("rotation"), path),
+            gt_row_at=_optional_int_tuple(item.get("gt_row_at")),
         )
     except KeyError as error:
         raise EvaluationError(f"{path}: record missing {error}") from error
+
+
+def _optional_int_tuple(value: object) -> tuple[int | None, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(_as_int(item) for item in cast(list[object], value))
 
 
 def _fixed_list(value: object, count: int) -> list[object] | None:

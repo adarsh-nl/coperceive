@@ -54,7 +54,18 @@ from coperceive.evaluation.predictions import (
     validate_boxes,
     write_run,
 )
-from coperceive.evaluation.report import Row, collect, partial_note, render_compare, render_report
+from coperceive.evaluation.report import (
+    Row,
+    collect,
+    config_note,
+    criterion_of,
+    partial_note,
+    protocol_block,
+    protocol_label,
+    protocol_of,
+    render_compare,
+    render_report,
+)
 from coperceive.model import Scene
 from coperceive.store import read_scene
 
@@ -108,6 +119,16 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     run.add_argument("run_id")
     _root_arguments(run)
     run.add_argument("--config", default=None, help="Evaluation config YAML. Default: the spec.")
+    run.add_argument(
+        "--protocol",
+        choices=("default", "legacy"),
+        default=None,
+        help=(
+            "default: per-frame ranking, connected-union ground truth (70 m). legacy: the "
+            "v0.1.1 rules, pooled ranking and each agent's own ground truth. Same as the "
+            "config key protocol."
+        ),
+    )
     run.add_argument("--scenes", default=None, help="Comma-separated scene ids. Default: all.")
     run.set_defaults(func=run_command)
 
@@ -243,7 +264,8 @@ def _import(args: argparse.Namespace) -> None:
         created_utc=_now_utc(),
     )
     _validate_against_scenes(root, meta, rows)
-    scene_ids = write_run(target, run_id, meta, rows, force=bool(args.force))
+    named = (str(args.scene),) if args.scene else ()
+    scene_ids = write_run(target, run_id, meta, rows, force=bool(args.force), scene_ids=named)
     print(f"wrote {target / run_id}")
     print(f"scenes {len(scene_ids)} rows {len(rows)}")
 
@@ -328,7 +350,23 @@ def _run(args: argparse.Namespace) -> None:
     root = _scenes_root(args)
     predictions = _existing_predictions_root(args)
     config_path = args.config
-    config = load_config(Path(config_path) if isinstance(config_path, str) else None)
+    protocol = args.protocol if isinstance(args.protocol, str) else None
+    # A model run can record the evaluation protocol it was made for. Use it only when
+    # neither --protocol nor the config file chose one; an explicit choice always wins.
+    recorded = None
+    try:
+        provenance = read_run_meta(predictions, args.run_id).provenance or {}
+        value = provenance.get("eval_protocol")
+        if isinstance(value, str):
+            recorded = value
+    except PredictionError:
+        # A missing or malformed run.json gets evaluate_run's own message below.
+        pass
+    config = load_config(
+        Path(config_path) if isinstance(config_path, str) else None,
+        protocol,
+        recorded=recorded,
+    )
     report = evaluate_run(
         root,
         predictions,
@@ -385,6 +423,20 @@ def _compare(args: argparse.Namespace) -> None:
                 f"run {run_id!r} thresholds {list(other)} differ from "
                 f"{loaded[0][0]!r} {list(thresholds)}"
             )
+    first_id, first_rows = loaded[0]
+    for run_id, rows in loaded[1:]:
+        # AP under another protocol is another quantity: refuse. The label names the
+        # ranking scope, the ground truth, its range under connected_union, and legacy.
+        if protocol_label(rows) != protocol_label(first_rows):
+            raise PredictionError(
+                f"runs {first_id!r} and {run_id!r} were evaluated under different protocols "
+                f"({protocol_label(first_rows)} vs {protocol_label(rows)}), so their numbers "
+                "cannot be compared; run `coperceive eval run` again with one config"
+            )
+    for run_id, rows in loaded[1:]:
+        difference = config_note(loaded[0][0], loaded[0][1], run_id, rows)
+        if difference:
+            print(difference)
     if len(loaded) == 2:
         print(render_compare(loaded[0][1], loaded[1][1], thresholds), end="")
     else:
@@ -395,7 +447,7 @@ def _compare(args: argparse.Namespace) -> None:
         document = _compare_document(args, root, predictions, loaded, thresholds, names)
         if args.by:
             print()
-            print(render_breakdowns(document), end="")
+            print(render_breakdowns(document, criterion_of(loaded[0][1])), end="")
         if isinstance(args.json, str):
             destination = Path(args.json)
             write_compare(destination, document)
@@ -531,6 +583,8 @@ def _compare_document(
         distance_edges=distance_edges,
         visibility_edges=visibility_edges,
         distance_source=distance_source,
+        ranking_scope=protocol_of(loaded[0][1])[0],
+        protocol=protocol_block(loaded[0][1]),
     )
 
 

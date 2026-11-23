@@ -4,13 +4,17 @@
 
 FOLD-02: the bearer token and CSRF header apply to every ``/api`` route whatever
 ``--root-path`` is. FOLD-06: token-less serve answers only a loopback Host on its
-own port.
+own port. FOLD-08: ``jobs.sqlite`` is never opened through a symbolic link.
+FOLD-09: the Rerun export name passes the same check as every other export.
+And ``--token-file`` must be a regular file the current user owns.
 """
 
 from __future__ import annotations
 
 import contextlib
+import os
 import socket
+import sqlite3
 import threading
 import time
 from collections.abc import Generator
@@ -20,9 +24,9 @@ from typing import Any
 import httpx
 import pytest
 import uvicorn
-from coperceive.app import serve
+from coperceive.app import jobs, serve
 from coperceive.app.server import create_app
-from coperceive.cli import main
+from coperceive.cli import build_parser, main
 from coperceive.model import SCHEMA_VERSION, Agent, AgentType, Clock, Scene, StampedPose
 from coperceive.se3 import SE3
 from coperceive.store import write_scene
@@ -238,3 +242,354 @@ def test_token_serve_keeps_working_behind_a_proxy_host(
     read = hub.get("/api/files", params={"path": "notes.txt"}, headers=BEARER)
     assert read.status_code == 200
     assert read.text == NOTES
+
+
+# FOLD-08 ------------------------------------------------------------------------
+
+
+def test_jobs_database_symlink_is_refused(tmp_path: Path) -> None:
+    root = _root_with_notes(tmp_path)
+    outside = tmp_path / "outside" / "planted-name.db"
+    outside.parent.mkdir()
+    (root / "jobs.sqlite").symlink_to(outside)
+    client = TestClient(create_app(root=root, token=TOKEN), raise_server_exceptions=False)
+    listed = client.get("/api/jobs", headers=BEARER)
+    assert listed.status_code == 400, listed.text
+    assert "symbolic link" in listed.json()["detail"]
+    created = client.post(
+        "/api/jobs", headers={**BEARER, **CSRF}, json={"name": "echo", "args": ["x"]}
+    )
+    assert created.status_code == 400
+    events = client.get("/api/events", headers=BEARER)
+    assert events.status_code == 400
+    assert not outside.exists()
+    assert (root / "jobs.sqlite").is_symlink()
+
+
+def test_jobs_database_journal_symlink_is_refused(tmp_path: Path) -> None:
+    root = _root_with_notes(tmp_path)
+    outside = tmp_path / "outside" / "victim"
+    outside.parent.mkdir()
+    (root / "jobs.sqlite-journal").symlink_to(outside)
+    client = TestClient(create_app(root=root, token=TOKEN), raise_server_exceptions=False)
+    created = client.post(
+        "/api/jobs", headers={**BEARER, **CSRF}, json={"name": "echo", "args": ["x"]}
+    )
+    assert created.status_code == 400, created.text
+    assert "symbolic link" in created.json()["detail"]
+    assert not outside.exists()
+
+
+def test_jobs_database_is_a_regular_file_that_persists(tmp_path: Path) -> None:
+    root = _root_with_notes(tmp_path)
+    first = TestClient(create_app(root=root, token=TOKEN))
+    made = first.post("/api/jobs", headers={**BEARER, **CSRF}, json={"name": "echo", "args": ["a"]})
+    assert made.status_code == 200
+    database = root / "jobs.sqlite"
+    assert database.is_file()
+    assert not database.is_symlink()
+    again = TestClient(create_app(root=root, token=TOKEN))
+    jobs = again.get("/api/jobs", headers=BEARER).json()
+    assert [job["status"] for job in jobs] == ["ok"]
+    assert "a" in jobs[0]["output"]
+
+
+def _victim_db(path: Path) -> bytes:
+    """An SQLite database outside the root that the server must never write."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE victim (x TEXT)")
+    conn.execute("INSERT INTO victim VALUES ('untouched')")
+    conn.commit()
+    conn.close()
+    return path.read_bytes()
+
+
+def _tables(path: Path) -> list[str]:
+    conn = sqlite3.connect(path)
+    try:
+        return sorted(row[0] for row in conn.execute("SELECT name FROM sqlite_master"))
+    finally:
+        conn.close()
+
+
+def test_jobs_database_hard_link_is_refused(tmp_path: Path) -> None:
+    """A hard link passes lstat and S_ISREG, yet writes land in the outside file."""
+    root = _root_with_notes(tmp_path)
+    victim = tmp_path / "outside" / "victim.db"
+    before = _victim_db(victim)
+    os.link(victim, root / "jobs.sqlite")
+    client = TestClient(create_app(root=root, token=TOKEN), raise_server_exceptions=False)
+    created = client.post(
+        "/api/jobs", headers={**BEARER, **CSRF}, json={"name": "echo", "args": ["x"]}
+    )
+    assert created.status_code == 400, created.text
+    assert "link" in created.json()["detail"]
+    assert client.get("/api/jobs", headers=BEARER).status_code == 400
+    assert victim.read_bytes() == before
+    assert _tables(victim) == ["victim"]
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm", "-journal"])
+def test_jobs_database_companion_symlink_is_refused(tmp_path: Path, suffix: str) -> None:
+    root = _root_with_notes(tmp_path)
+    first = TestClient(create_app(root=root, token=TOKEN))
+    made = first.post("/api/jobs", headers={**BEARER, **CSRF}, json={"name": "echo", "args": ["a"]})
+    assert made.status_code == 200
+    victim = tmp_path / "outside" / "victim.db"
+    before = _victim_db(victim)
+    (root / f"jobs.sqlite{suffix}").symlink_to(victim)
+    client = TestClient(create_app(root=root, token=TOKEN), raise_server_exceptions=False)
+    created = client.post(
+        "/api/jobs", headers={**BEARER, **CSRF}, json={"name": "echo", "args": ["x"]}
+    )
+    assert created.status_code == 400, created.text
+    assert "symbolic link" in created.json()["detail"]
+    assert victim.read_bytes() == before
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+@pytest.mark.parametrize("name", ["jobs.sqlite", "jobs.sqlite-journal", "jobs.sqlite-wal"])
+@pytest.mark.parametrize("kind", ["fifo", "directory"])
+def test_jobs_database_that_is_not_a_regular_file_is_refused(
+    tmp_path: Path, name: str, kind: str
+) -> None:
+    """A FIFO (or a directory) planted by tar, rsync or a share: refused, never waited on."""
+    root = _root_with_notes(tmp_path)
+    if name != "jobs.sqlite":
+        made = TestClient(create_app(root=root, token=TOKEN)).post(
+            "/api/jobs", headers={**BEARER, **CSRF}, json={"name": "echo", "args": ["a"]}
+        )
+        assert made.status_code == 200
+    planted = root / name
+    if kind == "fifo":
+        os.mkfifo(planted)
+    else:
+        planted.mkdir()
+    result: dict[str, Any] = {}
+
+    def attempt() -> None:
+        try:
+            jobs.open_db(root / "jobs.sqlite").close()
+            result["outcome"] = "opened"
+        except jobs.JobsDatabaseError as exc:
+            result["outcome"] = f"refused: {exc}"
+        except Exception as exc:  # noqa: BLE001 (any other failure is reported)
+            result["outcome"] = f"{type(exc).__name__}: {exc}"
+
+    worker = threading.Thread(target=attempt, daemon=True)
+    worker.start()
+    worker.join(5)
+    if worker.is_alive() and kind == "fifo":
+        # Unblock the reader the old code left waiting on the FIFO.
+        with contextlib.suppress(OSError):
+            os.close(os.open(planted, os.O_WRONLY | os.O_NONBLOCK))
+        worker.join(5)
+        result.setdefault("outcome", "hung on the FIFO")
+    assert result.get("outcome", "hung").startswith("refused"), result
+    assert "not a regular file" in result["outcome"] or "not a file" in result["outcome"]
+
+
+def _swap_before_connect(
+    monkeypatch: pytest.MonkeyPatch, database: Path, link_target: Path, *, restore: bool
+) -> None:
+    """Simulate the check-then-open race deterministically.
+
+    Right before SQLite opens the database, ``jobs.sqlite`` becomes a symbolic
+    link to ``link_target``. With ``restore``, the original file (same inode)
+    is renamed back right after the open, as an attacker's swap loop would.
+    """
+    real_connect = sqlite3.connect
+    parked = database.with_name(".parked")
+
+    def racing_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        os.replace(database, parked)
+        database.symlink_to(link_target)
+        try:
+            return real_connect(*args, **kwargs)
+        finally:
+            if restore:
+                os.replace(parked, database)
+
+    monkeypatch.setattr(jobs.sqlite3, "connect", racing_connect)
+
+
+def test_jobs_database_swapped_for_a_dangling_link_after_the_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _root_with_notes(tmp_path)
+    database = root / "jobs.sqlite"
+    jobs.open_db(database).close()
+    outside = tmp_path / "outside" / "planted-by-race.db"
+    outside.parent.mkdir()
+    _swap_before_connect(monkeypatch, database, outside, restore=False)
+    with pytest.raises(jobs.JobsDatabaseError):
+        jobs.open_db(database).close()
+    assert not outside.exists(), "SQLite created the database at the link's target"
+
+
+def test_jobs_database_swapped_for_a_link_and_back_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _root_with_notes(tmp_path)
+    database = root / "jobs.sqlite"
+    jobs.open_db(database).close()
+    victim = tmp_path / "outside" / "victim.db"
+    before = _victim_db(victim)
+    _swap_before_connect(monkeypatch, database, victim, restore=True)
+    with pytest.raises(jobs.JobsDatabaseError):
+        jobs.open_db(database).close()
+    assert victim.read_bytes() == before
+    assert _tables(victim) == ["victim"]
+
+
+def test_read_only_jobs_database_is_still_listed(tmp_path: Path) -> None:
+    root = _root_with_notes(tmp_path)
+    first = TestClient(create_app(root=root, token=TOKEN))
+    made = first.post("/api/jobs", headers={**BEARER, **CSRF}, json={"name": "echo", "args": ["a"]})
+    assert made.status_code == 200
+    (root / "jobs.sqlite").chmod(0o444)
+    try:
+        listed = TestClient(create_app(root=root, token=TOKEN)).get("/api/jobs", headers=BEARER)
+        assert listed.status_code == 200, listed.text
+        assert [job["status"] for job in listed.json()] == ["ok"]
+    finally:
+        (root / "jobs.sqlite").chmod(0o644)
+
+
+# FOLD-09 ------------------------------------------------------------------------
+
+
+def _fake_rerun(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    written: list[Path] = []
+
+    def fake_export(scene: Scene, dest: Path) -> int:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"rrd")
+        written.append(dest)
+        return 1
+
+    monkeypatch.setattr("coperceive.app.server.export_rerun", fake_export)
+    return written
+
+
+def test_rerun_export_name_ignores_a_manifest_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    written = _fake_rerun(monkeypatch)
+    root = tmp_path / "library"
+    _scene(root, "shared-scene", "../other-scene/planted")
+    (root / "other-scene").mkdir()
+    client = TestClient(create_app(root=root, token=TOKEN))
+    response = client.post("/api/scenes/shared-scene/export/rerun", headers={**BEARER, **CSRF})
+    assert response.status_code == 200, response.text
+    assert response.json()["path"] == "exports/shared-scene.rrd"
+    assert written == [(root / "exports" / "shared-scene.rrd").resolve()]
+    assert not (root / "other-scene" / "planted.rrd").exists()
+
+
+def test_rerun_export_keeps_a_plain_manifest_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    written = _fake_rerun(monkeypatch)
+    root = tmp_path / "library"
+    _scene(root, "folder-name", "Town03-000")
+    _scene(root, "odd.name", "odd.name")
+    client = TestClient(create_app(root=root, token=TOKEN))
+    plain = client.post("/api/scenes/folder-name/export/rerun", headers={**BEARER, **CSRF})
+    assert plain.json()["path"] == "exports/Town03-000.rrd"
+    odd = client.post("/api/scenes/odd.name/export/rerun", headers={**BEARER, **CSRF})
+    assert odd.status_code == 200
+    assert odd.json()["path"] == "exports/scene.rrd"
+    assert all(path.parent == (root / "exports").resolve() for path in written)
+
+
+# --token-file -------------------------------------------------------------------
+
+
+def _token_args(token_file: Path) -> Any:
+    return build_parser().parse_args(
+        ["serve", "--root", str(token_file.parent), "--token-file", str(token_file)]
+    )
+
+
+def _resolve(token_file: Path) -> str | None:
+    from coperceive import cli
+
+    resolve: Any = cli._resolve_token  # pyright: ignore[reportPrivateUsage]
+    return resolve(_token_args(token_file))
+
+
+posix_only = pytest.mark.skipif(os.name == "nt", reason="POSIX owner and mode bits")
+
+
+@posix_only
+def test_token_file_owned_by_another_user_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("swapped-in-token\n", encoding="utf-8")
+    token_file.chmod(0o600)
+    assert _resolve(token_file) == "swapped-in-token"
+    owner = token_file.stat().st_uid
+    monkeypatch.setattr(os, "geteuid", lambda: owner + 1)
+    monkeypatch.setattr(os, "getuid", lambda: owner + 1)
+    with pytest.raises(SystemExit) as exc:
+        _resolve(token_file)
+    assert exc.value.code == 2
+    assert "owned by" in capsys.readouterr().err
+
+
+@posix_only
+def test_token_file_symlink_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    target = tmp_path / "real-token.txt"
+    target.write_text("linked-token\n", encoding="utf-8")
+    target.chmod(0o600)
+    link = tmp_path / "token.txt"
+    link.symlink_to(target)
+    with pytest.raises(SystemExit) as exc:
+        _resolve(link)
+    assert exc.value.code == 2
+    assert "symbolic link" in capsys.readouterr().err
+
+
+@posix_only
+def test_empty_token_file_does_not_fall_back_to_no_token(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("\n", encoding="utf-8")
+    token_file.chmod(0o600)
+    with pytest.raises(SystemExit) as exc:
+        _resolve(token_file)
+    assert exc.value.code == 2
+    assert "empty" in capsys.readouterr().err
+
+
+@posix_only
+def test_token_file_the_desktop_writes_is_accepted(tmp_path: Path) -> None:
+    """What sidecar.rs and remote/manager.py write: a 0600 regular file, token + newline."""
+    token_file = tmp_path / "coperceive-local-1" / "token-8731.txt"
+    token_file.parent.mkdir()
+    descriptor = os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write("0123456789abcdef0123456789abcdef\n")
+    assert _resolve(token_file) == "0123456789abcdef0123456789abcdef"
+    token_file.chmod(0o400)
+    assert _resolve(token_file) == "0123456789abcdef0123456789abcdef"
+
+
+def test_jobs_database_path_check_ignores_windows_case_and_separators() -> None:
+    """SQLite's PRAGMA database_list and os.path.realpath can spell one Windows path with a
+    different case or separator; the check must still see one file, and two files apart."""
+    import ntpath
+    import posixpath
+
+    from coperceive.app.jobs import same_path
+
+    reported = "C:\\Users\\Lab\\Scenes\\jobs.sqlite"
+    assert same_path(reported, "c:/users/lab/scenes/jobs.sqlite", ntpath)
+    assert same_path(reported, "C:\\Users\\Lab\\Scenes\\.\\jobs.sqlite", ntpath)
+    assert not same_path(reported, "C:\\Users\\Lab\\Other\\jobs.sqlite", ntpath)
+    # On POSIX the case matters.
+    assert not same_path("/data/Lab/jobs.sqlite", "/data/lab/jobs.sqlite", posixpath)

@@ -14,6 +14,7 @@
           "gpu": true,
           "memory_gb": 64,
           "options": [
+            "ckpt_root",
             "det_json",
             "min_score",
             "nusc_root",
@@ -33,6 +34,7 @@
           "gpu": true,
           "memory_gb": 64,
           "options": [
+            "ckpt_root",
             "det_json",
             "min_score",
             "nusc_root",
@@ -52,6 +54,7 @@
           "gpu": true,
           "memory_gb": 64,
           "options": [
+            "ckpt_root",
             "det_json",
             "min_score",
             "nusc_root",
@@ -69,6 +72,7 @@
           "gpu": true,
           "memory_gb": 64,
           "options": [
+            "ckpt_root",
             "det_json",
             "min_score",
             "nusc_root",

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from coperceive.evaluation.predictions import PredictionError, validate_boxes
 from coperceive.model import Scene
-from coperceive.models.batch import run_meta_for, select_agents
+from coperceive.models.batch import resolve_checkpoint_option, run_meta_for, select_agents
 from coperceive.models.inputs import build_frame, remove_inputs, sensor_json
 from coperceive.models.protocol import (
     AgentRef,
@@ -118,6 +118,10 @@ def _check_model(
 ) -> None:
     assert manifest.source is not None
     effective = check_options(spec, options)
+    # A declared checkpoint is optional for `model check` (without it the model is skipped),
+    # but when it is given the child must also receive an absolute path: its cwd is the work
+    # directory, so a relative --option would not resolve there.
+    resolve_checkpoint_option(spec, effective)
     scenes_root = work_root / f"scenes-{spec.key}"
     scene_dir = write_synthetic_scene(scenes_root, spec)
     scene = read_scene(scene_dir)
@@ -139,6 +143,7 @@ def _check_model(
                 work_dir=work_dir,
                 parent_env=parent_env,
                 hello_timeout_s=timeout,
+                options=effective,
             )
         except RunnerTimeout as exc:
             rules.set(1, "fail", f"no hello within {timeout:g} s: {exc}")

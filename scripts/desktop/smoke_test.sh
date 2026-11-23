@@ -4,6 +4,7 @@
 # constant-time token verification, and measuring artifact sizes.
 
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_BUNDLE="${1:-src-tauri/target/release/bundle/macos/Coperceive.app}"
@@ -571,6 +572,104 @@ wait "${APP_PID}" 2>/dev/null || true
 APP_PID=""
 echo "Verified: App binary launched, auto-connected to fixture, loaded scenes, and terminated successfully."
 
+# Test 4b: Symlinked .app path launch check (without dereferencing the .app symlink beforehand)
+echo ""
+echo "--- Symlinked .app Launch Check (macOS) ---"
+SYM_DIR="${TMPDIR}/sym-apps"
+SYM_APP="${SYM_DIR}/Coperceive.app"
+SYM_STATE_DIR="${TMPDIR}/sym-state"
+SYM_MARKER="${TMPDIR}/sym_marker.txt"
+SYM_STDOUT="${TMPDIR}/sym_stdout.log"
+SYM_STDERR="${TMPDIR}/sym_stderr.log"
+mkdir -p "${SYM_DIR}" "${SYM_STATE_DIR}"
+ln -s "${APP_BUNDLE}" "${SYM_APP}"
+SYM_EXE="${SYM_APP}/Contents/MacOS/$(basename "${APP_EXE}")"
+if [ ! -x "${SYM_EXE}" ]; then
+    echo "Error: Symlinked app executable is not executable: ${SYM_EXE}" >&2
+    exit 17
+fi
+
+echo "Launching app binary through symlinked .app path: ${SYM_EXE}..."
+COPERCEIVE_STATE_DIR="${SYM_STATE_DIR}" \
+COPERCEIVE_NO_RESTORE=1 \
+COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_ROOT}" \
+COPERCEIVE_TEST_MARKER_FILE="${SYM_MARKER}" \
+"${SYM_EXE}" > "${SYM_STDOUT}" 2> "${SYM_STDERR}" &
+SYM_PID=$!
+
+for i in {1..90}; do
+    if [ -f "${SYM_MARKER}" ]; then
+        break
+    fi
+    if ! kill -0 "${SYM_PID}" 2>/dev/null; then
+        echo "Error: Symlinked .app process died prematurely during startup!" >&2
+        cat "${SYM_STDERR}" >&2
+        cat "${SYM_STDOUT}" >&2
+        exit 17
+    fi
+    sleep 0.5
+done
+
+if [ ! -f "${SYM_MARKER}" ]; then
+    echo "Error: Symlinked .app marker file was not created within 45s timeout!" >&2
+    cat "${SYM_STDERR}" >&2
+    cat "${SYM_STDOUT}" >&2
+    kill -TERM "${SYM_PID}" 2>/dev/null || true
+    exit 17
+fi
+
+SYM_ORIGIN=$(sed -n '1p' "${SYM_MARKER}")
+SYM_TOKEN=$(sed -n '2p' "${SYM_MARKER}")
+SYM_SCENES_RESP=$(curl -s -f -H "Authorization: Bearer ${SYM_TOKEN}" "${SYM_ORIGIN}/api/scenes" || true)
+SYM_SCENE_COUNT=$(python3 -c 'import json, sys; data = json.loads(sys.argv[1]); print(len(data))' "${SYM_SCENES_RESP}" 2>/dev/null || echo "0")
+if [ "${SYM_SCENE_COUNT}" -lt 1 ]; then
+    echo "Error: Symlinked .app /api/scenes returned < 1 scene (${SYM_SCENES_RESP})" >&2
+    kill -TERM "${SYM_PID}" 2>/dev/null || true
+    exit 17
+fi
+
+SYM_SIDECAR_PY=$(python3 - "${SYM_STDOUT}" <<'PY'
+import json, sys
+py_path = ""
+with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+    for line in f:
+        if "[auto-connect] state=" in line:
+            try:
+                payload = json.loads(line.split("state=", 1)[1])
+                detail = payload.get("detail") or {}
+                if isinstance(detail, dict) and detail.get("python_bin") and detail.get("python_exists") is True:
+                    py_path = str(detail["python_bin"])
+            except Exception:
+                pass
+print(py_path)
+PY
+)
+case "${SYM_SIDECAR_PY}" in
+    "${SYM_APP}/Contents/Resources/"*|"${APP_BUNDLE}/Contents/Resources/"*)
+        if [ ! -x "${SYM_SIDECAR_PY}" ]; then
+            echo "Error: Symlinked .app sidecar Python is not executable: ${SYM_SIDECAR_PY}" >&2
+            kill -TERM "${SYM_PID}" 2>/dev/null || true
+            exit 17
+        fi
+        echo "Verified: Symlinked .app launch resolved bundled Python inside .app: ${SYM_SIDECAR_PY} (/api/scenes=${SYM_SCENE_COUNT})"
+        ;;
+    *)
+        echo "Error: Symlinked .app did not use bundled Python inside .app; got '${SYM_SIDECAR_PY}'" >&2
+        cat "${SYM_STDOUT}" >&2
+        kill -TERM "${SYM_PID}" 2>/dev/null || true
+        exit 17
+        ;;
+esac
+
+kill -TERM "${SYM_PID}" 2>/dev/null || true
+sleep 1
+if kill -0 "${SYM_PID}" 2>/dev/null; then
+    kill -9 "${SYM_PID}" 2>/dev/null || true
+fi
+wait "${SYM_PID}" 2>/dev/null || true
+SYM_PID=""
+rm -f "${SYM_APP}"
+
 # Test 5: First-Run Welcome Card & Demo Mode End-to-End Verification
 echo ""
 echo "--- First-Run Welcome Card & Demo Mode Verification (macOS) ---"
@@ -676,9 +775,8 @@ if ! echo "${CLICK_RESP}" | grep -q '"clicked"'; then
 fi
 
 echo "Polling until demo scene is generated, opened in viewer, and renders LiDAR points, camera strip, and boxes..."
-VIEWER_CHECK_SCRIPT=$(python3 - "${COPERCEIVE_INTEL_VM_NO_WEBGL:-0}" <<'PY'
-import json, sys
-expect_no_webgl = sys.argv[1] == "1"
+VIEWER_CHECK_SCRIPT=$(python3 - <<'PY'
+import json
 js = """(() => {
   document.querySelector("section.cam-strip[data-open='true'] .cam-thumb")?.scrollIntoView?.();
   const title = (document.querySelector(".dataset-badge .dataset-name")?.textContent || "").trim();
@@ -692,9 +790,9 @@ js = """(() => {
     notice.includes("3D view unavailable")
     && notice.includes("Copy diagnostics");
   const baseReady = title === "Demo (synthetic)" && points > 0 && cameras >= 1 && boxes > 0;
-  const ready = EXPECT_NO_WEBGL ? (baseReady && hasWebglUnavailable) : baseReady;
+  const ready = baseReady && !hasWebglUnavailable;
   return { ready, title, points, cameras, boxes, hasWebglUnavailable };
-})()""".replace("EXPECT_NO_WEBGL", "true" if expect_no_webgl else "false")
+})()"""
 print(json.dumps({"window": "viewer", "script": js}))
 PY
 )
@@ -737,12 +835,6 @@ if [ "${DEMO_LOADED}" -ne 1 ]; then
     exit 23
 fi
 echo "Verified viewer loaded demo scene (/eval HTTP ${LAST_VIEWER_HTTP_CODE}): ${LAST_VIEWER_STATE}"
-if [ "${COPERCEIVE_INTEL_VM_NO_WEBGL:-0}" = "1" ]; then
-    screencapture -x "${SCREENSHOT_DIR}/demo-webgl-unavailable.png" 2>/dev/null || true
-    if [ -f "${SCREENSHOT_DIR}/demo-webgl-unavailable.png" ]; then
-        echo "Verified: captured WebGL-unavailable screenshot at ${SCREENSHOT_DIR}/demo-webgl-unavailable.png ($(stat -f %z "${SCREENSHOT_DIR}/demo-webgl-unavailable.png" 2>/dev/null || wc -c < "${SCREENSHOT_DIR}/demo-webgl-unavailable.png") bytes)"
-    fi
-fi
 
 echo "Opening #prediction-output menu, selecting 'cav-b · noisy', and verifying 'synthetic predictions' evaluation view..."
 COMPARE_CHECK_SCRIPT='{"window":"viewer","script":"(() => { const runBtn = document.querySelector(\"#prediction-run\"); const outBtn = document.querySelector(\"#prediction-output\"); const list = document.querySelector(\"ul.menu-list[aria-labelledby=\\\"prediction-output\\\"]\"); const curOut = (outBtn?.textContent || \"\").trim(); if (!curOut.includes(\"cav-b\")) { if (!list && outBtn) { outBtn.click(); } else if (list) { const opt = [...list.querySelectorAll(\"button[role=\\\"option\\\"]\")].find(b => (b.textContent || \"\").includes(\"cav-b\")); if (opt) opt.click(); } } const predRun = (runBtn?.textContent || \"\").trim(); const evalHead = (document.querySelector(\".eval-head\")?.textContent || \"\").trim(); const ok = predRun.includes(\"synthetic predictions\") && evalHead.includes(\"cav-b\") && evalHead.includes(\"synthetic predictions\"); return { ok, predRun, output: (outBtn?.textContent || \"\").trim(), evalHead }; })()"}'
@@ -814,29 +906,19 @@ case "${DEMO_SIDECAR_PY}" in
         ;;
 esac
 
-if [ "${COPERCEIVE_INTEL_VM_NO_WEBGL:-0}" = "1" ]; then
-    # Approved native-Intel CI exception: on macos-15-intel, the headless VM's WKWebView
-    # returns null for WebGL vendor/renderer/shader precision ("webgl":{"renderer":null,
-    # "unmaskedRenderer":null,"vendor":null,"webgl":true,"webgl2":true}, console error:
-    # "THREE.WebGLRenderer: null is not an object (evaluating 'e.getShaderPrecisionFormat(e.VERTEX_SHADER,e.HIGH_FLOAT).precision')").
-    # Skip 3D rendering and 1x playback assertions here; non-WebGL panels, APIs, and the
-    # "3D view unavailable" notice remain blocking above.
-    echo "Skipping 3D playback ratio assertion on COPERCEIVE_INTEL_VM_NO_WEBGL=1 (headless VM WebGL vendor/renderer/precision=null)."
-else
-    echo "Verifying demo 1x playback advances frames smoothly without 'Buffering'..."
-    PLAYBACK_START_RESP=$(curl -s -f -X POST \
-        -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
-        -H "Content-Type: application/json" \
-        -d '{"window":"viewer","script":"(() => { const s0 = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (s0 && !s0.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? null; })()"}' \
-        "http://127.0.0.1:${DEMO_CTRL_PORT}/eval")
-    echo "Playback started: ${PLAYBACK_START_RESP}"
+echo "Verifying demo 1x playback advances frames smoothly without 'Buffering'..."
+PLAYBACK_START_RESP=$(curl -s -f -X POST \
+    -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d '{"window":"viewer","script":"(() => { const s0 = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (s0 && !s0.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? null; })()"}' \
+    "http://127.0.0.1:${DEMO_CTRL_PORT}/eval")
+echo "Playback started: ${PLAYBACK_START_RESP}"
 
-    python3 "${SCRIPT_DIR}/playback_metrics.py" poll \
-        --port "${DEMO_CTRL_PORT}" \
-        --secret "${DEMO_CTRL_SECRET}" \
-        --polls 25 \
-        --interval 0.2 || exit 26
-fi
+python3 "${SCRIPT_DIR}/playback_metrics.py" poll \
+    --port "${DEMO_CTRL_PORT}" \
+    --secret "${DEMO_CTRL_SECRET}" \
+    --polls 25 \
+    --interval 0.2 || exit 26
 
 DEMO_OUTCOME_LINE=$(grep "COPERCEIVE_DEMO_OUTCOME:" "${DEMO_STDOUT}" | tail -n 1 || echo "")
 if [ -z "${DEMO_OUTCOME_LINE}" ]; then

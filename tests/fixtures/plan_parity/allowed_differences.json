@@ -1,5 +1,5 @@
 {
-  "about": "Lines that legitimately differ between the app's Griffin job (tests/fixtures/plan_parity/app/<case>.sbatch) and `coperceive model run --slurm` for the same inputs. tests/test_plan_parity.py fails on a one-sided line no entry matches. side: cli, app or both; match: a full-line regex for ONE line (a trailing '  # comment' is dropped first); cases: the cases the entry applies to (default: all). Every app-side and both-side entry must match a one-sided line in EVERY case it applies to, so the app cannot drop the line; a cli-side entry must still match somewhere. kind: intended, the only kind (docs/adr/0021-app-model-runs-follow-the-cli-slurm-job.md decides it). Not listed, so they must be identical: the module lines (python/<v> from the venv's pyvenv.cfg, then the manifest's), --gres=gpu:1, --constraint, --time (the CLI's estimate), --mail-type, --output/--error (~/logs/%x-%j), PYTHONPATH, --cpus-per-task, --mem, set -euo pipefail, module purge, the partition, and the run block (`set +e`, model run, `RC=$?`, `set -e`, `echo \"model run exit $RC\"`), which the test also checks in place on both sides with the work copy and the exit after it.",
+  "about": "Lines that legitimately differ between the app's Griffin job (tests/fixtures/plan_parity/app/<case>.sbatch) and `coperceive model run --slurm` for the same inputs. tests/test_plan_parity.py fails on a one-sided line no entry matches. side: cli, app or both; match: a full-line regex for ONE line (a trailing '  # comment' is dropped first); cases: the cases the entry applies to (default: all). Every app-side and both-side entry must match a one-sided line in EVERY case it applies to, so the app cannot drop the line; a cli-side entry must still match somewhere. kind: intended, the only kind (docs/adr/0021-app-model-runs-follow-the-cli-slurm-job.md decides it). Not listed, so they must be identical: the module lines (python/<v> from the venv's pyvenv.cfg, then the manifest's), --gres=gpu:1, --constraint, --time (the CLI's estimate), --mail-type, --output/--error (~/logs/%x-%j), PYTHONPATH, --cpus-per-task, --mem, set -euo pipefail, module purge, the partition, and the run block (`set +e`, model run, `RC=$?`, `set -e`, `echo \"model run exit $RC\"`), which the test also checks in place on both sides with the work copy and the exit after it. The scratch setup is also compared step by step on both sides (tests/test_plan_parity.py _scratch_setup: set -euo pipefail first, the scratch folder on the profile's template, its mkdir, the EXIT trap, TMPDIR and the work folder, in that order, before module purge), so the one-sided scratch lines here excuse only the variable's name (SCRATCH, SCRATCH_DIR), the app's mode 0700 and each side's own folders. An entry that names a case's paths lists its cases; spaces_and_quotes and proxy_jump_modules have their own rows for those lines, with the same reasons.",
   "lines": [
     {
       "id": "comments",
@@ -143,7 +143,30 @@
       "match": "OUT_DIR=\"/home/tester/results/runs/plan-1790000000-aabbccddeeff\"",
       "kind": "intended",
       "why": "The app's --out is on results_root (<results_root>/runs/<plan id>), not staged in scratch.",
-      "cite": "src-tauri/src/job_submit.rs render_run_script, job_scratch_dir; docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a"
+      "cite": "src-tauri/src/job_submit.rs render_run_script, job_scratch_dir; docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a",
+      "cases": [
+        "base",
+        "legacy_protocol",
+        "no_media_root",
+        "ckpt_root_custom",
+        "mixed_partition",
+        "modules_no_gpu_discovery",
+        "modules_profile_other_python",
+        "venv_profile",
+        "venv_script_command",
+        "spaces_and_quotes"
+      ]
+    },
+    {
+      "id": "scratch",
+      "side": "app",
+      "match": "OUT_DIR=\"/data/results/runs/plan-1790000000-aabbccddeeff\"",
+      "kind": "intended",
+      "why": "The app's --out is on results_root (<results_root>/runs/<plan id>), not staged in scratch.",
+      "cite": "src-tauri/src/job_submit.rs render_run_script, job_scratch_dir; docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a",
+      "cases": [
+        "proxy_jump_modules"
+      ]
     },
     {
       "id": "scratch",
@@ -167,7 +190,40 @@
       "match": "rsync -a --files-from=/data/griffin/predictions/\\.slurm/plan-1790000000-aabbccddeeff\\.scenes\\.txt /data/griffin/scenes/ \"\\$SCRATCH/scenes/\"",
       "kind": "intended",
       "why": "Stages the scenes. The app runs against data already on the cluster and stages nothing.",
-      "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'"
+      "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'",
+      "cases": [
+        "base",
+        "legacy_protocol",
+        "no_media_root",
+        "ckpt_root_custom",
+        "mixed_partition",
+        "modules_no_gpu_discovery",
+        "modules_profile_other_python",
+        "venv_profile",
+        "venv_script_command"
+      ]
+    },
+    {
+      "id": "staging",
+      "side": "cli",
+      "match": "rsync -a --files-from=/data/scenes/predictions/\\.slurm/plan-1790000000-aabbccddeeff\\.scenes\\.txt /data/scenes/scenes/ \"\\$SCRATCH/scenes/\"",
+      "kind": "intended",
+      "why": "Stages the scenes. The app runs against data already on the cluster and stages nothing.",
+      "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'",
+      "cases": [
+        "proxy_jump_modules"
+      ]
+    },
+    {
+      "id": "staging",
+      "side": "cli",
+      "match": "rsync -a --files-from='/data/te st/it'\"'\"'s \"q\"/predictions/\\.slurm/plan-1790000000-aabbccddeeff\\.scenes\\.txt' '/data/te st/it'\"'\"'s \"q\"/scenes/' \"\\$SCRATCH/scenes/\"",
+      "kind": "intended",
+      "why": "Stages the scenes. The app runs against data already on the cluster and stages nothing.",
+      "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'",
+      "cases": [
+        "spaces_and_quotes"
+      ]
     },
     {
       "id": "staging",
@@ -183,7 +239,40 @@
       "match": "rsync -a --files-from=/data/griffin/predictions/\\.slurm/plan-1790000000-aabbccddeeff\\.raw\\.txt /data/griffin/raw/ \"\\$SCRATCH/raw/\"",
       "kind": "intended",
       "why": "Stages the raw files. The app runs against data already on the cluster and stages nothing.",
-      "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'"
+      "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'",
+      "cases": [
+        "base",
+        "legacy_protocol",
+        "no_media_root",
+        "ckpt_root_custom",
+        "mixed_partition",
+        "modules_no_gpu_discovery",
+        "modules_profile_other_python",
+        "venv_profile",
+        "venv_script_command"
+      ]
+    },
+    {
+      "id": "staging",
+      "side": "cli",
+      "match": "rsync -a --files-from=/data/scenes/predictions/\\.slurm/plan-1790000000-aabbccddeeff\\.raw\\.txt /data/scenes/raw/ \"\\$SCRATCH/raw/\"",
+      "kind": "intended",
+      "why": "Stages the raw files. The app runs against data already on the cluster and stages nothing.",
+      "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'",
+      "cases": [
+        "proxy_jump_modules"
+      ]
+    },
+    {
+      "id": "staging",
+      "side": "cli",
+      "match": "rsync -a --files-from='/data/te st/it'\"'\"'s \"q\"/predictions/\\.slurm/plan-1790000000-aabbccddeeff\\.raw\\.txt' '/data/te st/it'\"'\"'s \"q\"/raw/' \"\\$SCRATCH/raw/\"",
+      "kind": "intended",
+      "why": "Stages the raw files. The app runs against data already on the cluster and stages nothing.",
+      "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'",
+      "cases": [
+        "spaces_and_quotes"
+      ]
     },
     {
       "id": "staging",
@@ -215,7 +304,30 @@
       "match": "mkdir -p /home/tester/results/\"\\$SLURM_JOB_ID\"",
       "kind": "intended",
       "why": "Makes the per-job results folder. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
-      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "base",
+        "legacy_protocol",
+        "no_media_root",
+        "ckpt_root_custom",
+        "mixed_partition",
+        "modules_no_gpu_discovery",
+        "modules_profile_other_python",
+        "venv_profile",
+        "venv_script_command",
+        "spaces_and_quotes"
+      ]
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "mkdir -p /data/results/\"\\$SLURM_JOB_ID\"",
+      "kind": "intended",
+      "why": "Makes the per-job results folder. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "proxy_jump_modules"
+      ]
     },
     {
       "id": "copy_home",
@@ -223,7 +335,30 @@
       "match": "rsync -a \"\\$SCRATCH/out/\" /home/tester/results/\"\\$SLURM_JOB_ID\"/",
       "kind": "intended",
       "why": "Copies the staged --out to the per-job results folder. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
-      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "base",
+        "legacy_protocol",
+        "no_media_root",
+        "ckpt_root_custom",
+        "mixed_partition",
+        "modules_no_gpu_discovery",
+        "modules_profile_other_python",
+        "venv_profile",
+        "venv_script_command",
+        "spaces_and_quotes"
+      ]
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "rsync -a \"\\$SCRATCH/out/\" /data/results/\"\\$SLURM_JOB_ID\"/",
+      "kind": "intended",
+      "why": "Copies the staged --out to the per-job results folder. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "proxy_jump_modules"
+      ]
     },
     {
       "id": "copy_home",
@@ -231,7 +366,40 @@
       "match": "mkdir -p /data/griffin/predictions/plan-1790000000-aabbccddeeff",
       "kind": "intended",
       "why": "Makes the run's folder under --out. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
-      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "base",
+        "legacy_protocol",
+        "no_media_root",
+        "ckpt_root_custom",
+        "mixed_partition",
+        "modules_no_gpu_discovery",
+        "modules_profile_other_python",
+        "venv_profile",
+        "venv_script_command"
+      ]
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "mkdir -p /data/scenes/predictions/plan-1790000000-aabbccddeeff",
+      "kind": "intended",
+      "why": "Makes the run's folder under --out. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "proxy_jump_modules"
+      ]
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "mkdir -p '/data/te st/it'\"'\"'s \"q\"/predictions/plan-1790000000-aabbccddeeff'",
+      "kind": "intended",
+      "why": "Makes the run's folder under --out. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "spaces_and_quotes"
+      ]
     },
     {
       "id": "copy_home",
@@ -239,7 +407,40 @@
       "match": "rsync -a \"\\$SCRATCH/out/\\$RUN_ID/\" /data/griffin/predictions/plan-1790000000-aabbccddeeff/",
       "kind": "intended",
       "why": "Copies the run home to --out. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
-      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "base",
+        "legacy_protocol",
+        "no_media_root",
+        "ckpt_root_custom",
+        "mixed_partition",
+        "modules_no_gpu_discovery",
+        "modules_profile_other_python",
+        "venv_profile",
+        "venv_script_command"
+      ]
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "rsync -a \"\\$SCRATCH/out/\\$RUN_ID/\" /data/scenes/predictions/plan-1790000000-aabbccddeeff/",
+      "kind": "intended",
+      "why": "Copies the run home to --out. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "proxy_jump_modules"
+      ]
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "rsync -a \"\\$SCRATCH/out/\\$RUN_ID/\" '/data/te st/it'\"'\"'s \"q\"/predictions/plan-1790000000-aabbccddeeff'/",
+      "kind": "intended",
+      "why": "Copies the run home to --out. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "spaces_and_quotes"
+      ]
     },
     {
       "id": "copy_home",
@@ -247,7 +448,40 @@
       "match": "echo \"done:\" /data/griffin/predictions/plan-1790000000-aabbccddeeff \"\\(exit \\$RC\\)\"",
       "kind": "intended",
       "why": "The CLI's last progress line. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
-      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "base",
+        "legacy_protocol",
+        "no_media_root",
+        "ckpt_root_custom",
+        "mixed_partition",
+        "modules_no_gpu_discovery",
+        "modules_profile_other_python",
+        "venv_profile",
+        "venv_script_command"
+      ]
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "echo \"done:\" /data/scenes/predictions/plan-1790000000-aabbccddeeff \"\\(exit \\$RC\\)\"",
+      "kind": "intended",
+      "why": "The CLI's last progress line. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "proxy_jump_modules"
+      ]
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "echo \"done:\" '/data/te st/it'\"'\"'s \"q\"/predictions/plan-1790000000-aabbccddeeff' \"\\(exit \\$RC\\)\"",
+      "kind": "intended",
+      "why": "The CLI's last progress line. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)",
+      "cases": [
+        "spaces_and_quotes"
+      ]
     },
     {
       "id": "work_copy",
@@ -255,7 +489,30 @@
       "match": "rsync -a --include='\\*/' --include='\\*\\.log' --include='artifacts/\\*\\*\\*' --exclude='\\*' --prune-empty-dirs \"\\$SCRATCH/work/\" /home/tester/results/\"\\$SLURM_JOB_ID\"/work/",
       "kind": "intended",
       "why": "The work directory's logs and artefacts come home from scratch. Same rsync filter as the app's line (the test compares the filter words); the CLI copies into its per-job results folder.",
-      "cite": "coperceive/models/slurm.py work_copy_filter"
+      "cite": "coperceive/models/slurm.py work_copy_filter",
+      "cases": [
+        "base",
+        "legacy_protocol",
+        "no_media_root",
+        "ckpt_root_custom",
+        "mixed_partition",
+        "modules_no_gpu_discovery",
+        "modules_profile_other_python",
+        "venv_profile",
+        "venv_script_command",
+        "spaces_and_quotes"
+      ]
+    },
+    {
+      "id": "work_copy",
+      "side": "cli",
+      "match": "rsync -a --include='\\*/' --include='\\*\\.log' --include='artifacts/\\*\\*\\*' --exclude='\\*' --prune-empty-dirs \"\\$SCRATCH/work/\" /data/results/\"\\$SLURM_JOB_ID\"/work/",
+      "kind": "intended",
+      "why": "The work directory's logs and artefacts come home from scratch. Same rsync filter as the app's line (the test compares the filter words); the CLI copies into its per-job results folder.",
+      "cite": "coperceive/models/slurm.py work_copy_filter",
+      "cases": [
+        "proxy_jump_modules"
+      ]
     },
     {
       "id": "work_copy",
@@ -282,10 +539,15 @@
       "cite": "tests/test_plan_parity.py",
       "cases": [
         "base",
+        "legacy_protocol",
+        "no_media_root",
+        "ckpt_root_custom",
         "mixed_partition",
         "modules_no_gpu_discovery",
         "modules_profile_other_python",
-        "venv_profile"
+        "venv_profile",
+        "proxy_jump_modules",
+        "spaces_and_quotes"
       ]
     },
     {

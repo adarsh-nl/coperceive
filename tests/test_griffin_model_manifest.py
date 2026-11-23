@@ -47,11 +47,19 @@ def test_griffin_manifest_loads() -> None:
     assert vehicle.resources.slurm_constraint == "a40"
     assert vehicle.resources.seconds_per_sample == 0.394
     assert vehicle.resources.staging_seconds == 700
-    assert set(vehicle.options) == {"subset", "min_score", "det_json", "nusc_root"}
+    assert set(vehicle.options) == {"ckpt_root", "subset", "min_score", "det_json", "nusc_root"}
+    assert vehicle.options["ckpt_root"].default is None and vehicle.options["ckpt_root"].required
     drone = select_model(manifest, "drone-side")
     assert drone.inputs.agents == ("uav",) and "track_query" in drone.outputs.artifacts
     assert drone.resources.slurm_constraint == "a40"
-    assert manifest.commands.batch == ("{python}", "{plugin_dir}/worker.py", "--model", "{model}")
+    assert manifest.commands.batch == (
+        "{python}",
+        "{plugin_dir}/worker.py",
+        "--model",
+        "{model}",
+        "--ckpt-root",
+        "{option:ckpt_root}",
+    )
 
 
 def test_griffin_manifest_instance_fusion_depends_on_the_drone_pass() -> None:

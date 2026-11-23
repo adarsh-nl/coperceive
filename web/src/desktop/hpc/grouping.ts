@@ -36,6 +36,36 @@ export const STATE_LABEL: Record<SceneRowState, string> = {
   not_prepared: "Not prepared",
 };
 
+/** The reason the cluster cache gives a scene that went stale because the adapter changed. */
+export const MANIFEST_CHANGED = "adapter manifest changed";
+
+/**
+ * Why a stale scene is stale, in the scene inspector. The cluster cache says either that
+ * the raw files changed or that the adapter's manifest, Coperceive's conversion rules for
+ * the dataset, changed since the scene was prepared (a scene prepared by an older version).
+ */
+export function staleExplanation(reason: string | null): string {
+  if (reason === MANIFEST_CHANGED) {
+    return "Coperceive now converts this dataset differently than when this scene was prepared (adapter manifest changed). Re-prepare it to view it with the current conversion.";
+  }
+  return `The raw files changed since this scene was prepared (${reason ?? "fingerprint changed"}). Re-prepare it to view the data as it is now.`;
+}
+
+/** The reason the cluster status gives when its walk of the raw files hit its bound. */
+export const RAW_CHECK_INCOMPLETE = "raw check incomplete";
+
+/**
+ * The note above the scene list when the cluster could not check every raw file (a large
+ * split hits the walk's time or entry bound). A partial check never marks a scene stale,
+ * so the note says a raw change may not show. Null when the check was complete or not run.
+ */
+export function rawCheckNotice(
+  rawCheck: { state: string; reason: string | null } | null | undefined,
+): string | null {
+  if (rawCheck?.state !== "incomplete") return null;
+  return "Raw check incomplete: the cluster could not check every raw file in time, so prepared scenes stay ready and a change to the raw files may not show here.";
+}
+
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 

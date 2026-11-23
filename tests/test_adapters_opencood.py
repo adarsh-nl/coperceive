@@ -293,7 +293,7 @@ def test_four_cameras_and_one_lidar_per_agent(tmp_path: Path) -> None:
         assert (cam.image_width_px, cam.image_height_px) == (800, 600)
 
 
-def test_camera_extrinsic_is_camera_to_lidar_child_to_parent(tmp_path: Path) -> None:
+def test_camera_extrinsic_is_lidar_to_camera_parent_to_child(tmp_path: Path) -> None:
     scene = _ingested(tmp_path)
     front = scene.sensor("641", "camera0").body_from_sensor
     assert (front.tx, front.ty, front.tz) == pytest.approx((-3.0, 0.0, 0.9))

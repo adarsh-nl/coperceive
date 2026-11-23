@@ -1,45 +1,132 @@
-site_name: coperceive
+site_name: Coperceive
 site_description: Cooperative multi-agent perception data.
+site_url: https://adarsh-nl.github.io/coperceive/docs/
 site_dir: docs_site
+docs_dir: docs
+strict: true
 theme:
   name: material
   palette:
-    scheme: default
-    primary: teal
-nav:
-  - Overview: index.md
-  - Format: spec/format.md
-  - Predictions and evaluation: spec/predictions.md
-  - Model plugin: spec/model-plugin.md
-  - Positioning: design/positioning.md
-  - Name: design/naming.md
-  - Earlier candidates: design/names.md
-  - Griffin verification: design/griffin-verification.md
-  - Viewer features: design/viewer-features.md
-  - Griffin dataset: datasets/griffin.md
-  - OPV2V and V2XSet: datasets/opencood.md
-  - V2X-Real: datasets/v2x-real.md
-  - Add a dataset: datasets/add-a-dataset.md
-  - Validate: validate.md
-  - Evaluate: eval.md
-  - Run a model: models.md
-  - Viewer: viewer.md
-  - Decisions:
-      - Data model: adr/0001-data-model.md
-      - On-disk format: adr/0002-on-disk-format.md
-      - Viewer: adr/0003-viewer.md
-      - Web app: adr/0004-web-app.md
-      - Docs generator: adr/0005-docs-generator.md
-      - Licence: adr/0006-licence.md
-      - Desktop packaging: adr/0007-desktop.md
-      - Shared HD map: adr/0008-hd-map.md
-      - Dataset adapters: adr/0009-dataset-adapters.md
-      - Evaluation step A: adr/0010-eval-predictions.md
-      - Model plugin (step B): adr/0011-live-model-plugin.md
-      - Left-handed sources and typed discovery: adr/0012-left-handed-sources.md
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+    - toc.follow
+plugins:
+  - search
 markdown_extensions:
   - tables
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
   - toc:
       permalink: true
-docs_dir: docs
-strict: false
+exclude_docs: |
+  ci.md
+  design/*.md
+  design/**/*.md
+  design/**/*.json
+  log/
+  media/
+  !media/viewer-griffin-town03.png
+  release/
+  superpowers/
+nav:
+  - Get started:
+      - What Coperceive is: index.md
+      - Install: get-started/install.md
+      - Quick start: get-started/quick-start.md
+      - Local and cluster: get-started/local-and-cluster.md
+  - Datasets:
+      - datasets/index.md
+      - OPV2V: datasets/opv2v.md
+      - V2XSet: datasets/v2xset.md
+      - V2V4Real: datasets/v2v4real.md
+      - V2X-Real: datasets/v2x-real.md
+      - DAIR-V2X-C: datasets/dair-v2x-c.md
+      - Griffin: datasets/griffin.md
+      - Demo: datasets/demo.md
+      - Bring your own: datasets/bring-your-own.md
+      - Longer notes:
+          - OPV2V and V2XSet — details: datasets/opencood.md
+          - V2V4Real — details: datasets/v2v4real-details.md
+          - DAIR-V2X-C — details: datasets/dair-v2x-c-details.md
+          - Griffin — details: datasets/griffin-details.md
+          - Demo — details: datasets/demo-details.md
+          - Generic format: spec/generic-multiview.md
+  - Guides:
+      - guides/index.md
+      - View a scene: guides/view-a-scene.md
+      - Open a dataset on a cluster: guides/cluster.md
+      - Evaluate predictions: guides/evaluate.md
+      - Robustness sweeps: guides/robustness.md
+      - Run a model: guides/run-a-model.md
+      - Result bundles: guides/bundles.md
+      - Longer notes:
+          - Viewer: viewer.md
+          - Validate: validate.md
+          - Evaluate: eval.md
+          - What the evaluator computes: eval-spec.md
+          - Robustness: robustness.md
+          - Run a model: models.md
+          - OpenCOOD plugin: models/opencood.md
+          - Bundles: bundles.md
+          - Cluster contract: datasets/cluster-datasets.md
+          - Prepare timing: datasets/prepare-profile.md
+          - CARLA maps: datasets/carla-maps.md
+  - Reference:
+      - reference/index.md
+      - On-disk format: spec/format.md
+      - Predictions: spec/predictions.md
+      - Pipeline output: spec/pipeline-output.md
+      - Repro card: spec/repro-card.md
+      - Paper export: spec/paper-export.md
+      - Perturbations: spec/perturbations.md
+      - Model plugin: spec/model-plugin.md
+      - JSON schemas: reference/schemas.md
+      - CLI: reference/cli.md
+  - Notes:
+      - notes/index.md
+      - Geometry conventions: geometry/conventions.md
+      - Add a dataset: datasets/add-a-dataset.md
+      - Contributing: notes/contributing.md
+      - Rust checks on a headless Linux host: contributing/hpc-dev.md
+      - Design decisions: notes/decisions.md
+      - "OpenCOOD's AP, read by room A": notes/opencood-ap-behaviour.md
+      - Security review: security/review-2026-11.md
+      - Updates: desktop/updates.md
+      - Decisions:
+          - Data model: adr/0001-data-model.md
+          - On-disk format: adr/0002-on-disk-format.md
+          - Viewer: adr/0003-viewer.md
+          - Web app: adr/0004-web-app.md
+          - Docs generator: adr/0005-docs-generator.md
+          - Licence: adr/0006-licence.md
+          - Desktop packaging: adr/0007-desktop.md
+          - Shared HD map: adr/0008-hd-map.md
+          - Dataset adapters: adr/0009-dataset-adapters.md
+          - Evaluation: adr/0010-eval-predictions.md
+          - Evaluator verification: adr/0016-evaluator-verification.md
+          - Model plugin: adr/0011-live-model-plugin.md
+          - Left-handed sources: adr/0012-left-handed-sources.md
+          - Geometry conformance: adr/0017-geometry-conformance.md
+          - Desktop app: adr/0014-desktop-app.md
+          - Cluster profiles: adr/0015-cluster-profiles-scheduler-adapter.md
+          - Plan parity: adr/0018-plan-parity.md
+          - Security review: adr/0019-security-review.md
+          - App runs follow the CLI job: adr/0021-app-model-runs-follow-the-cli-slurm-job.md
+          - Drop macOS Intel: adr/0022-drop-macos-intel.md

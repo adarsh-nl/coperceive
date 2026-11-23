@@ -10,9 +10,9 @@ The app reads that file from
 The tag must match the bundle version: an app that still reports the old version
 after updating would be offered the same update again on every check.
 
-Platforms supported in the updater manifest:
+Platforms supported in the updater manifest (from v0.1.3 on; macOS Intel
+``darwin-x86_64`` is discontinued and must stay absent):
 - darwin-aarch64 (macOS Apple Silicon): Coperceive_aarch64.app.tar.gz
-- darwin-x86_64  (macOS Intel):         Coperceive_x64.app.tar.gz
 - linux-x86_64   (Linux x86_64):        Coperceive_{version}_amd64.AppImage
 - windows-x86_64 (Windows x86_64):      Coperceive_{version}_x64-setup.exe
 """
@@ -28,7 +28,6 @@ from pathlib import Path
 
 ALL_PLATFORMS = (
     "darwin-aarch64",
-    "darwin-x86_64",
     "windows-x86_64",
     "linux-x86_64",
 )
@@ -62,7 +61,6 @@ def get_expected_filenames(version: str) -> dict[str, list[str]]:
     """Return explicit expected archive filenames for each platform."""
     return {
         "darwin-aarch64": ["Coperceive_aarch64.app.tar.gz"],
-        "darwin-x86_64": ["Coperceive_x64.app.tar.gz"],
         "linux-x86_64": [
             f"Coperceive_{version}_amd64.AppImage",
             f"coperceive_{version}_amd64.AppImage",
@@ -162,9 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--require-all",
         action="store_true",
-        help=(
-            "require all 4 platforms (darwin-aarch64, darwin-x86_64, windows-x86_64, linux-x86_64)"
-        ),
+        help=("require all 3 platforms (darwin-aarch64, windows-x86_64, linux-x86_64)"),
     )
     args = parser.parse_args(argv)
 

@@ -15,6 +15,12 @@
 //! what the app renders fails here until the files are rewritten. Run with
 //! `COPERCEIVE_UPDATE_PARITY=1` to rewrite them after a deliberate change, then review the
 //! diff.
+//!
+//! The `refusals` of cases.json are inputs the app refuses: each must be refused with
+//! exactly its `refused` message (`<stage>: <message>`), and has no render.
+//!
+//! A case whose profile has a `proxy_jump` is reached through that jump host: ProxyJump
+//! is transport, so it must reach the SSH arguments and leave the script byte-identical.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -25,9 +31,9 @@ use std::time::Duration;
 use coperceive_desktop::hpc::{DiscoveredPartition, EnvironmentKind, EnvironmentSetup, JobDefaults};
 use coperceive_desktop::job_submit::{load_saved_plan, render_run_script, SubmitOptions};
 use coperceive_desktop::run_plan::{build_run_plan, list_builtin_pipelines, save_run_plan, RunPlanRequest};
-use coperceive_desktop::server_profiles::{DiscoveredServer, ServerEntry};
+use coperceive_desktop::server_profiles::{DiscoveredServer, ServerEntry, SshHostSettings};
 use coperceive_desktop::slurm_adapter::RemoteRunner;
-use coperceive_desktop::ssh::CommandResult;
+use coperceive_desktop::ssh::{standard_ssh_args, CommandResult};
 use serde_json::Value;
 
 const CLUSTER_B: &str = include_str!("fixtures/hpc/cluster-b.json");
@@ -146,16 +152,23 @@ fn strings(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The case's code root: where the manifest lives and what PYTHONPATH names.
+fn code_root<'a>(cases: &'a Value, case: &'a Value) -> &'a str {
+    case["code_root"].as_str().unwrap_or_else(|| text(cases, "code_root"))
+}
+
 /// The case's profile, on top of the cluster-b fixture: its `kind` (modules or venv),
-/// modules, interpreter and coperceive command.
-fn entry_for(cases: &Value, case: &Value) -> ServerEntry {
+/// modules, interpreter and coperceive command. With `with_proxy`, a `proxy_jump` (and
+/// `port`) on the case's profile become the entry's SSH settings, as the app reads them
+/// from `~/.ssh/config`.
+fn entry_for(cases: &Value, case: &Value, with_proxy: bool) -> ServerEntry {
     let profile = &case["profile"];
     let mut entry: ServerEntry = serde_json::from_str(CLUSTER_B).unwrap();
     entry.id = format!("fixture-plan-parity-{}", text(case, "name"));
     let p = &mut entry.profile;
     p.name = format!("plan parity {}", text(case, "name"));
     p.data_roots = vec![text(case, "root").to_string()];
-    p.code_roots = vec![text(cases, "code_root").to_string()];
+    p.code_roots = vec![code_root(cases, case).to_string()];
     p.code_roots.extend(strings(&profile["extra_code_roots"]));
     p.results_root = text(profile, "results_root").to_string();
     p.scratch_template = text(profile, "scratch_template").to_string();
@@ -186,16 +199,29 @@ fn entry_for(cases: &Value, case: &Value) -> ServerEntry {
             ..Default::default()
         }
     });
-    entry.ssh = None;
+    entry.ssh = match (with_proxy, profile["proxy_jump"].as_str()) {
+        (true, Some(jump)) => Some(SshHostSettings {
+            alias: "cluster-b".to_string(),
+            hostname: Some("cluster-b.example.org".to_string()),
+            user: Some("bob".to_string()),
+            port: profile["port"].as_u64().map(|port| u16::try_from(port).expect("cases.json: port")),
+            proxy_jump: Some(jump.to_string()),
+            proxy_command: None,
+        }),
+        _ => None,
+    };
     entry
 }
 
-/// The script the app renders for `case`.
-fn render(cases: &Value, case: &Value) -> Result<String, String> {
-    let entry = entry_for(cases, case);
+/// The script the app renders for `entry` (from `entry_for(cases, case, _)`), or
+/// `Err("<stage>: <message>")` when the app refuses the plan.
+fn render(cases: &Value, case: &Value, entry: &ServerEntry) -> Result<String, String> {
     let root = text(case, "root");
     let scenes = format!("{root}/scenes");
-    let model_list = fs::read_to_string(parity_dir().join(text(cases, "model_list"))).unwrap();
+    // The cluster's `model list --json` names the manifest under the case's code root.
+    let model_list = fs::read_to_string(parity_dir().join(text(cases, "model_list")))
+        .unwrap()
+        .replace(text(cases, "code_root"), code_root(cases, case));
     let cluster = FakeCluster {
         model_list,
         scenes: scenes.clone(),
@@ -212,6 +238,12 @@ fn render(cases: &Value, case: &Value) -> Result<String, String> {
         .into_iter()
         .next()
         .ok_or_else(|| "list_builtin_pipelines: no built-in model was listed".to_string())?;
+    // The model's options, as the form's extras (the CLI's --option k=v).
+    let mut values = BTreeMap::new();
+    let extras = strings(&case["extras"]);
+    if !extras.is_empty() {
+        values.insert("extras".to_string(), serde_json::json!(extras));
+    }
     // What NewEvaluation.tsx sends for a built-in model; Griffin takes no checkpoint.
     let request = RunPlanRequest {
         profile_id: entry.id.clone(),
@@ -219,16 +251,22 @@ fn render(cases: &Value, case: &Value) -> Result<String, String> {
         pipeline_source: pipeline.source.clone(),
         registration_path: pipeline.registration_path.clone(),
         plugin_manifest: pipeline.plugin_manifest.clone(),
-        values: BTreeMap::new(),
+        values,
         checkpoint: String::new(),
         split: scenes,
         model: text(case, "model").to_string(),
         raw_root: format!("{root}/raw"),
-        media_root: format!("{root}/raw"),
+        // `"media_root": false` leaves the field empty, as the form does when none is chosen.
+        media_root: if case["media_root"].as_bool() == Some(false) { String::new() } else { format!("{root}/raw") },
+        // Griffin declares ckpt_root without a default: every case gives one, and the
+        // ckpt_root_custom case gives a folder of its own rather than the default.
+        ckpt_root: case["ckpt_root"].as_str().map(str::to_string).unwrap_or_else(|| format!("{root}/ckpts")),
+        // The AP protocol the plan records; a legacy case also puts it in the run line.
+        eval_protocol: case["eval_protocol"].as_str().unwrap_or("default").to_string(),
         environment_override: None,
     };
-    let plan = build_run_plan(&cluster, &entry, &request).map_err(|e| format!("build_run_plan: {e}"))?;
-    let saved = save_run_plan(&cluster, &entry, &plan, &request).map_err(|e| format!("save_run_plan: {e}"))?;
+    let plan = build_run_plan(&cluster, entry, &request).map_err(|e| format!("build_run_plan: {e}"))?;
+    let saved = save_run_plan(&cluster, entry, &plan, &request).map_err(|e| format!("save_run_plan: {e}"))?;
     let loaded = load_saved_plan(&cluster, profile, &saved.id).map_err(|e| format!("load_saved_plan: {e}"))?;
     // NewEvaluation.tsx's defaults: the plan's time estimate, the plan's GRES.
     let options = SubmitOptions {
@@ -243,15 +281,18 @@ fn render(cases: &Value, case: &Value) -> Result<String, String> {
     Ok(preview.script.replace(&loaded.id, text(cases, "run_id")))
 }
 
+fn read_cases() -> Value {
+    serde_json::from_str(&fs::read_to_string(parity_dir().join("cases.json")).unwrap()).unwrap()
+}
+
 #[test]
 fn the_app_renders_each_griffin_parity_case_as_committed() {
-    let cases: Value =
-        serde_json::from_str(&fs::read_to_string(parity_dir().join("cases.json")).unwrap()).unwrap();
+    let cases = read_cases();
     let update = std::env::var("COPERCEIVE_UPDATE_PARITY").as_deref() == Ok("1");
     let mut failures = Vec::new();
     for case in cases["cases"].as_array().unwrap() {
         let name = text(case, "name");
-        let rendered = match render(&cases, case) {
+        let rendered = match render(&cases, case, &entry_for(&cases, case, true)) {
             Ok(script) => script,
             Err(refusal) => {
                 failures.push(format!("{name}: the app refused the plan: {refusal}"));
@@ -273,4 +314,66 @@ fn the_app_renders_each_griffin_parity_case_as_committed() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn the_app_refuses_each_refusal_case_with_its_message() {
+    let cases = read_cases();
+    let refusals = cases["refusals"].as_array().expect("cases.json: refusals");
+    assert!(!refusals.is_empty(), "cases.json: no refusal case");
+    let mut failures = Vec::new();
+    for case in refusals {
+        let name = text(case, "name");
+        let render_path = parity_dir().join("app").join(format!("{name}.sbatch"));
+        if render_path.exists() {
+            failures.push(format!("{name}: a refusal case has a committed render {}", render_path.display()));
+        }
+        match render(&cases, case, &entry_for(&cases, case, true)) {
+            Err(refusal) if refusal == text(case, "refused") => {}
+            Err(refusal) => failures.push(format!("{name}: refused with\n  {refusal}\nnot\n  {}", text(case, "refused"))),
+            Ok(_) => failures.push(format!("{name}: the app no longer refuses it; make it a case")),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// ProxyJump is transport: with the jump host the SSH arguments carry `-J <jump>` (and the
+/// profile's port), without it they carry no `-J`, and the job script is byte-identical
+/// either way, and equal to the case's committed render.
+#[test]
+fn proxy_jump_changes_the_ssh_arguments_and_not_the_script() {
+    let cases = read_cases();
+    let proxied: Vec<&Value> =
+        cases["cases"].as_array().unwrap().iter().filter(|case| case["profile"]["proxy_jump"].is_string()).collect();
+    assert!(!proxied.is_empty(), "cases.json: no case has a proxy_jump");
+    for case in proxied {
+        let name = text(case, "name");
+        let jump = text(&case["profile"], "proxy_jump");
+        let with = entry_for(&cases, case, true);
+        let without = entry_for(&cases, case, false);
+
+        let with_args = standard_ssh_args(&with.ssh_target().unwrap());
+        let without_args = standard_ssh_args(&without.ssh_target().unwrap());
+        let jumps = |args: &[String]| -> Vec<String> {
+            args.windows(2).filter(|pair| pair[0] == "-J").map(|pair| pair[1].clone()).collect()
+        };
+        assert_eq!(jumps(&with_args), vec![jump.to_string()], "{name}: ProxyJump missing from {with_args:?}");
+        assert!(
+            !with_args.iter().any(|arg| arg.starts_with("-oProxyJump") || arg.starts_with("ProxyJump")),
+            "{name}: {with_args:?}"
+        );
+        assert!(jumps(&without_args).is_empty() && !without_args.contains(&"-J".to_string()), "{name}: {without_args:?}");
+        if let Some(port) = case["profile"]["port"].as_u64() {
+            assert!(with_args.windows(2).any(|pair| pair[0] == "-p" && pair[1] == port.to_string()), "{name}: {with_args:?}");
+        }
+        assert_ne!(with_args, without_args, "{name}: the jump host changed nothing in the SSH arguments");
+
+        let script_with = render(&cases, case, &with).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let script_without = render(&cases, case, &without).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(script_with.as_bytes(), script_without.as_bytes(), "{name}: ProxyJump changed the script");
+        assert!(!script_with.contains(jump), "{name}: the jump host reached the script");
+        let committed = fs::read_to_string(parity_dir().join("app").join(format!("{name}.sbatch")))
+            .unwrap_or_else(|_| panic!("{name}: no committed render"));
+        assert_eq!(script_with, committed, "{name}: the render is not the committed one");
+    }
 }

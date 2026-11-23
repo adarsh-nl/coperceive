@@ -65,6 +65,9 @@ const CHECKSUM_NAME = /^(checksums?|sha256sums?)(\.|$)/i;
 
 export const COMING = "Coming in the next release";
 
+export const INTEL_MAC_LEGACY_LABEL = "Intel Mac: download v0.1.2 (last Intel version)";
+export const INTEL_MAC_LEGACY_URL = "https://github.com/adarsh-nl/coperceive/releases/tag/v0.1.2";
+
 /** README wording for the unsigned Windows installer. */
 export const WINDOWS_NOTE =
   "Unsigned release builds trigger Windows SmartScreen on first run. Click More info → Run anyway to launch the installer.";
@@ -106,11 +109,18 @@ export interface DownloadLink {
   role: "primary" | "secondary";
 }
 
+export interface LegacyLink {
+  label: string;
+  href: string;
+}
+
 export interface PrimaryOffer {
   links: DownloadLink[];
   /** A platform whose installer is not in this release. */
   coming: string[];
   windowsNote: boolean;
+  /** Shown to Intel Macs and Macs whose architecture is unknown: link to v0.1.2. */
+  intelMacLegacy: LegacyLink | null;
 }
 
 /**
@@ -118,7 +128,7 @@ export interface PrimaryOffer {
  * and is never given a URL.
  */
 export function primaryOffer(release: ReleaseJson, client: ClientInfo): PrimaryOffer {
-  const offer: PrimaryOffer = { links: [], coming: [], windowsNote: false };
+  const offer: PrimaryOffer = { links: [], coming: [], windowsNote: false, intelMacLegacy: null };
   const add = (label: string, slot: AssetSlot, role: DownloadLink["role"] = "primary") => {
     const asset = assetFor(release, slot);
     if (asset) offer.links.push({ label, asset, role });
@@ -144,11 +154,11 @@ export function primaryOffer(release: ReleaseJson, client: ClientInfo): PrimaryO
       return offer;
     }
     if (client.arch === "x64") {
-      add("Download for Mac (Intel)", "mac-x64-dmg");
+      offer.intelMacLegacy = { label: INTEL_MAC_LEGACY_LABEL, href: INTEL_MAC_LEGACY_URL };
       return offer;
     }
     add("Download for Mac (Apple Silicon)", "mac-arm64-dmg");
-    add("Download for Mac (Intel)", "mac-x64-dmg");
+    offer.intelMacLegacy = { label: INTEL_MAC_LEGACY_LABEL, href: INTEL_MAC_LEGACY_URL };
     return offer;
   }
   offer.coming.push("Download");

@@ -72,7 +72,7 @@ jobs:
       - run: bash scripts/build_web_static.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
+          targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -112,13 +112,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash scripts/desktop/build_dmg.sh aarch64-apple-darwin
-      - name: Bundle Python Standalone Runtime for Intel Mac
-        run: python3 scripts/desktop/bundle_python.py --target x86_64-apple-darwin --skip-web-build
-      - name: Build Tauri Desktop & Updater Bundle (Intel x86_64)
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: bash scripts/desktop/build_dmg.sh x86_64-apple-darwin
       - name: Verify packaged app ships the viewer bundle
         run: |
           APP="$(find src-tauri/target -type d -name Coperceive.app | head -n 1)"
@@ -131,32 +124,21 @@ jobs:
         run: |
           mkdir -p release-assets-macos
           ARM64_BUNDLE="src-tauri/target/aarch64-apple-darwin/release/bundle"
-          INTEL_BUNDLE="src-tauri/target/x86_64-apple-darwin/release/bundle"
 
           test -f "${ARM64_BUNDLE}/macos/Coperceive.app.tar.gz" || { echo "::error::Missing arm64 updater tar.gz" >&2; exit 1; }
-          test -f "${INTEL_BUNDLE}/macos/Coperceive.app.tar.gz" || { echo "::error::Missing Intel updater tar.gz" >&2; exit 1; }
 
           cp "${ARM64_BUNDLE}/macos/Coperceive.app.tar.gz" release-assets-macos/Coperceive_aarch64.app.tar.gz
-          cp "${INTEL_BUNDLE}/macos/Coperceive.app.tar.gz" release-assets-macos/Coperceive_x64.app.tar.gz
 
           ARM64_DMG="$(find "${ARM64_BUNDLE}/dmg" -name "*.dmg" 2>/dev/null | head -n 1)"
           test -n "${ARM64_DMG}" && test -f "${ARM64_DMG}" || { echo "::error::Missing arm64 DMG" >&2; exit 1; }
           cp "${ARM64_DMG}" release-assets-macos/
 
-          INTEL_DMG="$(find "${INTEL_BUNDLE}/dmg" -name "*.dmg" 2>/dev/null | head -n 1)"
-          test -n "${INTEL_DMG}" && test -f "${INTEL_DMG}" || { echo "::error::Missing Intel DMG" >&2; exit 1; }
-          cp "${INTEL_DMG}" release-assets-macos/
-
           APP_VERSION="$(python3 -c "import tomllib; f = open('pyproject.toml', 'rb'); print(tomllib.load(f)['project']['version'])")"
           (cd web && npx tauri signer sign "../release-assets-macos/Coperceive_aarch64.app.tar.gz" --app-version "${APP_VERSION}")
-          (cd web && npx tauri signer sign "../release-assets-macos/Coperceive_x64.app.tar.gz" --app-version "${APP_VERSION}")
 
           test -f "release-assets-macos/Coperceive_aarch64.app.tar.gz" || { echo "::error::Missing Coperceive_aarch64.app.tar.gz" >&2; exit 1; }
           test -f "release-assets-macos/Coperceive_aarch64.app.tar.gz.sig" || { echo "::error::Missing Coperceive_aarch64.app.tar.gz.sig" >&2; exit 1; }
-          test -f "release-assets-macos/Coperceive_x64.app.tar.gz" || { echo "::error::Missing Coperceive_x64.app.tar.gz" >&2; exit 1; }
-          test -f "release-assets-macos/Coperceive_x64.app.tar.gz.sig" || { echo "::error::Missing Coperceive_x64.app.tar.gz.sig" >&2; exit 1; }
           test -f "release-assets-macos/$(basename "${ARM64_DMG}")" || { echo "::error::Missing ARM64 DMG in release-assets" >&2; exit 1; }
-          test -f "release-assets-macos/$(basename "${INTEL_DMG}")" || { echo "::error::Missing Intel DMG in release-assets" >&2; exit 1; }
           ls -la release-assets-macos/
       - uses: actions/upload-artifact@v4
         with:
@@ -415,7 +397,6 @@ jobs:
           cat minisign.pub
           for file in \
             release-assets/Coperceive_aarch64.app.tar.gz \
-            release-assets/Coperceive_x64.app.tar.gz \
             release-assets/Coperceive_*_amd64.AppImage \
             release-assets/Coperceive_*_x64-setup.exe; do
             if [ -f "${file}" ]; then

@@ -161,6 +161,36 @@ def test_import_without_score_note_exits_2(tmp_path: Path) -> None:
     assert caught.value.code == 2
 
 
+def test_eval_run_uses_the_protocol_recorded_in_run_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A run made for a protocol is scored under it unless --protocol or a config file
+    says otherwise; the choice is therefore recorded with the run, not hidden globally."""
+    root, jsonl = _prepare(tmp_path)
+    _import(root, jsonl)
+    run_json = root / "predictions" / "synthetic" / "run.json"
+    document = json.loads(run_json.read_text(encoding="utf-8"))
+    document["provenance"] = {"eval_protocol": "legacy"}
+    run_json.write_text(json.dumps(document), encoding="utf-8")
+
+    main(["eval", "run", "synthetic", "--root", str(root)])
+    capsys.readouterr()
+    metrics = json.loads(
+        (root / "predictions" / "synthetic" / SCENE_ID / "metrics.json").read_text(encoding="utf-8")
+    )
+    assert metrics["config"]["ranking_scope"] == "pooled"
+    assert metrics["config"]["gt_scope"] == "ego_only"
+
+    # An explicit choice wins over the recorded one.
+    main(["eval", "run", "synthetic", "--root", str(root), "--protocol", "default"])
+    capsys.readouterr()
+    metrics = json.loads(
+        (root / "predictions" / "synthetic" / SCENE_ID / "metrics.json").read_text(encoding="utf-8")
+    )
+    assert metrics["config"]["ranking_scope"] == "per_frame"
+    assert metrics["config"]["gt_scope"] == "connected_union"
+
+
 def test_eval_run_report_and_compare(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     root, jsonl = _prepare(tmp_path)
     # The fixture's run.json list: the cone in the ground truth is not on it.
@@ -189,6 +219,103 @@ def test_eval_run_report_and_compare(tmp_path: Path, capsys: pytest.CaptureFixtu
     out = capsys.readouterr().out
     assert f"| {SCENE_ID} | vehicle | single |" in out
     assert "+0.000" in out
+
+
+def test_compare_says_when_two_runs_were_evaluated_with_different_configs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A delta between two runs is a model difference only if the rules were the same.
+
+    The same boxes under two run ids, one evaluated with the defaults and one within
+    50 m at score 0.4: the table used to print its deltas with nothing to say that
+    they came from the config. It now names the keys that differ, with both values.
+    """
+    root, jsonl = _prepare(tmp_path)
+    _import(root, jsonl)
+    main(
+        [
+            "predictions",
+            "import",
+            str(jsonl),
+            "--run",
+            "second",
+            "--root",
+            str(root),
+            "--score-note",
+            "constant",
+        ]
+    )
+    config = tmp_path / "eval.yaml"
+    config.write_text("max_range_m: 50\nscore_threshold: 0.4\n", encoding="utf-8")
+    main(["eval", "run", "synthetic", "--root", str(root)])
+    main(["eval", "run", "second", "--root", str(root), "--config", str(config)])
+    capsys.readouterr()
+
+    main(["eval", "compare", "synthetic", "second", "--root", str(root)])
+    out = capsys.readouterr().out
+    note = next(line for line in out.splitlines() if line.startswith("note:"))
+    assert "'synthetic'" in note and "'second'" in note and "different configs" in note
+    assert "max_range_m: null vs 50.0" in note
+    assert "score_threshold: 0.3 vs 0.4" in note
+    assert "criterion" not in note
+    assert "| scene |" in out
+
+    # Two runs under one config compare without a note.
+    main(["eval", "compare", "synthetic", "synthetic", "--root", str(root)])
+    assert "note:" not in capsys.readouterr().out
+
+
+def test_compare_refuses_runs_scored_under_different_protocols(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """docs/eval-spec.md A.2, A.12: ranking_scope, gt_scope and comm_range_m are the
+    protocol. AP under another protocol is another quantity, so eval compare refuses
+    it, including a different communication range, which it used to pass with a note.
+    """
+    import json
+
+    root, jsonl = _prepare(tmp_path)
+    _import(root, jsonl)
+    main(
+        [
+            "predictions",
+            "import",
+            str(jsonl),
+            "--run",
+            "second",
+            "--root",
+            str(root),
+            "--score-note",
+            "constant",
+        ]
+    )
+    main(["eval", "run", "synthetic", "--root", str(root)])
+
+    def second_with(config_text: str) -> None:
+        config = tmp_path / "eval.yaml"
+        config.write_text(config_text, encoding="utf-8")
+        main(["eval", "run", "second", "--root", str(root), "--config", str(config)])
+        capsys.readouterr()
+
+    def refused() -> str:
+        with pytest.raises(SystemExit) as caught:
+            main(["eval", "compare", "synthetic", "second", "--root", str(root)])
+        assert caught.value.code == 1
+        return capsys.readouterr().err
+
+    second_with("ranking_scope: pooled\n")
+    assert "different protocols" in refused()
+    second_with("comm_range_m: 50\n")
+    err = refused()
+    assert "connected_union (70 m)" in err and "connected_union (50 m)" in err
+    # A run evaluated before the protocol keys is legacy and is not set beside a current one.
+    second_with("")
+    for metrics in (root / "predictions" / "second").glob("*/metrics.json"):
+        document = json.loads(metrics.read_text(encoding="utf-8"))
+        for key in ("ranking_scope", "gt_scope", "comm_range_m"):
+            document["config"].pop(key)
+        metrics.write_text(json.dumps(document), encoding="utf-8")
+    assert "legacy (pooled, ego-only)" in refused()
 
 
 def test_eval_run_with_explicit_predictions_root_config_and_scenes(
