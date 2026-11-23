@@ -4113,6 +4113,16 @@ fn run_dataset_flow_probe(
                 .and_then(|payload| {
                     serde_json::to_value(payload).map_err(|error| error.to_string())
                 }),
+                // Job watch's and Run history's "Open predictions" (the same command).
+                "open_predictions" => tauri::async_runtime::block_on(open_predictions(
+                    app.clone(),
+                    state,
+                    arg_text(&args, "profileId")?,
+                    arg_text(&args, "planId")?,
+                ))
+                .and_then(|payload| {
+                    serde_json::to_value(payload).map_err(|error| error.to_string())
+                }),
                 other => Err(format!("{other:?} is not a dataset command.")),
             }
         })();
