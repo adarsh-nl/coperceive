@@ -717,8 +717,9 @@ def evaluate_lines(python: Path, options: RunOptions, *, results: Path, target: 
     The model's run line is unchanged. Its output is copied home first (above), so a
     scoring step stopped by ``--time`` or memory never costs a finished run. Then
     ``eval run`` scores it on the scenes this job staged, and the run directory, now with
-    ``metrics.json`` and ``evaluation.json``, is copied home again. A model failure keeps
-    its code; a complete run whose scoring failed exits 5 (spec §Exit codes).
+    ``metrics.json`` and ``evaluation.json``, is copied home again. A run without
+    ``run.json`` counts as a scoring failure, not a skip. A model failure keeps its code;
+    a complete run whose scoring failed exits 5 (spec §Exit codes).
     """
     argv = [
         shlex.quote(str(python)),
@@ -748,6 +749,10 @@ def evaluate_lines(python: Path, options: RunOptions, *, results: Path, target: 
         '  echo "eval run exit $EVAL_RC"',
         f'  rsync -a "$SCRATCH/out/" {shlex.quote(str(results))}/"$SLURM_JOB_ID"/',
         f'  rsync -a "$SCRATCH/out/$RUN_ID/" {shlex.quote(str(target))}/',
+        "else",
+        "  # No run.json means nothing to score: a failure, never a silent skip.",
+        '  echo "eval run skipped: no run.json for $RUN_ID" >&2',
+        "  EVAL_RC=1",
         "fi",
         "# The model's own failure wins; a complete run whose scoring failed exits 5.",
         f'if [ "$RC" -eq 0 ] && [ "$EVAL_RC" -ne 0 ]; then RC={EXIT_EVAL}; fi',

@@ -328,6 +328,30 @@ def test_the_jobs_exit_code_combines_as_the_local_one(
     assert (target / "run.json").is_file()  # the run directory came home again
 
 
+@pytest.mark.parametrize(("model_rc", "expected"), [(0, EXIT_EVAL), (3, 3)])
+def test_a_job_without_run_json_is_never_scored_silently(
+    scenes: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    model_rc: int,
+    expected: int,
+) -> None:
+    # Render the job, then run its tail (scoring onwards) in bash over a scratch dir
+    # whose run directory has no run.json: a model that exits 0 without one is exit 5.
+    main([*_run(scenes, tmp_path / "predictions", "r1", "--evaluate"), *_slurm(tmp_path)])
+    lines = _job_script(capsys).splitlines()
+    (start,) = [i for i, line in enumerate(lines) if line.startswith("# --evaluate: score")]
+    assert lines[-1] == 'exit "$RC"'
+    scratch = tmp_path / "scratch"
+    (scratch / "out" / "r1").mkdir(parents=True)
+    script = "\n".join(["set -euo pipefail", f"RC={model_rc}", "RUN_ID=r1", *lines[start:]])
+    env = {**os.environ, "SCRATCH": str(scratch), "SLURM_JOB_ID": "7"}
+    done = subprocess.run(["bash", "-c", script], env=env, check=False, capture_output=True)
+    assert done.returncode == expected, done.stderr
+    assert "eval run skipped: no run.json for r1" in done.stderr.decode()
+    assert not (scratch / "out" / "r1" / "metrics.json").exists()
+
+
 def test_a_partial_run_scores_its_finished_scenes(
     scenes: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
