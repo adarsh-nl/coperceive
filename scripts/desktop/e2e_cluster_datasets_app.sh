@@ -482,10 +482,10 @@ python3 - "${TMP_DIR}" <<'PY'
 import glob, sys
 tmp = sys.argv[1]
 files = sorted(glob.glob(f"{tmp}/*-request.json") + glob.glob(f"{tmp}/*-result.json"))
-# Exactly the flows run so far: detect, preview, one (A-B), remaining (R) and all (C).
+# Exactly the flows run so far: detect, preview, one (A-B), slash (P), remaining (R) and all (C).
 expected = sorted(
     f"{tmp}/{flow}-{kind}.json"
-    for flow in ("detect", "preview", "one", "remaining", "all")
+    for flow in ("detect", "preview", "one", "slash", "remaining", "all")
     for kind in ("request", "result")
 )
 assert files == expected, files
