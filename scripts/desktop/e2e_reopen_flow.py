@@ -28,7 +28,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, cast
 
 POLL_S = 0.05
 FRAME_POLL_SCRIPT = (
@@ -46,6 +46,11 @@ FORBIDDEN_LOG_PREFIXES = ("remote-", "sbatch", "tunnel")
 
 class FlowError(AssertionError):
     pass
+
+
+def as_obj(value: object) -> dict[str, Any] | None:
+    """``value`` as a JSON object, or None."""
+    return cast(dict[str, Any], value) if isinstance(value, dict) else None
 
 
 class Controller:
@@ -75,11 +80,12 @@ class Controller:
             {"window": window, "script": script, "timeout": timeout_s},
             timeout=timeout_s + 15,
         )
-        if status != 200 or not isinstance(body, dict):
+        reply = as_obj(body)
+        if status != 200 or reply is None:
             return status, None
-        if body.get("error"):
-            raise FlowError(f"{window} script failed: {str(body['error'])[:200]}")
-        return status, body.get("result")
+        if reply.get("error"):
+            raise FlowError(f"{window} script failed: {str(reply['error'])[:200]}")
+        return status, reply.get("result")
 
 
 def read_marker(path: str, deadline_s: float) -> tuple[int, str]:
@@ -128,19 +134,21 @@ def open_dataset(ctrl: Controller, args: dict[str, Any], scenes: list[str]) -> d
     )
     wall0 = time.time()
     t0 = time.monotonic()
-    status, session = ctrl.eval("main", script, timeout_s=60)
+    status, value = ctrl.eval("main", script, timeout_s=60)
     returned = time.monotonic()
-    if status != 200 or not isinstance(session, dict):
+    session = as_obj(value)
+    if status != 200 or session is None:
         raise FlowError(f"dataset_open did not answer (HTTP {status})")
     for key in ("origin", "token", "target_type"):
         if not session.get(key):
             raise FlowError(f"dataset_open returned no {key}; keys {sorted(session)}")
 
-    last: Any = None
+    last: dict[str, Any] | None = None
     deadline = t0 + 60
     while time.monotonic() < deadline:
-        status, last = ctrl.eval("viewer", FRAME_POLL_SCRIPT)
-        if status == 200 and isinstance(last, dict) and last.get("applied"):
+        status, value = ctrl.eval("viewer", FRAME_POLL_SCRIPT)
+        last = as_obj(value)
+        if status == 200 and last is not None and last.get("applied"):
             seen = time.monotonic()
             page_ms = None
             if last.get("at") is not None and last.get("time_origin"):
@@ -260,7 +268,7 @@ def run(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--marker", required=True, help="the app's COPERCEIVE_TEST_MARKER_FILE")
     parser.add_argument(
         "--dataset-args", required=True, help="dataset_open arguments as JSON object members"
