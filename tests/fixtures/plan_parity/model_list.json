@@ -1,0 +1,99 @@
+{
+  "format": "coperceive-model-list",
+  "format_version": 1,
+  "plugins": [
+    {
+      "error": null,
+      "location": "coperceive_griffin_model:MANIFEST",
+      "manifest": "/opt/coperceive/plugins/griffin/coperceive_griffin_model/model.yaml",
+      "models": {
+        "drone-side": {
+          "conversion_seconds": 100.0,
+          "cpus": 8,
+          "depends_on": [],
+          "gpu": true,
+          "memory_gb": 64,
+          "options": [
+            "ckpt_root",
+            "det_json",
+            "min_score",
+            "nusc_root",
+            "subset"
+          ],
+          "raw_inputs": true,
+          "seconds_per_sample": 0.461,
+          "slurm_constraint": "a40",
+          "staging_seconds": 930.0,
+          "transient_artifacts": [
+            "track_query"
+          ]
+        },
+        "early-fusion": {
+          "conversion_seconds": 112.0,
+          "cpus": 8,
+          "depends_on": [],
+          "gpu": true,
+          "memory_gb": 64,
+          "options": [
+            "ckpt_root",
+            "det_json",
+            "min_score",
+            "nusc_root",
+            "subset"
+          ],
+          "raw_inputs": true,
+          "seconds_per_sample": 0.538,
+          "slurm_constraint": "a40",
+          "staging_seconds": 1611.0,
+          "transient_artifacts": []
+        },
+        "instance-fusion": {
+          "conversion_seconds": 100.0,
+          "cpus": 8,
+          "depends_on": [
+            "drone-side"
+          ],
+          "gpu": true,
+          "memory_gb": 64,
+          "options": [
+            "ckpt_root",
+            "det_json",
+            "min_score",
+            "nusc_root",
+            "subset"
+          ],
+          "raw_inputs": true,
+          "seconds_per_sample": 0.421,
+          "slurm_constraint": "a40",
+          "staging_seconds": 700.0,
+          "transient_artifacts": []
+        },
+        "vehicle-side": {
+          "conversion_seconds": 100.0,
+          "cpus": 8,
+          "depends_on": [],
+          "gpu": true,
+          "memory_gb": 64,
+          "options": [
+            "ckpt_root",
+            "det_json",
+            "min_score",
+            "nusc_root",
+            "subset"
+          ],
+          "raw_inputs": true,
+          "seconds_per_sample": 0.394,
+          "slurm_constraint": "a40",
+          "staging_seconds": 700.0,
+          "transient_artifacts": []
+        }
+      },
+      "modules": [
+        "nvidia/cuda-11.8",
+        "nvidia/cuda-11.x_cudnn-8.6"
+      ],
+      "name": "griffin",
+      "source": "entry-point"
+    }
+  ]
+}

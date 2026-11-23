@@ -11,6 +11,7 @@ point clouds. The schemas are frozen in ``docs/datasets/cluster-datasets.md``.
 from __future__ import annotations
 
 import fcntl
+import getpass
 import hashlib
 import json
 import os
@@ -25,10 +26,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from coperceive.adapters.build import BuildError, ManifestAdapter
-from coperceive.adapters.ingest import ingest
+from coperceive.adapters.ingest import ingest, manifest_changed, manifest_sha256
 from coperceive.adapters.prefetch import collecting
 from coperceive.adapters.readers.numpy_yaml import yaml_loader_kind
 from coperceive.adapters.registry import RegistryError, resolve_adapter
+from coperceive.adapters.scene_paths import safe_scene_id, scene_path
 from coperceive.adapters.spec import SpecError
 from coperceive.camera_images import IMAGE_MODES, stage_images
 from coperceive.errors import CoperceiveError
@@ -276,8 +278,64 @@ def _write_dataset(cache_dir: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+# The reason a ready scene turns stale when its adapter's conversion rules changed.
+MANIFEST_CHANGED = "adapter manifest changed"
+RAW_CHANGED = "raw dataset fingerprint changed"
+# Why the status cannot say whether the raw files changed: a walk hit its bound.
+RAW_CHECK_INCOMPLETE = "raw check incomplete"
+
+
+def _complete(fingerprint: object) -> bool:
+    return isinstance(fingerprint, dict) and not fingerprint.get("truncated", False)
+
+
+def _raw_changed(stored: object, current: Mapping[str, object]) -> bool:
+    """Whether two raw walks prove the raw files changed.
+
+    Only two complete walks can: a walk cut off by its entry or time bound
+    covers a different part of the tree each run, so its digest changes with
+    no raw change at all. A truncated walk therefore never marks a scene stale.
+    """
+    if not _complete(stored) or not _complete(current):
+        return False
+    assert isinstance(stored, dict)
+    return stored.get("digest") != current.get("digest")
+
+
+def _mark_raw_stale(dataset: dict[str, Any]) -> None:
+    for record in dataset.get("scenes", {}).values():
+        if record.get("state") == "ready":
+            record["state"] = "stale"
+            record["reason"] = RAW_CHANGED
+
+
+def _adapter_digest(adapter_name: object) -> str | None:
+    """The current manifest digest of ``adapter_name``; ``None`` when it has none or is unknown."""
+    if not isinstance(adapter_name, str):
+        return None
+    try:
+        return manifest_sha256(resolve_adapter(adapter_name))
+    except (RegistryError, SpecError, OSError):
+        return None
+
+
+def _mark_manifest_stale(cache: Path, dataset: dict[str, Any]) -> None:
+    """Every ready scene prepared under another adapter manifest becomes stale."""
+    current = _adapter_digest(dataset.get("adapter"))
+    if current is None:
+        return
+    for scene_id, record in dataset.get("scenes", {}).items():
+        if record.get("state") != "ready":
+            continue
+        folder = scene_path(cache, safe_scene_id(scene_id))
+        if manifest_changed(folder, current):
+            record["state"] = "stale"
+            record["reason"] = MANIFEST_CHANGED
+
+
 def _scene_ready(cache_dir: Path, scene_id: str) -> bool:
-    folder = cache_dir / scene_id
+    safe_scene_id(scene_id)
+    folder = scene_path(cache_dir, scene_id)
     return (folder / "manifest.json").is_file() and (folder / "COMPLETE.json").is_file()
 
 
@@ -378,6 +436,57 @@ def _job_alive(job_id: str) -> bool | None:
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
+# A claim at least this old is taken over by the next prepare, live job or not.
+CLAIM_TAKEOVER_S = 4 * 3600
+
+
+def _queued_jobs() -> set[str] | None:
+    """This user's queued and running job ids from one ``squeue``; ``None`` without squeue.
+
+    ``-r`` prints one line per array task, as ``<array>_<task>``: the form a
+    prepare claim records (``_slurm_job_id``).
+    """
+    try:
+        user = getpass.getuser()
+        result = subprocess.run(
+            ["squeue", "-h", "-r", "-u", user, "-o", "%i"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
+def live_claims(dataset: Mapping[str, Any], *, now: float, queued: set[str] | None) -> list[str]:
+    """The preparing scenes whose claim a queued or running job still holds.
+
+    The same rules as ``_claim_still_live``, with one ``squeue`` for the whole
+    split instead of one per scene. A claim with no time is live; one older
+    than ``CLAIM_TAKEOVER_S`` is not. Without squeue (``queued`` is ``None``)
+    every younger claim counts as live. A claim held by another user's job is
+    not in this user's queue, so it reads as dead here. A prepare task still
+    checks that claim itself and skips the scene while the job runs.
+    """
+    live: list[str] = []
+    for scene_id, record in sorted(dataset.get("scenes", {}).items()):
+        if record.get("state") != "preparing":
+            continue
+        claimed = record.get("claimed_unix")
+        if not isinstance(claimed, (int, float)):
+            live.append(scene_id)
+            continue
+        if now - float(claimed) >= CLAIM_TAKEOVER_S:
+            continue
+        owner = record.get("job_id")
+        if queued is None or not isinstance(owner, str) or not owner or owner in queued:
+            live.append(scene_id)
+    return live
+
+
 def _claim_still_live(record: Mapping[str, Any], current_job: str | None, now: float) -> bool:
     if record.get("state") != "preparing":
         return False
@@ -387,7 +496,7 @@ def _claim_still_live(record: Mapping[str, Any], current_job: str | None, now: f
     claimed = record.get("claimed_unix")
     if not isinstance(claimed, (int, float)):
         return True
-    if now - float(claimed) >= 4 * 3600:
+    if now - float(claimed) >= CLAIM_TAKEOVER_S:
         return False
     if isinstance(owner, str) and owner:
         alive = _job_alive(owner)
@@ -407,6 +516,7 @@ def _slurm_job_id() -> str | None:
 
 def mark_scene_images(cache: Path, scene_id: str, mode: str) -> None:
     """Record which camera-image mode a prepared scene uses."""
+    safe_scene_id(scene_id)
     with _cache_lock(cache):
         try:
             dataset = _read_dataset(cache)
@@ -428,6 +538,7 @@ def _claim_and_prepare_scene(
     job_id: str | None,
     images: str = "originals",
 ) -> tuple[str, str, str | None, int | None]:
+    scene_id = safe_scene_id(scene_id)
     raw = Path(raw_root)
     cache = Path(cache_root)
     adapter = resolve_adapter(adapter_name)
@@ -445,7 +556,11 @@ def _claim_and_prepare_scene(
                 "scene_dir": scene_id,
             },
         )
-        if record.get("state") == "ready" and _scene_ready(cache, scene_id):
+        if (
+            record.get("state") == "ready"
+            and _scene_ready(cache, scene_id)
+            and not manifest_changed(scene_path(cache, scene_id), manifest_sha256(adapter))
+        ):
             if record.get("images") == images:
                 return scene_id, "ready", None, record.get("prepared_unix")
             # Ready in the other camera-image mode (or from before modes): only its
@@ -467,7 +582,7 @@ def _claim_and_prepare_scene(
     if restage:
         started = time.perf_counter()
         try:
-            stage_images(cache / scene_id, raw, images)
+            stage_images(scene_path(cache, scene_id), raw, images)
             state, reason, prepared = "ready", None, int(time.time())
         except Exception as exc:  # noqa: BLE001 - reported per scene
             state, reason, prepared = "failed", f"{type(exc).__name__}: {exc}", None
@@ -479,7 +594,9 @@ def _claim_and_prepare_scene(
         return _finish_scene(cache, scene_id, job_id, state, reason, prepared, images)
     partial_root = cache / ".partial"
     partial_root.mkdir(parents=True, exist_ok=True)
-    temporary = partial_root / scene_id
+    temporary = scene_path(partial_root, scene_id)
+    if temporary.is_symlink():
+        raise DatasetError("unsafe scene path: symlink")
     shutil.rmtree(temporary, ignore_errors=True)
     state = "failed"
     reason: str | None = None
@@ -496,7 +613,7 @@ def _claim_and_prepare_scene(
                 workers=1,
                 scene_ids=[scene_id],
             )
-            produced = partial_root / scene_id
+            produced = scene_path(partial_root, scene_id)
             if (
                 not (produced / "manifest.json").is_file()
                 or not (produced / "COMPLETE.json").is_file()
@@ -505,8 +622,10 @@ def _claim_and_prepare_scene(
             staged = time.perf_counter()
             stage_images(produced, raw, images)
             previews_s = time.perf_counter() - staged
-            destination = cache / scene_id
-            old = cache / f".old-{scene_id}"
+            destination = scene_path(cache, scene_id)
+            old = scene_path(cache, f".old-{scene_id}")
+            if old.is_symlink():
+                raise DatasetError("unsafe scene path: symlink")
             if old.exists():
                 shutil.rmtree(old)
             if destination.exists():
@@ -667,11 +786,10 @@ def prepare_cluster_dataset(
                 "updated_unix": int(time.time()),
                 "scenes": {},
             }
-        if dataset.get("raw_fingerprint", {}).get("digest") != fingerprint["digest"]:
-            for record in dataset.get("scenes", {}).values():
-                if record.get("state") == "ready":
-                    record["state"] = "stale"
-                    record["reason"] = "raw dataset fingerprint changed"
+        stored = dataset.get("raw_fingerprint")
+        if _raw_changed(stored, fingerprint):
+            _mark_raw_stale(dataset)
+        _mark_manifest_stale(cache, dataset)
         for ref in refs:
             dataset.setdefault("scenes", {}).setdefault(
                 ref.scene_id,
@@ -683,7 +801,10 @@ def prepare_cluster_dataset(
                     "scene_dir": ref.scene_id,
                 },
             )
-        dataset["raw_fingerprint"] = fingerprint
+        # Keep a complete fingerprint over a truncated one, so a later complete
+        # walk can still compare against it.
+        if _complete(fingerprint) or not _complete(stored):
+            dataset["raw_fingerprint"] = fingerprint
         dataset["updated_unix"] = int(time.time())
         _write_dataset(cache, dataset)
     job_id = _slurm_job_id()
@@ -727,10 +848,18 @@ def prepare_cluster_dataset(
     return dataset_status_document(cache)
 
 
-def dataset_status_document(cache_dir: str | Path, *, refresh_stale: bool = True) -> dict[str, Any]:
+def dataset_status_document(
+    cache_dir: str | Path, *, refresh_stale: bool = True, with_live_claims: bool = False
+) -> dict[str, Any]:
+    """Per-scene states of a cache split.
+
+    ``with_live_claims`` adds ``live_claims``, the preparing scenes another job
+    still holds (see ``live_claims``), which "Prepare remaining" leaves out.
+    """
     cache = _real(cache_dir)
     dataset = _read_dataset(cache)
     fingerprint = dataset.get("raw_fingerprint", {})
+    raw_check: dict[str, str | None] = {"state": "not_run", "reason": None}
     if refresh_stale and isinstance(fingerprint, dict):
         raw_root = dataset.get("raw_root")
         split = dataset.get("split")
@@ -741,25 +870,32 @@ def dataset_status_document(cache_dir: str | Path, *, refresh_stale: bool = True
                 max_entries=DEFAULT_MAX_ENTRIES,
                 deadline=time.monotonic() + max(2.0, DEFAULT_TIMEOUT_S),
             )
-            if current["digest"] != fingerprint.get("digest"):
-                for record in dataset.get("scenes", {}).values():
-                    if record.get("state") == "ready":
-                        record["state"] = "stale"
-                        record["reason"] = "raw dataset fingerprint changed"
+            if _complete(current) and _complete(fingerprint):
+                raw_check = {"state": "complete", "reason": None}
+            else:
+                raw_check = {"state": "incomplete", "reason": RAW_CHECK_INCOMPLETE}
+            if _raw_changed(fingerprint, current):
+                _mark_raw_stale(dataset)
+    if refresh_stale:
+        _mark_manifest_stale(cache, dataset)
     records = []
     for scene_id, record in sorted(dataset.get("scenes", {}).items()):
         item = _status_record(cache, record)
         item["scene_id"] = scene_id
         records.append(item)
-    return {
+    document: dict[str, Any] = {
         "schema": SCENE_STATUS_SCHEMA,
         "cache_root": str(cache),
         "adapter": dataset.get("adapter"),
         "raw_root": dataset.get("raw_root"),
         "split": dataset.get("split"),
         "updated_unix": dataset.get("updated_unix"),
+        "raw_check": raw_check,
         "scenes": records,
     }
+    if with_live_claims:
+        document["live_claims"] = live_claims(dataset, now=time.time(), queued=_queued_jobs())
+    return document
 
 
 def _split_entries(

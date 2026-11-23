@@ -2,8 +2,9 @@
 """The one ingest driver every adapter shares.
 
 Scenes run in parallel. A scene is skipped when ``COMPLETE.json`` matches its
-sample list. A partial directory is removed and rebuilt, unless it already has a
-matching marker, in which case it is renamed into place. One scene's failure
+sample list and records the digest of the adapter manifest in use; a scene prepared
+under another manifest is built again. A partial directory is removed and rebuilt,
+unless it already has a matching marker, in which case it is renamed into place. One scene's failure
 leaves the scenes that finished. ``COMPLETE.json`` is not part of schema 1.
 """
 
@@ -17,17 +18,19 @@ import time
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
-from importlib import metadata
 from pathlib import Path
 from typing import Protocol, cast
 
 from coperceive.adapters.build import CheckReport, SceneRef
 from coperceive.adapters.prefetch import current_stats
+from coperceive.adapters.scene_paths import ScenePathError, safe_scene_id, scene_path
 from coperceive.errors import CoperceiveError
 from coperceive.model import SCHEMA_VERSION, Scene
 from coperceive.store import write_scene
 
 COMPLETE = "COMPLETE.json"
+# The key of COMPLETE.json that records the digest of the adapter manifest used.
+MANIFEST_SHA256 = "manifest_sha256"
 
 
 class Adapter(Protocol):
@@ -104,6 +107,14 @@ def ingest(
     from ``coperceive maps identify``); the table's values win over the manifest's.
     """
     refs = list(adapter.scenes(raw_root, params))
+    unsafe: list[str] = []
+    for ref in refs:
+        try:
+            safe_scene_id(ref.scene_id)
+        except ScenePathError as exc:
+            unsafe.append(f"{ref.scene_id!r}: {exc}")
+    if unsafe:
+        raise IngestError(IngestReport((), (), (), tuple(unsafe), (), ()))
     if platform:
         refs = [_with_platform(ref, platform.get(ref.scene_id, {})) for ref in refs]
     if scene_ids is not None:
@@ -178,17 +189,25 @@ def ingest_one(job: _Job) -> _Result:
     """Ingest a single scene. Safe to run in a worker process."""
     raw_root = Path(job.raw_root)
     out = Path(job.out)
-    final = out / job.ref.scene_id
-    partial = out / ".partial" / job.ref.scene_id
+    final = scene_path(out, job.ref.scene_id)
+    partial_root = out / ".partial"
+    if partial_root.is_symlink():
+        raise ScenePathError(f"unsafe scene path: {partial_root} is a symlink")
+    partial = scene_path(partial_root, job.ref.scene_id)
     expected = _expected(job.ref)
-    if _is_complete(final, expected):
+    current = dict(job.provenance).get(MANIFEST_SHA256)
+    if _is_complete(final, expected) and not manifest_changed(final, current):
         return _Result(job.ref.scene_id, "skipped", len(job.ref.samples), _stored_variants(final))
     if final.exists():
+        if final.is_symlink():
+            raise ScenePathError(f"unsafe scene path: {final} is a symlink")
         shutil.rmtree(final)
-    if _is_complete(partial, expected):
+    if _is_complete(partial, expected) and not manifest_changed(partial, current):
         partial.rename(final)
         return _Result(job.ref.scene_id, "resumed", len(job.ref.samples), _stored_variants(final))
     if partial.exists():
+        if partial.is_symlink():
+            raise ScenePathError(f"unsafe scene path: {partial} is a symlink")
         shutil.rmtree(partial)
     partial.parent.mkdir(parents=True, exist_ok=True)
     partial.mkdir()
@@ -209,7 +228,8 @@ def ingest_one(job: _Job) -> _Result:
         (partial / COMPLETE).write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
         partial.rename(final)
     except Exception:
-        shutil.rmtree(partial, ignore_errors=True)
+        if not partial.is_symlink():
+            shutil.rmtree(partial, ignore_errors=True)
         raise
     return _Result(job.ref.scene_id, "wrote", len(job.ref.samples), variants)
 
@@ -233,6 +253,33 @@ def format_report(report: IngestReport) -> str:
     return "\n".join(lines)
 
 
+def recorded_manifest_sha256(directory: Path) -> str | None:
+    """The ``manifest_sha256`` a prepared scene's ``COMPLETE.json`` records, if any."""
+    try:
+        payload = json.loads((directory / COMPLETE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    value = cast(dict[str, object], payload).get(MANIFEST_SHA256)
+    return value if isinstance(value, str) else None
+
+
+def manifest_changed(directory: Path, current: str | None) -> bool:
+    """True when the scene was prepared under another adapter manifest than ``current``.
+
+    ``current`` is the digest of the adapter's manifest now (``manifest_sha256``). An
+    adapter without a manifest file (``None``) never makes a scene stale. Every release
+    since v0.1.0 records the digest, so a scene prepared by v0.1.1 compares its own. A
+    marker from before provenance records none and is kept, as it always was: there is
+    nothing to compare it with.
+    """
+    if current is None:
+        return False
+    recorded = recorded_manifest_sha256(directory)
+    return recorded is not None and recorded != current
+
+
 def manifest_sha256(adapter: Adapter) -> str | None:
     source = getattr(getattr(adapter, "spec", None), "source", None)
     if not isinstance(source, str):
@@ -244,17 +291,17 @@ def manifest_sha256(adapter: Adapter) -> str | None:
 
 
 def coperceive_version() -> str:
-    try:
-        return metadata.version("coperceive")
-    except metadata.PackageNotFoundError:
-        return "unknown"
+    """Coperceive's version (``coperceive/_version.py``)."""
+    from coperceive._version import version
+
+    return version()
 
 
 def _provenance(adapter: Adapter) -> tuple[tuple[str, str], ...]:
     rows = [("adapter", adapter.name), ("coperceive_version", coperceive_version())]
     digest = manifest_sha256(adapter)
     if digest is not None:
-        rows.append(("manifest_sha256", digest))
+        rows.append((MANIFEST_SHA256, digest))
     return tuple(rows)
 
 

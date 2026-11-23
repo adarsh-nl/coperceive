@@ -7,6 +7,10 @@ mmdet3d v0.17.1) and answers frames from the toolkit's `results_nusc_det.json`.
 
 - `model.yaml`: the manifest (models `vehicle-side` and `drone-side`, conda env `griffin`,
   the CUDA modules, the raw files each frame needs, the pinned checkpoint digests).
+  Every model declares the required `ckpt_root` option (the folder that holds
+  `griffin_50scenes_25m/`); it has **no default**, and `model run`/`model check` refuse a
+  missing value before anything starts. Pass `--option ckpt_root=<dir>`; the manifest's
+  batch command passes it to `worker.py` as `--ckpt-root`.
 - `worker.py`: the protocol loop. On the first `configure` of a batch run it copies the
   toolkit into the work directory, trims `scene_infos.json` to the staged scenes, renumbers
   the split, runs the toolkit's converter, info generator and `tools/test.py` once, then

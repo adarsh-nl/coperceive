@@ -1,5 +1,6 @@
 import { IconInfo, Menu, Slider } from "./controls";
 import PanelState from "../desktop/PanelState";
+import { sameEvalProtocol } from "../desktop/runPlan";
 import { PANEL_DEFINITIONS } from "../desktop/panelStates";
 import { COOPERATIVE_VIEWS, STATUS_CHIPS, STATUS_STYLES, STATUS_WORDS, type StatusChip } from "./predictionLayer";
 import { outputKey, type CooperativeCounts, type CooperativeView, type RunInfo, type RunTag } from "./predictionTypes";
@@ -117,6 +118,10 @@ export default function PredictionsBlock({
 }: PredictionsBlockProps) {
   const run = runs?.find((item) => item.run_id === runId) ?? null;
   const others = (runs ?? []).filter((item) => item.run_id !== runId && item.evaluated);
+  // eval compare refuses runs under different protocols; the menu offers only the
+  // comparable ones and says plainly why the others are missing.
+  const comparable = others.filter((item) => sameEvalProtocol(run?.config, item.config));
+  const incompatible = others.filter((item) => !sameEvalProtocol(run?.config, item.config));
   const isDemoRun = (item: RunInfo) => item.run_id === "demo";
   const runLabel = (item: RunInfo) => {
     if (isDemoRun(item)) {
@@ -187,10 +192,19 @@ export default function PredictionsBlock({
               <Menu
                 id="prediction-compare"
                 label="Compare"
-                value={others.some((item) => item.run_id === compareId) ? compareId : ""}
-                options={[{ value: "", label: "None" }, ...others.map((item) => ({ value: item.run_id, label: `B: ${isDemoRun(item) ? "synthetic predictions" : item.run_id}` }))]}
+                value={comparable.some((item) => item.run_id === compareId) ? compareId : ""}
+                options={[{ value: "", label: "None" }, ...comparable.map((item) => ({ value: item.run_id, label: `B: ${isDemoRun(item) ? "synthetic predictions" : item.run_id}` }))]}
                 onChange={onCompare}
               />
+              {incompatible.length > 0 ? (
+                <p className="muted">
+                  Only runs evaluated under the same protocol can be compared.{" "}
+                  {incompatible.map((item) => (isDemoRun(item) ? "the synthetic run" : item.run_id)).join(", ")}{" "}
+                  {incompatible.length === 1 ? "was" : "were"} evaluated under another protocol, so
+                  the numbers cannot be compared; run <code>coperceive eval run</code> again with
+                  one config.
+                </p>
+              ) : null}
               <Menu
                 id="prediction-output"
                 label="Output"

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::state::{self, LayerToggles, PanelCollapseState, WindowState};
+use crate::state::{self};
 
 /// Maximum allowed request body size (64 KB).
 pub const MAX_BODY_SIZE: usize = 65536;
@@ -255,9 +255,7 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
     let cors_origin = match (&req_origin, &allowed_origin) {
         (Some(origin), Some(allowed)) if origin == allowed => Some(origin.clone()),
         (Some(origin), _)
-            if origin == "tauri://localhost"
-                || origin == "http://tauri.localhost"
-                || (origin.starts_with("http://127.0.0.1:") && allowed_origin.is_some()) =>
+            if origin == "tauri://localhost" || origin == "http://tauri.localhost" =>
         {
             Some(origin.clone())
         }
@@ -517,111 +515,14 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
                 Some(p) => state::load_state_from_path(p),
                 None => state::load_state(),
             };
-            if let Some(sc) = val.get("scene_id").and_then(|v| v.as_str()) {
-                persistent.last_scene_id = Some(sc.to_string());
-            }
-            if let Some(idx) = val.get("sample_index").and_then(|v| v.as_i64()) {
-                persistent.last_sample_index = Some(idx);
-            }
-            if let Some(ts) = val.get("timestamp_us").and_then(|v| v.as_i64()) {
-                persistent.last_timestamp_us = Some(ts);
-            } else if let Some(ts) = val.get("timestamp_ns").and_then(|v| v.as_i64()) {
-                persistent.last_timestamp_us = Some(ts / 1000);
-            }
-            if let Some(vp) = val.get("viewpoint").and_then(|v| v.as_str()) {
-                persistent.last_viewpoint = Some(vp.to_string());
-            }
-            if let Some(looping) = val.get("loop").and_then(|v| v.as_bool()) {
-                persistent.last_loop = Some(looping);
-            }
-            if let Some(th) = val.get("theme_override") {
-                if th.is_null() {
-                    persistent.theme_override = None;
-                } else if let Some(s) = th.as_str() {
-                    if s == "light" || s == "dark" {
-                        persistent.theme_override = Some(s.to_string());
+            if state::apply_state_patch(&mut persistent, &val, state::StatePatchScope::Full).is_ok() {
+                match &config.state_path {
+                    Some(p) => {
+                        let _ = state::save_state_to_path(&persistent, p);
                     }
-                }
-            } else if let Some(th) = val.get("theme").and_then(|v| v.as_str()) {
-                if th == "light" || th == "dark" {
-                    persistent.theme_override = Some(th.to_string());
-                }
-            }
-            if let Some(reopen) = val.get("reopen_last_session").and_then(|v| v.as_bool()) {
-                persistent.reopen_last_session = reopen;
-            }
-            if let Some(auto_next) = val.get("auto_next_scene").and_then(|v| v.as_bool()) {
-                persistent.auto_next_scene = auto_next;
-            }
-            if let Some(open_first) = val.get("open_first_ready_scene").and_then(|v| v.as_bool()) {
-                persistent.open_first_ready_scene = open_first;
-            }
-            if let Some(grouping) = val.get("dataset_grouping").and_then(state::dataset_grouping_from) {
-                persistent.dataset_grouping = grouping;
-            }
-            if let Some(strip) = val.get("camera_strip").and_then(state::camera_strip_from) {
-                persistent.camera_strip = strip;
-            }
-            if let Some(seconds) = val
-                .get("buffer_target_seconds")
-                .and_then(state::buffer_target_seconds_from)
-            {
-                persistent.buffer_target_seconds = seconds;
-            }
-            if let Some(bytes) = val
-                .get("client_memory_limit_bytes")
-                .and_then(state::client_memory_limit_bytes_from)
-            {
-                persistent.client_memory_limit_bytes = bytes;
-            }
-            if let Some(show) = val.get("show_stream_stats").and_then(|v| v.as_bool()) {
-                persistent.show_stream_stats = show;
-}
-            if let Some(style) = val.get("viewer_style").and_then(state::viewer_style_from) {
-                persistent.viewer_style = style;
-            }
-            if let Some(drift) = val.get("cinema_drift").and_then(|v| v.as_bool()) {
-                persistent.cinema_drift = drift;
-            }
-            if let Some(vis) = val.get("agent_visibility") {
-                if let Ok(map) = serde_json::from_value::<HashMap<String, bool>>(vis.clone()) {
-                    persistent.agent_visibility = Some(map);
-                }
-            }
-            if let Some(layers) = val.get("layer_toggles") {
-                if let Ok(lt) = serde_json::from_value::<LayerToggles>(layers.clone()) {
-                    persistent.layer_toggles = Some(lt);
-                }
-            }
-            if let Some(cam) = val.get("selected_camera").and_then(|v| v.as_str()) {
-                persistent.selected_camera = Some(cam.to_string());
-            }
-            if let Some(split) = val.get("split_view").and_then(|v| v.as_bool()) {
-                persistent.split_view = Some(split);
-            }
-            if let Some(panels) = val.get("panel_collapse") {
-                if let Ok(pcs) = serde_json::from_value::<PanelCollapseState>(panels.clone()) {
-                    persistent.panel_collapse = Some(pcs);
-                }
-            }
-            if let Some(l) = val.get("layout") {
-                if let Ok(mut layout) = serde_json::from_value::<state::LayoutSizes>(l.clone()) {
-                    layout.clamp();
-                    persistent.layout = Some(layout);
-                }
-            }
-            if let Some(win) = val.get("window_state") {
-                if let Ok(ws) = serde_json::from_value::<WindowState>(win.clone()) {
-                    persistent.window_state = Some(ws);
-                }
-            }
-
-            match &config.state_path {
-                Some(p) => {
-                    let _ = state::save_state_to_path(&persistent, p);
-                }
-                None => {
-                    let _ = state::save_state(&persistent);
+                    None => {
+                        let _ = state::save_state(&persistent);
+                    }
                 }
             }
         }
@@ -882,6 +783,152 @@ fn write_json_response<W: Write>(
 
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|window| window == needle)
+}
+
+/// Returns `true` only in test mode. Production sessions must never start
+/// the loopback HTTP controller (which includes `/eval`).
+pub fn controller_enabled(test_env: bool) -> bool {
+    test_env
+}
+
+/// Spawns the loopback controller listener thread on `127.0.0.1:0` ONLY when
+/// `test_env` is `true`. Without test mode, returns `Ok(None)` and binds no socket.
+pub fn spawn_controller_if_enabled<F: Fn() + Send + Sync + 'static>(
+    test_env: bool,
+    config: ControllerConfig,
+    on_open_dialog: F,
+) -> Result<Option<(u16, std::thread::JoinHandle<()>)>, String> {
+    if !controller_enabled(test_env) {
+        return Ok(None);
+    }
+    spawn_controller(config, on_open_dialog).map(Some)
+}
+
+/// Returns the JavaScript snippet that injects `window.__COPERCEIVE_CTRL_PORT__`
+/// and `window.__COPERCEIVE_CTRL_SECRET__` ONLY when `test_env` is `true`.
+/// In production launches (`test_env == false`), returns an empty string so both
+/// globals stay `undefined`.
+pub fn ctrl_window_init_snippet(
+    test_env: bool,
+    port: Option<u16>,
+    secret: Option<&str>,
+) -> String {
+    if !controller_enabled(test_env) {
+        return String::new();
+    }
+    match (port, secret) {
+        (Some(p), Some(s)) if p > 0 && !s.is_empty() => {
+            let escaped_secret = s.replace('\\', "\\\\").replace('"', "\\\"");
+            format!(
+                "window.__COPERCEIVE_CTRL_PORT__ = {p};\n                window.__COPERCEIVE_CTRL_SECRET__ = \"{escaped_secret}\";"
+            )
+        }
+        _ => String::new(),
+    }
+}
+
+/// Synchronizes the tracked viewer origin and the test controller's allowed
+/// CORS origin whenever the viewer window opens on a new session origin
+/// (local sidecar, dataset stream, or remote SSH tunnel).
+pub fn sync_viewer_origin(
+    viewer_origin: &Mutex<Option<String>>,
+    controller_config: &Mutex<Option<ControllerConfig>>,
+    origin: &str,
+) {
+    if let Ok(mut lock) = viewer_origin.lock() {
+        *lock = Some(origin.to_string());
+    }
+    if let Ok(lock) = controller_config.lock() {
+        if let Some(ref cfg) = *lock {
+            cfg.set_allowed_origin(origin.to_string());
+        }
+    }
+}
+
+/// Parameters required to build the viewer window's bootstrap script.
+pub struct ViewerInitScriptParams<'a> {
+    pub os_name: &'a str,
+    pub titlebar_mode: &'a str,
+    pub test_env: bool,
+    pub test_repro: bool,
+    pub force_motion: bool,
+    pub update_url: &'a str,
+    pub origin: &'a str,
+    pub token: &'a str,
+    pub data_root: &'a str,
+    pub data_basename: &'a str,
+    pub initial_state_json: &'a str,
+    pub ctrl_port: Option<u16>,
+    pub ctrl_secret: Option<&'a str>,
+}
+
+fn escape_js_string(raw: &str) -> String {
+    raw.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Returns `true` only when `target_url` stays strictly on `expected_origin`.
+pub fn is_allowed_viewer_navigation(target_url: &str, expected_origin: &str) -> bool {
+    let origin = expected_origin.trim_end_matches('/');
+    if origin.is_empty() || !target_url.starts_with(origin) {
+        return false;
+    }
+    let after_scheme = origin.split("://").nth(1).unwrap_or("");
+    if after_scheme.is_empty() || after_scheme.contains('@') {
+        return false;
+    }
+    let rest = &target_url[origin.len()..];
+    rest.is_empty() || rest.starts_with('/') || rest.starts_with('?') || rest.starts_with('#')
+}
+
+/// Builds the viewer initialization script.
+///
+/// Sidecar credentials (`coperceive-token`) and test-only controller globals are
+/// gated strictly on `window.location.origin === "<origin>"` (never a URL prefix
+/// or `"null"` origin), and controller globals are omitted outside test mode.
+pub fn build_viewer_init_script(params: &ViewerInitScriptParams<'_>) -> String {
+    let escaped_origin = escape_js_string(params.origin);
+    let escaped_token = escape_js_string(params.token);
+    let escaped_root = escape_js_string(params.data_root);
+    let escaped_base = escape_js_string(params.data_basename);
+    let escaped_update = escape_js_string(params.update_url);
+    let ctrl_snippet =
+        ctrl_window_init_snippet(params.test_env, params.ctrl_port, params.ctrl_secret);
+    format!(
+        r#"
+        (function() {{
+            try {{
+                window.__COPERCEIVE_DESKTOP__ = true;
+                window.__COPERCEIVE_OS__ = "{os_name}";
+                // Tauri injects its IPC object here, bounded to the viewer-window
+                // capability (viewer-bridge + drag/maximize only).
+                window.__COPERCEIVE_VIEWER_WINDOW__ = true;
+                window.__COPERCEIVE_TITLEBAR__ = "{titlebar_mode}";
+                window.__COPERCEIVE_TEST_ENV__ = {test_env};
+                window.__COPERCEIVE_TEST_REPRO__ = {test_repro};
+                window.__COPERCEIVE_FORCE_MOTION__ = {force_motion};
+                window.__COPERCEIVE_UPDATE_URL__ = "{escaped_update}";
+                window.__COPERCEIVE_DATA_ROOT__ = "{escaped_root}";
+                window.__COPERCEIVE_DATA_BASENAME__ = "{escaped_base}";
+                window.__COPERCEIVE_INITIAL_STATE__ = {initial_state_json};
+                if (window.location.origin === "{escaped_origin}") {{
+                    {ctrl_snippet}
+                    try {{
+                        sessionStorage.setItem("coperceive-token", "{escaped_token}");
+                        sessionStorage.setItem("coperceive-origin", "{escaped_origin}");
+                    }} catch (_) {{}}
+                }}
+            }} catch (e) {{
+                console.error("Failed to initialize coperceive desktop state", e);
+            }}
+        }})();
+        "#,
+        os_name = params.os_name,
+        titlebar_mode = params.titlebar_mode,
+        test_env = params.test_env,
+        test_repro = params.test_repro,
+        force_motion = params.force_motion,
+        initial_state_json = params.initial_state_json,
+    )
 }
 
 /// Spawns the loopback controller listener thread on port 127.0.0.1:0.
@@ -1188,6 +1235,9 @@ pub mod tests {
     fn test_spawn_controller_eval_real_socket() {
         use std::net::TcpStream;
 
+        let _port_guard = crate::test_seams::PORT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let mut config = make_test_config();
         let port_holder = Arc::new(Mutex::new(0u16));
         let port_holder_clone = port_holder.clone();
@@ -1547,5 +1597,191 @@ pub mod tests {
         assert!(resp.starts_with("HTTP/1.1 200 OK"), "{resp}");
         assert!(resp.ends_with(r#"{"shown":true}"#), "{resp}");
         assert_eq!(*calls.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_controller_does_not_start_and_no_secret_injected_without_test_mode() {
+        assert!(!controller_enabled(false));
+        assert!(controller_enabled(true));
+
+        let result = spawn_controller_if_enabled(false, make_test_config(), || {});
+        assert!(matches!(result, Ok(None)), "controller must not bind without test mode");
+
+        let snippet_prod = ctrl_window_init_snippet(false, Some(45678), Some("top-secret-token"));
+        assert!(snippet_prod.is_empty(), "production init snippet must be empty: {snippet_prod}");
+        assert!(!snippet_prod.contains("__COPERCEIVE_CTRL_PORT__"));
+        assert!(!snippet_prod.contains("__COPERCEIVE_CTRL_SECRET__"));
+        assert!(!snippet_prod.contains("top-secret-token"));
+
+        let snippet_test = ctrl_window_init_snippet(true, Some(45678), Some("top-secret-token"));
+        assert!(snippet_test.contains("window.__COPERCEIVE_CTRL_PORT__ = 45678;"));
+        assert!(snippet_test.contains("window.__COPERCEIVE_CTRL_SECRET__ = \"top-secret-token\";"));
+
+        let main = include_str!("main.rs");
+        assert!(
+            !main.contains("__COPERCEIVE_CTRL_PORT__"),
+            "main.rs must only inject controller globals via controller::ctrl_window_init_snippet"
+        );
+        assert!(
+            !main.contains("__COPERCEIVE_CTRL_SECRET__"),
+            "main.rs must only inject controller secret via controller::ctrl_window_init_snippet"
+        );
+        assert!(
+            main.contains("controller::controller_enabled(")
+                && main.contains("controller::spawn_controller_if_enabled("),
+            "main.rs must gate controller startup through controller_enabled and spawn_controller_if_enabled"
+        );
+    }
+
+    #[test]
+    fn test_security_review_reproducer_eval_and_origin_gates() {
+        // Mirrors steps [1], [3], [4] of docs/security/review-2026-11.md's reproducer:
+        let config = ControllerConfig::new(
+            51234,
+            "secret-token-test-123".into(),
+            Some("http://127.0.0.1:4700".into()),
+        );
+
+        // [1] Missing bearer returns 401
+        let no_auth = "POST /eval HTTP/1.1\r\nHost: 127.0.0.1:51234\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
+        let mut r = Cursor::new(no_auth.as_bytes().to_vec());
+        let mut w = Vec::new();
+        handle_client(&mut r, &mut w, &config, &|| {}).unwrap();
+        assert!(String::from_utf8(w).unwrap().starts_with("HTTP/1.1 401"));
+
+        // [4] Another loopback port MUST NOT pass CORS preflight even after allowed_origin is set!
+        let other_loopback_preflight = "OPTIONS /eval HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:5555\r\n\
+             Access-Control-Request-Method: POST\r\n\r\n";
+        let mut r = Cursor::new(other_loopback_preflight.as_bytes().to_vec());
+        let mut w = Vec::new();
+        handle_client(&mut r, &mut w, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(w).unwrap();
+        assert!(
+            resp.starts_with("HTTP/1.1 403"),
+            "unrelated loopback origin must be rejected after session active, got: {resp}"
+        );
+        assert!(
+            !resp.contains("Access-Control-Allow-Origin"),
+            "unrelated loopback origin must receive no ACAO header, got: {resp}"
+        );
+
+        // FOLD-12 / viewer init script and navigation pinning against crafted URLs
+        assert!(is_allowed_viewer_navigation("http://127.0.0.1:4700/#/viewer", "http://127.0.0.1:4700"));
+        assert!(!is_allowed_viewer_navigation("http://127.0.0.1:5555/", "http://127.0.0.1:4700"));
+        assert!(!is_allowed_viewer_navigation("http://evil.example/", "http://127.0.0.1:4700"));
+        assert!(!is_allowed_viewer_navigation("http://127.0.0.1:47000/", "http://127.0.0.1:4700"));
+        assert!(!is_allowed_viewer_navigation("http://127.0.0.1:4700@evil.example/", "http://127.0.0.1:4700"));
+
+        let prod_script = build_viewer_init_script(&ViewerInitScriptParams {
+            os_name: "macos",
+            titlebar_mode: "overlay",
+            test_env: false,
+            test_repro: false,
+            force_motion: false,
+            update_url: "",
+            origin: "http://127.0.0.1:4700",
+            token: "sidecar-tok",
+            data_root: "/tmp/demo",
+            data_basename: "demo",
+            initial_state_json: "{}",
+            ctrl_port: Some(51234),
+            ctrl_secret: Some("ctrl-sec"),
+        });
+        assert!(!prod_script.contains("ctrl-sec"));
+        assert!(!prod_script.contains("__COPERCEIVE_CTRL_PORT__"));
+        assert!(!prod_script.contains("__COPERCEIVE_CTRL_SECRET__"));
+        assert!(!prod_script.contains("indexOf"));
+        assert!(!prod_script.contains("=== \"null\""));
+        assert!(prod_script.contains("window.location.origin === \"http://127.0.0.1:4700\""));
+    }
+
+    #[test]
+    fn test_open_viewer_window_updates_controller_allowed_origin_for_remote_connect() {
+        let local_origin = "http://127.0.0.1:50681";
+        let remote_origin = "http://127.0.0.1:50726";
+        let secret = "secret-token-flow-f";
+        let config = ControllerConfig::new(51234, secret.into(), Some(local_origin.to_string()));
+        let viewer_origin = Mutex::new(Some(local_origin.to_string()));
+        let controller_config = Mutex::new(Some(config.clone()));
+
+        // Switch from local viewer to remote SSH tunnel viewer: CORS allowed_origin must move to remote_origin.
+        sync_viewer_origin(&viewer_origin, &controller_config, remote_origin);
+        assert_eq!(
+            viewer_origin.lock().unwrap().as_deref(),
+            Some(remote_origin)
+        );
+
+        let preflight = |req_origin: &str| -> String {
+            let req = format!(
+                "OPTIONS /eval-result HTTP/1.1\r\n\
+                 Host: 127.0.0.1:51234\r\n\
+                 Origin: {req_origin}\r\n\
+                 Access-Control-Request-Method: POST\r\n\
+                 Access-Control-Request-Headers: authorization, content-type\r\n\r\n"
+            );
+            let mut r = Cursor::new(req.into_bytes());
+            let mut w = Vec::new();
+            handle_client(&mut r, &mut w, &config, &|| {}).unwrap();
+            String::from_utf8(w).unwrap()
+        };
+
+        let remote_preflight = preflight(remote_origin);
+        assert!(
+            remote_preflight.starts_with("HTTP/1.1 204 No Content"),
+            "remote viewer origin preflight must succeed, got: {remote_preflight}"
+        );
+        assert!(
+            remote_preflight.contains(&format!("Access-Control-Allow-Origin: {remote_origin}")),
+            "remote viewer origin must receive ACAO header, got: {remote_preflight}"
+        );
+
+        let stale_local_preflight = preflight(local_origin);
+        assert!(
+            stale_local_preflight.starts_with("HTTP/1.1 403 Forbidden"),
+            "superseded local origin must be rejected after remote_connect, got: {stale_local_preflight}"
+        );
+
+        // Verify POST /eval-result from remote_origin unblocks /eval waiting callback.
+        let (tx, rx) = std::sync::mpsc::channel();
+        config.eval_callbacks.lock().unwrap().insert(42, tx);
+        let payload = r#"{"req_id":42,"result":{"ok":true},"error":null}"#;
+        let eval_result_req = format!(
+            "POST /eval-result HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: {remote_origin}\r\n\
+             Authorization: Bearer {secret}\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            payload.len(),
+            payload
+        );
+        let mut r = Cursor::new(eval_result_req.into_bytes());
+        let mut w = Vec::new();
+        handle_client(&mut r, &mut w, &config, &|| {}).unwrap();
+        let post_resp = String::from_utf8(w).unwrap();
+        assert!(post_resp.starts_with("HTTP/1.1 200 OK"), "{post_resp}");
+        let delivered = rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("eval-result from remote viewer should resolve waiting /eval");
+        assert_eq!(delivered.get("result").and_then(|v| v.get("ok")).and_then(|v| v.as_bool()), Some(true));
+
+        // Verify main.rs open_viewer_window synchronizes both viewer_origin and controller allowed_origin
+        // so callers like remote_connect cannot leave allowed_origin stale on a prior session's port.
+        let main = include_str!("main.rs");
+        let start = main
+            .find("fn open_viewer_window(")
+            .expect("open_viewer_window exists in main.rs");
+        let end = main[start..]
+            .find("fn build_viewer_bridge_plugin(")
+            .or_else(|| main[start..].find("async fn switch_data_root("))
+            .map(|rel| start + rel)
+            .expect("end of open_viewer_window block");
+        let open_fn = &main[start..end];
+        assert!(
+            open_fn.contains("controller::sync_viewer_origin("),
+            "open_viewer_window must call controller::sync_viewer_origin so remote_connect and other callers update controller allowed_origin"
+        );
     }
 }

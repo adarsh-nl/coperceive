@@ -1,13 +1,14 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-outlined.svg">
-    <img alt="Coperceive" src="assets/brand/wordmark-light-outlined.svg" width="320">
+    <img alt="Coperceive" src="assets/brand/wordmark-light-outlined.svg" width="260">
   </picture>
 </p>
 
 A fast, native desktop application and multi-agent perception data library for collaborative autonomous driving research.
 
-![Coperceive Dataset View](docs/design/screenshots/dataset_view_dark_1600x1000.png)
+![Coperceive dark-mode 3D viewer streaming Griffin scene Town03-000 from an HPC cluster, showing Vehicle 1's orange LiDAR point cloud, Drone 1 at 27.0 m altitude with translucent projected camera frustums, 50 3D bounding boxes with Bus 145 selected in the inspector, live vehicle telemetry, and the synchronized vehicle and drone camera strip.](docs/media/viewer-griffin-town03.png)
+<sub>A Griffin scene (CARLA Town03, vehicle and drone) streamed from a Slurm cluster. Griffin is MIT-licensed: github.com/wang-jh18-SVM/Griffin.</sub>
 
 ---
 
@@ -15,10 +16,11 @@ A fast, native desktop application and multi-agent perception data library for c
 
 Get the latest release for your platform from [GitHub Releases](https://github.com/adarsh-nl/coperceive/releases/latest):
 
-- **macOS Apple Silicon (`arm64` `.dmg`)**: `Coperceive_0.1.1_aarch64.dmg`
-- **macOS Intel (`x86_64` `.dmg`)**: `Coperceive_0.1.1_x64.dmg` *(verified under Rosetta 2 emulation in CI; not yet tested on physical Intel Mac hardware)*
+- **macOS Apple Silicon (`arm64` `.dmg`)**: `Coperceive_<version>_aarch64.dmg` (Apple Silicon only from v0.1.3 on)
 - **Windows (`x86_64` NSIS `.exe`)**: `Coperceive_0.1.1_x64-setup.exe`
 - **Linux (`x86_64` `.AppImage` & `.deb`)**: `Coperceive_0.1.1_amd64.AppImage` and `Coperceive_0.1.1_amd64.deb`
+
+*Note for Intel Mac users:* macOS builds are Apple Silicon only from v0.1.3 on; Intel Mac users stay on [v0.1.2](https://github.com/adarsh-nl/coperceive/releases/tag/v0.1.2) (the last Intel release).
 
 *Note for Linux users:* In-app updates are supported when running from the portable `.AppImage`. Debian/Ubuntu (`.deb`) installations are managed through your package manager; update via `apt` or by downloading the latest `.deb` from GitHub Releases.
 
@@ -84,6 +86,8 @@ Launch the local viewer server or drag a scene directory into the Coperceive des
 coperceive serve --root /path/to/scenes
 ```
 Open `http://127.0.0.1:8731` in your browser, or open the Coperceive desktop application.
+
+Without a token the server binds `127.0.0.1:8731` and answers only requests addressed to `127.0.0.1`, `localhost` or `[::1]` on that port, so a page under another hostname cannot reach it even when that name resolves to 127.0.0.1. That does not keep out other users of the same machine. On a shared node, behind a proxy (`--root-path`), or on any other host, set a token with `COPERCEIVE_TOKEN` or `--token-file` and enter it in the page's Bearer token field. The token file must be a regular file you own, not a symbolic link, with mode 0600 or 0400. With a token, every `/api` route requires it, whatever `--root-path` is.
 
 ### HPC over SSH
 1. In the desktop application, navigate to **Servers** (or **Settings → Servers**).

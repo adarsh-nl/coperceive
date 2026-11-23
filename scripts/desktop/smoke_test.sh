@@ -4,7 +4,9 @@
 # constant-time token verification, and measuring artifact sizes.
 
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_BUNDLE="${1:-src-tauri/target/release/bundle/macos/Coperceive.app}"
 DMG_FILE="${2:-src-tauri/target/release/bundle/dmg/Coperceive_0.0.0_aarch64.dmg}"
 
@@ -143,7 +145,7 @@ preserve_safe_tmp_logs() {
     mkdir -p "${dest}"
     local redact='s/Bearer [A-Za-z0-9._-]+/Bearer [REDACTED]/g; s/([Tt]oken[^A-Za-z0-9]*)[:=][[:space:]]*[^[:space:]"]+/\1=[REDACTED]/g'
     local f
-    for f in "${TMPDIR}/app_stdout.log" "${TMPDIR}/app_stderr.log" "${TMPDIR}/serve.log" "${TMPDIR}/demo_stdout.log" "${TMPDIR}/demo_stderr.log"; do
+    for f in "${TMPDIR}/app_stdout.log" "${TMPDIR}/app_stderr.log" "${TMPDIR}/serve.log" "${TMPDIR}/demo_stdout.log" "${TMPDIR}/demo_stderr.log" "${TMPDIR}/prod_stdout.log" "${TMPDIR}/prod_stderr.log"; do
         if [ -f "$f" ]; then
             sed -E "$redact" "$f" > "${dest}/$(basename "$f")" 2>/dev/null || true
         fi
@@ -256,6 +258,65 @@ if [ -z "${APP_EXE}" ] || [ ! -x "${APP_EXE}" ]; then
     exit 10
 fi
 
+# Test 3c: Normal (non-test) release launch must NOT start a loopback controller
+echo ""
+echo "--- Production Launch Controller Gate Check (macOS) ---"
+PROD_STATE_DIR="${TMPDIR}/prod-state"
+mkdir -p "${PROD_STATE_DIR}"
+PROD_STDOUT="${TMPDIR}/prod_stdout.log"
+PROD_STDERR="${TMPDIR}/prod_stderr.log"
+
+(
+    unset COPERCEIVE_TEST_ENV
+    unset COPERCEIVE_TEST_MARKER_FILE
+    unset COPERCEIVE_CTRL_INFO_FILE
+    unset COPERCEIVE_AUTOCONNECT_ROOT
+    unset COPERCEIVE_DESKTOP_AUTOCONNECT_ROOT
+    unset COPERCEIVE_UPDATE_URL
+    unset COPERCEIVE_MOCK_DIALOG_FILE
+    unset COPERCEIVE_TEST_IMPORT_SOURCE
+    export COPERCEIVE_STATE_DIR="${PROD_STATE_DIR}"
+    exec "${APP_EXE}" > "${PROD_STDOUT}" 2> "${PROD_STDERR}"
+) &
+APP_PID=$!
+
+for _ in {1..8}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Error: Production launch exited prematurely during controller-gate check!" >&2
+        cat "${PROD_STDERR}" >&2 || true
+        cat "${PROD_STDOUT}" >&2 || true
+        exit 8
+    fi
+    sleep 0.5
+done
+
+if grep -q -E "Loopback controller listening|\\[desktop-ctrl\\]" "${PROD_STDOUT}" "${PROD_STDERR}" 2>/dev/null; then
+    echo "Security failure: loopback controller started during normal (non-test) launch!" >&2
+    cat "${PROD_STDOUT}" >&2
+    exit 8
+fi
+
+PROD_PIDS="${APP_PID}"
+CHILDREN=$(pgrep -P "${APP_PID}" 2>/dev/null || true)
+if [ -n "${CHILDREN}" ]; then
+    PROD_PIDS="${PROD_PIDS},$(printf '%s\n' "${CHILDREN}" | paste -sd, -)"
+fi
+PROD_LISTENERS=$(lsof -nP -a -p "${PROD_PIDS}" -iTCP -sTCP:LISTEN 2>/dev/null || true)
+if [ -n "${PROD_LISTENERS}" ]; then
+    echo "Security failure: unexpected listening TCP socket(s) during normal launch:" >&2
+    echo "${PROD_LISTENERS}" >&2
+    exit 8
+fi
+
+kill -TERM "${APP_PID}" 2>/dev/null || true
+sleep 1
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -9 "${APP_PID}" 2>/dev/null || true
+fi
+wait "${APP_PID}" 2>/dev/null || true
+APP_PID=""
+echo "PROD_LAUNCH_VERIFIED: os=macos listening_ports=0 ctrl_disabled=true"
+
 FIXTURE_ROOT="$(pwd)/tests/fixtures/synthetic_scene"
 if [ ! -d "${FIXTURE_ROOT}" ]; then
     echo "Error: Synthetic scene fixture directory not found at ${FIXTURE_ROOT}!" >&2
@@ -270,16 +331,18 @@ APP_STDERR="${TMPDIR}/app_stderr.log"
 run_diag_eval_probe() {
     local p_port="${1:-}"
     local p_secret="${2:-}"
+    local p_ctrl_info="${3:-${CTRL_INFO_FILE:-}}"
+    local p_marker="${4:-${MARKER_FILE:-}}"
     if [ -z "${p_port}" ] || [ -z "${p_secret}" ]; then
-        if [ -f "${CTRL_INFO_FILE}" ]; then
-            p_port=$(sed -n '1p' "${CTRL_INFO_FILE}" 2>/dev/null || echo "")
-            p_secret=$(sed -n '2p' "${CTRL_INFO_FILE}" 2>/dev/null || echo "")
-        elif [ -f "${MARKER_FILE}" ]; then
-            p_port=$(sed -n '4p' "${MARKER_FILE}" 2>/dev/null || echo "")
-            p_secret=$(sed -n '5p' "${MARKER_FILE}" 2>/dev/null || echo "")
+        if [ -n "${p_ctrl_info}" ] && [ -f "${p_ctrl_info}" ]; then
+            p_port=$(sed -n '1p' "${p_ctrl_info}" 2>/dev/null || echo "")
+            p_secret=$(sed -n '2p' "${p_ctrl_info}" 2>/dev/null || echo "")
+        elif [ -n "${p_marker}" ] && [ -f "${p_marker}" ]; then
+            p_port=$(sed -n '4p' "${p_marker}" 2>/dev/null || echo "")
+            p_secret=$(sed -n '5p' "${p_marker}" 2>/dev/null || echo "")
         fi
     fi
-    echo "=== Controller /eval diagnostic probe (ctrl_info_exists=$([ -f "${CTRL_INFO_FILE}" ] && echo yes || echo no), ctrl_port=${p_port:-missing}) ===" >&2
+    echo "=== Controller /eval diagnostic probe (ctrl_info_exists=$([ -n "${p_ctrl_info}" ] && [ -f "${p_ctrl_info}" ] && echo yes || echo no), ctrl_port=${p_port:-missing}) ===" >&2
     if [ -n "${p_port}" ] && [ "${p_port}" != "0" ] && [ -n "${p_secret}" ]; then
         local js_probe='(() => { const out = { readyState: document.readyState, href: window.location.href, consoleErrors: window.__COPERCEIVE_CONSOLE_ERRORS__ ?? null, lastUiError: window.__COPERCEIVE_LAST_ERROR__ ?? null, autoConnectState: window.__COPERCEIVE_AUTOCONNECT_STATE__ ?? null, scriptCount: document.scripts ? document.scripts.length : -1, bodyTextLen: document.body ? document.body.innerText.length : -1, bodyPreview: document.body ? document.body.innerText.slice(0, 300) : "" }; try { const c = document.createElement("canvas"); const gl2 = c.getContext("webgl2"); const gl = gl2 ? null : c.getContext("webgl"); const ctx = gl2 || gl; const dbg = ctx ? ctx.getExtension("WEBGL_debug_renderer_info") : null; out.webgl = { webgl2: Boolean(gl2), webgl: Boolean(gl || gl2), vendor: ctx ? ctx.getParameter(ctx.VENDOR) : null, renderer: ctx ? ctx.getParameter(ctx.RENDERER) : null, unmaskedRenderer: dbg && ctx ? ctx.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null }; } catch (e) { out.webglError = String(e); } return out; })()'
         local win
@@ -308,6 +371,65 @@ run_diag_eval_probe() {
     spctl --assess --verbose=4 --type execute "${APP_BUNDLE}" 2>&1 || true
 }
 
+wait_for_app_readiness() {
+    local label="$1"
+    local app_pid="$2"
+    local marker_file="$3"
+    local ctrl_info_file="$4"
+    local stdout_log="$5"
+    local stderr_log="$6"
+    local require_session="$7"
+    local timeout_exit_code="$8"
+    local died_exit_code="$9"
+
+    for i in {1..90}; do
+        if [ -f "${marker_file}" ]; then
+            if [ "${require_session}" = "1" ]; then
+                local m_origin m_token
+                m_origin=$(sed -n '1p' "${marker_file}" 2>/dev/null || echo "")
+                m_token=$(sed -n '2p' "${marker_file}" 2>/dev/null || echo "")
+                if [ -n "${m_origin}" ] && [ -n "${m_token}" ]; then
+                    return 0
+                fi
+            else
+                local m_port m_secret
+                m_port=$(sed -n '4p' "${marker_file}" 2>/dev/null || echo "")
+                m_secret=$(sed -n '5p' "${marker_file}" 2>/dev/null || echo "")
+                if [ -n "${m_port}" ] && [ "${m_port}" != "0" ] && [ -n "${m_secret}" ]; then
+                    return 0
+                fi
+            fi
+        fi
+        if ! kill -0 "${app_pid}" 2>/dev/null; then
+            echo "Error: ${label} process died prematurely during startup!" >&2
+            echo "=== ${label} stderr ===" >&2
+            cat "${stderr_log}" >&2 || true
+            echo "=== ${label} stdout ===" >&2
+            cat "${stdout_log}" >&2 || true
+            exit "${died_exit_code}"
+        fi
+        sleep 0.5
+    done
+
+    echo "Error: ${label} readiness signal (${marker_file}) was not complete within 45s timeout!" >&2
+    local last_phase
+    last_phase=$(grep '\[auto-connect\] state=' "${stdout_log}" 2>/dev/null | tail -n 1 || true)
+    if [ -n "${last_phase}" ]; then
+        echo "Last auto-connect phase: ${last_phase}" >&2
+    fi
+    run_diag_eval_probe "" "" "${ctrl_info_file}" "${marker_file}"
+    echo "=== Sidecar logs under ${TMPDIR} ===" >&2
+    while IFS= read -r slog; do
+        echo "--- ${slog} ---" >&2
+        tail -n 40 "${slog}" >&2 || true
+    done < <(find "${TMPDIR}" -maxdepth 3 -name 'serve-*.log' -type f 2>/dev/null | sort || true)
+    echo "=== ${label} stderr ===" >&2
+    cat "${stderr_log}" >&2 || true
+    echo "=== ${label} stdout ===" >&2
+    cat "${stdout_log}" >&2 || true
+    exit "${timeout_exit_code}"
+}
+
 echo "Starting app binary with auto-connect fixture: ${FIXTURE_ROOT}..."
 LAUNCH_START_S=$(python3 -c 'import time; print(f"{time.monotonic():.6f}")')
 COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_ROOT}" \
@@ -318,32 +440,10 @@ APP_PID=$!
 echo "App process spawned with PID ${APP_PID}"
 
 echo "Waiting for auto-connect and viewer startup (up to 45s)..."
-for i in {1..90}; do
-    if [ -f "${MARKER_FILE}" ]; then
-        break
-    fi
-    if ! kill -0 "${APP_PID}" 2>/dev/null; then
-        echo "Error: App process died prematurely during startup!" >&2
-        echo "=== App stderr ===" >&2
-        cat "${APP_STDERR}" >&2
-        echo "=== App stdout ===" >&2
-        cat "${APP_STDOUT}" >&2
-        exit 12
-    fi
-    sleep 0.5
-done
-
-if [ ! -f "${MARKER_FILE}" ]; then
-    echo "Error: Auto-connect marker file was not created within 45s timeout!" >&2
-    run_diag_eval_probe
-    echo "=== App stderr ===" >&2
-    cat "${APP_STDERR}" >&2
-    echo "=== App stdout ===" >&2
-    cat "${APP_STDOUT}" >&2
-    exit 13
-fi
+wait_for_app_readiness "Auto-connect app" "${APP_PID}" "${MARKER_FILE}" "${CTRL_INFO_FILE}" "${APP_STDOUT}" "${APP_STDERR}" 1 13 12
 MARKER_ELAPSED_S=$(python3 -c 'import time, sys; print(f"{time.monotonic() - float(sys.argv[1]):.2f}")' "${LAUNCH_START_S}")
 echo "Auto-connect marker created in ${MARKER_ELAPSED_S}s."
+grep '\[auto-connect\] state=' "${APP_STDOUT}" || true
 
 APP_ORIGIN=$(sed -n '1p' "${MARKER_FILE}")
 APP_TOKEN=$(sed -n '2p' "${MARKER_FILE}")
@@ -472,12 +572,111 @@ wait "${APP_PID}" 2>/dev/null || true
 APP_PID=""
 echo "Verified: App binary launched, auto-connected to fixture, loaded scenes, and terminated successfully."
 
+# Test 4b: Symlinked .app path launch check (without dereferencing the .app symlink beforehand)
+echo ""
+echo "--- Symlinked .app Launch Check (macOS) ---"
+SYM_DIR="${TMPDIR}/sym-apps"
+SYM_APP="${SYM_DIR}/Coperceive.app"
+SYM_STATE_DIR="${TMPDIR}/sym-state"
+SYM_MARKER="${TMPDIR}/sym_marker.txt"
+SYM_STDOUT="${TMPDIR}/sym_stdout.log"
+SYM_STDERR="${TMPDIR}/sym_stderr.log"
+mkdir -p "${SYM_DIR}" "${SYM_STATE_DIR}"
+ln -s "${APP_BUNDLE}" "${SYM_APP}"
+SYM_EXE="${SYM_APP}/Contents/MacOS/$(basename "${APP_EXE}")"
+if [ ! -x "${SYM_EXE}" ]; then
+    echo "Error: Symlinked app executable is not executable: ${SYM_EXE}" >&2
+    exit 17
+fi
+
+echo "Launching app binary through symlinked .app path: ${SYM_EXE}..."
+COPERCEIVE_STATE_DIR="${SYM_STATE_DIR}" \
+COPERCEIVE_NO_RESTORE=1 \
+COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_ROOT}" \
+COPERCEIVE_TEST_MARKER_FILE="${SYM_MARKER}" \
+"${SYM_EXE}" > "${SYM_STDOUT}" 2> "${SYM_STDERR}" &
+SYM_PID=$!
+
+for i in {1..90}; do
+    if [ -f "${SYM_MARKER}" ]; then
+        break
+    fi
+    if ! kill -0 "${SYM_PID}" 2>/dev/null; then
+        echo "Error: Symlinked .app process died prematurely during startup!" >&2
+        cat "${SYM_STDERR}" >&2
+        cat "${SYM_STDOUT}" >&2
+        exit 17
+    fi
+    sleep 0.5
+done
+
+if [ ! -f "${SYM_MARKER}" ]; then
+    echo "Error: Symlinked .app marker file was not created within 45s timeout!" >&2
+    cat "${SYM_STDERR}" >&2
+    cat "${SYM_STDOUT}" >&2
+    kill -TERM "${SYM_PID}" 2>/dev/null || true
+    exit 17
+fi
+
+SYM_ORIGIN=$(sed -n '1p' "${SYM_MARKER}")
+SYM_TOKEN=$(sed -n '2p' "${SYM_MARKER}")
+SYM_SCENES_RESP=$(curl -s -f -H "Authorization: Bearer ${SYM_TOKEN}" "${SYM_ORIGIN}/api/scenes" || true)
+SYM_SCENE_COUNT=$(python3 -c 'import json, sys; data = json.loads(sys.argv[1]); print(len(data))' "${SYM_SCENES_RESP}" 2>/dev/null || echo "0")
+if [ "${SYM_SCENE_COUNT}" -lt 1 ]; then
+    echo "Error: Symlinked .app /api/scenes returned < 1 scene (${SYM_SCENES_RESP})" >&2
+    kill -TERM "${SYM_PID}" 2>/dev/null || true
+    exit 17
+fi
+
+SYM_SIDECAR_PY=$(python3 - "${SYM_STDOUT}" <<'PY'
+import json, sys
+py_path = ""
+with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+    for line in f:
+        if "[auto-connect] state=" in line:
+            try:
+                payload = json.loads(line.split("state=", 1)[1])
+                detail = payload.get("detail") or {}
+                if isinstance(detail, dict) and detail.get("python_bin") and detail.get("python_exists") is True:
+                    py_path = str(detail["python_bin"])
+            except Exception:
+                pass
+print(py_path)
+PY
+)
+case "${SYM_SIDECAR_PY}" in
+    "${SYM_APP}/Contents/Resources/"*|"${APP_BUNDLE}/Contents/Resources/"*)
+        if [ ! -x "${SYM_SIDECAR_PY}" ]; then
+            echo "Error: Symlinked .app sidecar Python is not executable: ${SYM_SIDECAR_PY}" >&2
+            kill -TERM "${SYM_PID}" 2>/dev/null || true
+            exit 17
+        fi
+        echo "Verified: Symlinked .app launch resolved bundled Python inside .app: ${SYM_SIDECAR_PY} (/api/scenes=${SYM_SCENE_COUNT})"
+        ;;
+    *)
+        echo "Error: Symlinked .app did not use bundled Python inside .app; got '${SYM_SIDECAR_PY}'" >&2
+        cat "${SYM_STDOUT}" >&2
+        kill -TERM "${SYM_PID}" 2>/dev/null || true
+        exit 17
+        ;;
+esac
+
+kill -TERM "${SYM_PID}" 2>/dev/null || true
+sleep 1
+if kill -0 "${SYM_PID}" 2>/dev/null; then
+    kill -9 "${SYM_PID}" 2>/dev/null || true
+fi
+wait "${SYM_PID}" 2>/dev/null || true
+SYM_PID=""
+rm -f "${SYM_APP}"
+
 # Test 5: First-Run Welcome Card & Demo Mode End-to-End Verification
 echo ""
 echo "--- First-Run Welcome Card & Demo Mode Verification (macOS) ---"
 DEMO_STATE_DIR="${TMPDIR}/demo-state"
 mkdir -p "${DEMO_STATE_DIR}"
 DEMO_MARKER="${TMPDIR}/demo_marker.txt"
+DEMO_CTRL_INFO="${TMPDIR}/demo_ctrl_info.txt"
 DEMO_STDOUT="${TMPDIR}/demo_stdout.log"
 DEMO_STDERR="${TMPDIR}/demo_stderr.log"
 
@@ -488,35 +687,14 @@ unset COPERCEIVE_PYTHON
 echo "Starting app binary on empty state dir: ${DEMO_STATE_DIR}..."
 COPERCEIVE_STATE_DIR="${DEMO_STATE_DIR}" \
 COPERCEIVE_TEST_MARKER_FILE="${DEMO_MARKER}" \
+COPERCEIVE_CTRL_INFO_FILE="${DEMO_CTRL_INFO}" \
 "${APP_EXE}" > "${DEMO_STDOUT}" 2> "${DEMO_STDERR}" &
 APP_PID=$!
 echo "Demo test app process spawned with PID ${APP_PID}"
 
-DEMO_CTRL_PORT=""
-DEMO_CTRL_SECRET=""
-for i in {1..90}; do
-    if [ -f "${DEMO_MARKER}" ]; then
-        DEMO_CTRL_PORT=$(sed -n '4p' "${DEMO_MARKER}")
-        DEMO_CTRL_SECRET=$(sed -n '5p' "${DEMO_MARKER}")
-        if [ -n "${DEMO_CTRL_PORT}" ] && [ "${DEMO_CTRL_PORT}" != "0" ] && [ -n "${DEMO_CTRL_SECRET}" ]; then
-            break
-        fi
-    fi
-    if ! kill -0 "${APP_PID}" 2>/dev/null; then
-        echo "Error: Demo test app process died during startup!" >&2
-        cat "${DEMO_STDERR}" >&2
-        cat "${DEMO_STDOUT}" >&2
-        exit 20
-    fi
-    sleep 0.5
-done
-
-if [ -z "${DEMO_CTRL_PORT}" ] || [ "${DEMO_CTRL_PORT}" = "0" ] || [ -z "${DEMO_CTRL_SECRET}" ]; then
-    echo "Error: Controller port/secret not written to ${DEMO_MARKER} within timeout!" >&2
-    cat "${DEMO_STDERR}" >&2
-    cat "${DEMO_STDOUT}" >&2
-    exit 20
-fi
+wait_for_app_readiness "Demo test app" "${APP_PID}" "${DEMO_MARKER}" "${DEMO_CTRL_INFO}" "${DEMO_STDOUT}" "${DEMO_STDERR}" 0 20 20
+DEMO_CTRL_PORT=$(sed -n '4p' "${DEMO_MARKER}")
+DEMO_CTRL_SECRET=$(sed -n '5p' "${DEMO_MARKER}")
 echo "Controller ready on port ${DEMO_CTRL_PORT}"
 
 echo "Polling for first-run library location prompt on empty state dir..."
@@ -597,9 +775,8 @@ if ! echo "${CLICK_RESP}" | grep -q '"clicked"'; then
 fi
 
 echo "Polling until demo scene is generated, opened in viewer, and renders LiDAR points, camera strip, and boxes..."
-VIEWER_CHECK_SCRIPT=$(python3 - "${COPERCEIVE_INTEL_VM_NO_WEBGL:-0}" <<'PY'
-import json, sys
-expect_no_webgl = sys.argv[1] == "1"
+VIEWER_CHECK_SCRIPT=$(python3 - <<'PY'
+import json
 js = """(() => {
   document.querySelector("section.cam-strip[data-open='true'] .cam-thumb")?.scrollIntoView?.();
   const title = (document.querySelector(".dataset-badge .dataset-name")?.textContent || "").trim();
@@ -613,9 +790,9 @@ js = """(() => {
     notice.includes("3D view unavailable")
     && notice.includes("Copy diagnostics");
   const baseReady = title === "Demo (synthetic)" && points > 0 && cameras >= 1 && boxes > 0;
-  const ready = EXPECT_NO_WEBGL ? (baseReady && hasWebglUnavailable) : baseReady;
+  const ready = baseReady && !hasWebglUnavailable;
   return { ready, title, points, cameras, boxes, hasWebglUnavailable };
-})()""".replace("EXPECT_NO_WEBGL", "true" if expect_no_webgl else "false")
+})()"""
 print(json.dumps({"window": "viewer", "script": js}))
 PY
 )
@@ -658,12 +835,6 @@ if [ "${DEMO_LOADED}" -ne 1 ]; then
     exit 23
 fi
 echo "Verified viewer loaded demo scene (/eval HTTP ${LAST_VIEWER_HTTP_CODE}): ${LAST_VIEWER_STATE}"
-if [ "${COPERCEIVE_INTEL_VM_NO_WEBGL:-0}" = "1" ]; then
-    screencapture -x "${SCREENSHOT_DIR}/demo-webgl-unavailable.png" 2>/dev/null || true
-    if [ -f "${SCREENSHOT_DIR}/demo-webgl-unavailable.png" ]; then
-        echo "Verified: captured WebGL-unavailable screenshot at ${SCREENSHOT_DIR}/demo-webgl-unavailable.png ($(stat -f %z "${SCREENSHOT_DIR}/demo-webgl-unavailable.png" 2>/dev/null || wc -c < "${SCREENSHOT_DIR}/demo-webgl-unavailable.png") bytes)"
-    fi
-fi
 
 echo "Opening #prediction-output menu, selecting 'cav-b · noisy', and verifying 'synthetic predictions' evaluation view..."
 COMPARE_CHECK_SCRIPT='{"window":"viewer","script":"(() => { const runBtn = document.querySelector(\"#prediction-run\"); const outBtn = document.querySelector(\"#prediction-output\"); const list = document.querySelector(\"ul.menu-list[aria-labelledby=\\\"prediction-output\\\"]\"); const curOut = (outBtn?.textContent || \"\").trim(); if (!curOut.includes(\"cav-b\")) { if (!list && outBtn) { outBtn.click(); } else if (list) { const opt = [...list.querySelectorAll(\"button[role=\\\"option\\\"]\")].find(b => (b.textContent || \"\").includes(\"cav-b\")); if (opt) opt.click(); } } const predRun = (runBtn?.textContent || \"\").trim(); const evalHead = (document.querySelector(\".eval-head\")?.textContent || \"\").trim(); const ok = predRun.includes(\"synthetic predictions\") && evalHead.includes(\"cav-b\") && evalHead.includes(\"synthetic predictions\"); return { ok, predRun, output: (outBtn?.textContent || \"\").trim(), evalHead }; })()"}'
@@ -735,93 +906,19 @@ case "${DEMO_SIDECAR_PY}" in
         ;;
 esac
 
-if [ "${COPERCEIVE_INTEL_VM_NO_WEBGL:-0}" = "1" ]; then
-    # Approved native-Intel CI exception: on macos-15-intel, the headless VM's WKWebView
-    # returns null for WebGL vendor/renderer/shader precision ("webgl":{"renderer":null,
-    # "unmaskedRenderer":null,"vendor":null,"webgl":true,"webgl2":true}, console error:
-    # "THREE.WebGLRenderer: null is not an object (evaluating 'e.getShaderPrecisionFormat(e.VERTEX_SHADER,e.HIGH_FLOAT).precision')").
-    # Skip 3D rendering and 1x playback assertions here; non-WebGL panels, APIs, and the
-    # "3D view unavailable" notice remain blocking above.
-    echo "Skipping 3D playback ratio assertion on COPERCEIVE_INTEL_VM_NO_WEBGL=1 (headless VM WebGL vendor/renderer/precision=null)."
-else
-    echo "Verifying demo 1x playback advances frames smoothly without 'Buffering'..."
-    PLAYBACK_START_RESP=$(curl -s -f -X POST \
-        -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
-        -H "Content-Type: application/json" \
-        -d '{"window":"viewer","script":"(() => { const s0 = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (s0 && !s0.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? null; })()"}' \
-        "http://127.0.0.1:${DEMO_CTRL_PORT}/eval")
-    echo "Playback started: ${PLAYBACK_START_RESP}"
+echo "Verifying demo 1x playback advances frames smoothly without 'Buffering'..."
+PLAYBACK_START_RESP=$(curl -s -f -X POST \
+    -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d '{"window":"viewer","script":"(() => { const s0 = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (s0 && !s0.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? null; })()"}' \
+    "http://127.0.0.1:${DEMO_CTRL_PORT}/eval")
+echo "Playback started: ${PLAYBACK_START_RESP}"
 
-    PLAY_SAMPLES=0
-    BUFFERING_SEEN=0
-    START_FRAME=""
-    END_FRAME=""
-    START_WALL_S=""
-    END_WALL_S=""
-    for i in {1..15}; do
-        sleep 0.2
-        PLAY_RESP=$(curl -s -X POST \
-            -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
-            -H "Content-Type: application/json" \
-            -d '{"window":"viewer","script":"(() => { const st = window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? {}; const txt = document.body ? document.body.innerText : \"\"; return { frameIndex: st.frameIndex ?? -1, playing: Boolean(st.playing), buffering: txt.includes(\"Buffering\") }; })()"}' \
-            "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
-        SAMPLE_WALL_S=$(python3 -c 'import time; print(f"{time.monotonic():.6f}")')
-        if [ -n "${PLAY_RESP}" ]; then
-            CUR_FRAME=$(echo "${PLAY_RESP}" | sed -n 's/.*"frameIndex":\([0-9]*\).*/\1/p')
-            if [ -z "${START_FRAME}" ] && [ -n "${CUR_FRAME}" ]; then
-                START_FRAME="${CUR_FRAME}"
-                START_WALL_S="${SAMPLE_WALL_S}"
-            fi
-            if [ -n "${CUR_FRAME}" ]; then
-                END_FRAME="${CUR_FRAME}"
-                END_WALL_S="${SAMPLE_WALL_S}"
-            fi
-            if echo "${PLAY_RESP}" | grep -q '"buffering":true'; then
-                BUFFERING_SEEN=1
-            fi
-            PLAY_SAMPLES=$((PLAY_SAMPLES + 1))
-        fi
-    done
-    # Capture per-phase playback breakdown and pause cleanly
-    PLAYBACK_PERF=$(curl -s -X POST \
-        -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
-        -H "Content-Type: application/json" \
-        -d '{"window":"viewer","script":"(() => { const perf = window.__COPERCEIVE_PLAYBACK_PERF__?.() ?? null; const st = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (st?.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return perf; })()"}' \
-        "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
-    echo "Demo playback perf breakdown: ${PLAYBACK_PERF}"
-
-    if [ "${BUFFERING_SEEN}" -ne 0 ]; then
-        echo "Error: Demo playback showed 'Buffering' during 1x local playback!" >&2
-        exit 26
-    fi
-    if [ -z "${START_FRAME}" ] || [ -z "${END_FRAME}" ] || [ -z "${START_WALL_S}" ] || [ -z "${END_WALL_S}" ]; then
-        echo "Error: Could not read playback frameIndex during demo playback!" >&2
-        exit 26
-    fi
-    FRAME_DELTA=$(( (END_FRAME - START_FRAME + 100) % 100 ))
-    python3 - "${START_FRAME}" "${END_FRAME}" "${FRAME_DELTA}" "${START_WALL_S}" "${END_WALL_S}" <<'PY' || exit 26
-import os, sys
-start_f, end_f, frames, t0, t1 = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5])
-elapsed = max(t1 - t0, 1e-6)
-expected = 10.0 * elapsed
-ratio = frames / expected
-min_required = 0.9 * expected
-print(f"Demo 1x playback: elapsed={elapsed:.2f}s frames={frames} ({start_f} -> {end_f}) ratio={ratio:.2f}x (required >= 0.90x / {min_required:.1f} frames)")
-if frames < min_required:
-    # v0.1.1 exception (approved by Adarsh): under Rosetta 2 on arm64, record the ratio as a warning;
-    # Claude Code's follow-up PR on Intel/Rosetta playback root cause makes this blocking again.
-    if os.environ.get("COPERCEIVE_ROSETTA_PLAYBACK_WARN_ONLY") == "1":
-        msg = (
-            f"Demo playback under Rosetta 2: {frames} frames in {elapsed:.2f}s "
-            f"({ratio:.2f}x < 0.90x); non-blocking for v0.1.1 only — Claude Code's follow-up PR restores blocking check"
-        )
-        print(f"::warning title=Rosetta-Playback::{msg}")
-        print(f"Warning: {msg}", file=sys.stderr)
-    else:
-        print(f"Error: Demo playback too slow: {frames} frames in {elapsed:.2f}s ({ratio:.2f}x < 0.90x)", file=sys.stderr)
-        sys.exit(26)
-PY
-fi
+python3 "${SCRIPT_DIR}/playback_metrics.py" poll \
+    --port "${DEMO_CTRL_PORT}" \
+    --secret "${DEMO_CTRL_SECRET}" \
+    --polls 25 \
+    --interval 0.2 || exit 26
 
 DEMO_OUTCOME_LINE=$(grep "COPERCEIVE_DEMO_OUTCOME:" "${DEMO_STDOUT}" | tail -n 1 || echo "")
 if [ -z "${DEMO_OUTCOME_LINE}" ]; then

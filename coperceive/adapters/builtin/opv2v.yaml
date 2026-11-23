@@ -64,7 +64,13 @@ streams:
     translation: [lidar_pose.0, lidar_pose.1, lidar_pose.2]
     rotation:
       # The YAML order is roll, yaw, pitch; euler fields are (about x, about y, about z).
-      euler: {fields: [lidar_pose.3, lidar_pose.5, lidar_pose.4], order: zyx, frame: intrinsic}
+      # CARLA's GetMatrix and OpenCOOD's x_to_world build Rz(yaw) Ry(-pitch) Rx(-roll), so
+      # roll and pitch enter negated (conventions OPV-6; checked on real data, PR #166).
+      euler:
+        fields: [lidar_pose.3, lidar_pose.5, lidar_pose.4]
+        order: zyx
+        frame: intrinsic
+        signs: [-1, -1, 1]
 
   sensors:
     reader: yaml_record
@@ -72,10 +78,12 @@ streams:
     sample: first
     records: {prefix: camera}
     extrinsic:
-      # "extrinsic matrix from camera to LiDAR" (OpenCOOD data-annotation page); the pose
-      # stream is the lidar pose, so the lidar frame is the body frame.
+      # The OpenCOOD data-annotation page labels it "extrinsic matrix from camera to LiDAR",
+      # but the page's own example numbers, the OpenCDA dumper and the real data read it
+      # LiDAR-to-camera (conventions OPV-7; checked on real data, PR #166). The pose stream is
+      # the lidar pose, so the lidar frame is the body frame: the matrix is camera_from_body.
       matrix: {field: extrinsic, shape: 4x4}
-      direction: child_to_parent
+      direction: parent_to_child
     intrinsic: {matrix: intrinsic}
     image_size:
       derive: principal_point_x2
@@ -101,7 +109,8 @@ streams:
     size:
       half_extents: [extent.0, extent.1, extent.2]
     rotation:
-      euler: {fields: [roll, pitch, yaw], order: zyx, frame: intrinsic}
+      # Roll and pitch negated, as for the pose (conventions OPV-6).
+      euler: {fields: [roll, pitch, yaw], order: zyx, frame: intrinsic, signs: [-1, -1, 1]}
     track_id_cast: int_string
     fill:
       category: vehicle

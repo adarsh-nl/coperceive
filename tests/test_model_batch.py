@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
+import pyarrow.parquet as pq
 import pytest
 import yaml
 from coperceive.cli import main
@@ -73,10 +74,26 @@ def test_batch_writes_a_complete_run(roots: tuple[Path, Path, Scene]) -> None:
     assert re.fullmatch(r"[0-9a-f]{32}", environment["checkpoint_md5"])
     assert provenance["completed_scenes"] == ["coop"]
     assert provenance["frames_run"] == report.frames_run and provenance["cache_hits"] == 0
+    # The job's post-run check reads it: boxes.parquet is required only when boxes were written.
+    assert provenance["boxes_written"] == report.boxes
     assert provenance["gpu"] is None
     timings = cast(Mapping[str, float], provenance["timings"])
     assert timings["wall_s"] > 0 and timings["staging_s"] == 0
     assert (out / "r1" / ".." / ".work" / "r1" / "parent.log").resolve().is_file()
+
+
+def test_a_run_records_the_evaluation_protocol_it_was_made_for(
+    roots: tuple[Path, Path, Scene],
+) -> None:
+    """model run --protocol writes the intended eval protocol into run.json provenance;
+    a run that did not choose one records nothing (eval run keeps its own default)."""
+    _, out = _run(roots, eval_protocol="legacy")
+    provenance = read_run_meta(out, "r1").provenance
+    assert provenance is not None and provenance["eval_protocol"] == "legacy"
+
+    _, out = _run(roots, run_id="r2")
+    provenance = read_run_meta(out, "r2").provenance
+    assert provenance is not None and "eval_protocol" not in provenance
 
 
 def test_rows_are_time_major_and_single(roots: tuple[Path, Path, Scene]) -> None:
@@ -322,6 +339,44 @@ def test_known_answer_model_misses_everything_beyond_the_threshold(
         assert total["tp"] == 0 and total["fp"] == total["gt"] and total["miss"] == total["gt"], (
             total
         )
+
+
+def test_a_finished_scene_with_no_box_still_gets_a_prediction_file(tmp_path: Path) -> None:
+    """A model that finds nothing in a scene still covers it (docs/eval-spec.md A.0).
+
+    The known-answer model returns the requested agent's ground truth; in scene
+    "quiet" the mast has none, so the model returns no box there. Before, no
+    boxes.parquet was written for that scene and eval run skipped it.
+    """
+    from coperceive.diagnostics import shared_objects
+
+    scene = replace(cooperative_scene(), scene_id="busy")
+    quiet_annotations = tuple(a for a in scene.annotations if a.agent_id != "mast")
+    quiet = replace(
+        scene,
+        scene_id="quiet",
+        annotations=quiet_annotations,
+        objects=shared_objects(quiet_annotations),
+    )
+    scenes = tmp_path / "scenes"
+    write_scene(scene, scenes / "busy")
+    write_scene(quiet, scenes / "quiet")
+    out = tmp_path / "predictions"
+    report = run_batch(
+        load_manifest(FAKE),
+        scenes,
+        out,
+        "quiet-run",
+        RunOptions(model="known-answer", agent_ids=("mast",)),
+        created_utc=CREATED,
+        parent_env=_env(),
+    )
+    assert report.completed == ("busy", "quiet")
+    quiet_boxes = out / "quiet-run" / "quiet" / "boxes.parquet"
+    assert quiet_boxes.is_file()
+    assert pq.read_table(quiet_boxes).num_rows == 0
+    evaluated = evaluate_run(scenes, out, "quiet-run", DEFAULT_CONFIG, created_utc=CREATED)
+    assert evaluated.evaluated == ("busy", "quiet") and evaluated.skipped == ()
 
 
 def test_scrambled_labels_collapse_ap_while_known_answer_scores_perfectly(

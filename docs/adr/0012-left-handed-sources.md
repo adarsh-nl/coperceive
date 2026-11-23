@@ -1,6 +1,6 @@
 # ADR 0012 — Left-handed sources, per-agent box mappings and typed discovery
 
-Status: accepted by Adarsh on 2026-10-18 (plan review). Implemented on `feat/adapter-opencood` for the OPV2V and V2XSet manifests. Extends the manifest of [ADR 0009](0009-dataset-adapters.md); `spec_version` stays `1` because every new key is optional and a manifest without them reads exactly as before (the Griffin regression test is the proof).
+Status: accepted by the maintainer on 2026-10-18 (plan review). Implemented on `feat/adapter-opencood` for the OPV2V and V2XSet manifests. Extends the manifest of [ADR 0009](0009-dataset-adapters.md); `spec_version` stays `1` because every new key is optional and a manifest without them reads exactly as before (the Griffin regression test is the proof).
 
 ## Context
 
@@ -10,7 +10,7 @@ OPV2V and V2XSet share the OpenCOOD layout: one directory per scene, one per age
 2. A box is given as the actor's `location`, a `center` offset from that point to the box centre, and `extent`, "half length, width and height of the vehicle in meter" (OpenCOOD data-annotation page). The boxes of a frame are a mapping keyed by the actor id, not a list.
 3. In V2XSet the roadside unit is the agent directory `-1` beside the vehicles; discovery assigns one type per glob.
 
-A fourth point is not a format gap but a reading of the brief. Item 3 of Adarsh's brief asked for one shared box set per frame "not duplicated per agent". The data are not duplicates: in OPV2V `train/2021_08_16_22_26_54` at stem `000069` the three agents list 33, 32 and 29 vehicles, union 42, intersection 18, and a shared id has identical geometry in every file. The OpenCOOD page says a list holds "surrounding vehicles that have at least one LiDAR point hit from the agent", so each list is that agent's visibility-filtered truth. Adarsh accepted this reading on 2026-10-18.
+A fourth point is not a format gap but a reading of the brief. Item 3 of the maintainer's brief asked for one shared box set per frame "not duplicated per agent". The data are not duplicates: in OPV2V `train/2021_08_16_22_26_54` at stem `000069` the three agents list 33, 32 and 29 vehicles, union 42, intersection 18, and a shared id has identical geometry in every file. The OpenCOOD page says a list holds "surrounding vehicles that have at least one LiDAR point hit from the agent", so each list is that agent's visibility-filtered truth. the maintainer accepted this reading on 2026-10-18.
 
 ## Decision
 
@@ -88,7 +88,7 @@ sensors:
 
 A manifest may carry `licence: {status: unknown | known, spdx?, notice, links: [..]}`; `adapters check` prints it. Platform values that are not in the data (the CARLA town, decision 7 of the plan) come from a sidecar table given on the command line, `--platform-table FILE`, a YAML mapping `scene_id -> {key: value}`; keys starting with `_` are notes and are ignored. `coperceive maps identify` writes such a table (ADR 0008 addendum).
 
-**Town rule (revised 2026-10-18).** `maps identify` scores a scene's vehicle poses at the identity transform against every ingested town and accepts the best town when its median lane-centre distance is at most 0.5 m (`--accept-m`), the runner-up's is at least 10 times the best (`--ratio`), and the runner-up is at least 0.5 m worse in absolute terms (`--gap-m`). The first version demanded a fixed 2 m margin over the runner-up; staging job 629196 then left V2XSet `train/2021_08_20_20_39_00` map-less at Town06 0.046 m against Town03 1.060 m over 376 poses, and Adarsh replaced the margin with the relative rule, under which that scene is Town06 and the OPV2V scene (Town06 0.020 m against Town05 50.8 m) is unchanged. A scene that fails the rule stays map-less and the table records the reason.
+**Town rule (revised 2026-10-18).** `maps identify` scores a scene's vehicle poses at the identity transform against every ingested town and accepts the best town when its median lane-centre distance is at most 0.5 m (`--accept-m`), the runner-up's is at least 10 times the best (`--ratio`), and the runner-up is at least 0.5 m worse in absolute terms (`--gap-m`). The first version demanded a fixed 2 m margin over the runner-up; staging job 629196 then left V2XSet `train/2021_08_20_20_39_00` map-less at Town06 0.046 m against Town03 1.060 m over 376 poses, and the maintainer replaced the margin with the relative rule, under which that scene is Town06 and the OPV2V scene (Town06 0.020 m against Town05 50.8 m) is unchanged. A scene that fails the rule stays map-less and the table records the reason.
 
 ## Consequences
 

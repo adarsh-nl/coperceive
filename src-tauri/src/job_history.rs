@@ -6,14 +6,14 @@
 //! exists under the profile's `results_root/plans`. Nothing is stored locally:
 //! reconnecting to the same server shows the same runs.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::hpc::{is_under, normalise_path, JobState, ServerProfile};
 use crate::job_watch::is_active;
-use crate::run_plan::validate_plan_id;
+use crate::run_plan::{validate_plan_id, DEFAULT_EVAL_PROTOCOL, EVAL_PROTOCOLS};
 use crate::slurm_adapter::{map_slurm_state, RemoteRunner};
 use crate::ssh::shell_quote;
 
@@ -42,6 +42,10 @@ pub struct RunHistoryEntry {
     pub ended: Option<String>,
     /// The saved plan still exists under results_root/plans, so re-run works.
     pub plan_available: bool,
+    /// The AP protocol the saved plan records (`default` or `legacy`). A plan saved
+    /// before the field existed is `default`.
+    #[serde(default)]
+    pub eval_protocol: String,
 }
 
 fn plans_dir(profile: &ServerProfile) -> Result<String, String> {
@@ -106,7 +110,38 @@ fn parse_sacct_line(line: &str, plan_ids: &BTreeSet<String>) -> Option<RunHistor
         started: optional(started),
         ended: optional(ended),
         plan_available: plan_ids.contains(plan_id),
+        eval_protocol: DEFAULT_EVAL_PROTOCOL.to_string(),
     })
+}
+
+/// The `eval_protocol` each saved plan records, read in one read-only command. Plans
+/// saved before the field existed are absent from the map and stay `default`.
+fn plan_protocols(runner: &dyn RemoteRunner, plans: &str) -> BTreeMap<String, String> {
+    let command = format!(
+        "grep -H -o '\"eval_protocol\": *\"[a-z]*\"' -- {}/*.json 2>/dev/null",
+        shell_quote(plans)
+    );
+    let Ok(result) = runner.run(&command, HISTORY_TIMEOUT, None) else {
+        return BTreeMap::new();
+    };
+    if !result.success {
+        return BTreeMap::new();
+    }
+    let mut found = BTreeMap::new();
+    for line in result.stdout.lines() {
+        let Some((path, rest)) = line.split_once(":\"eval_protocol\"") else {
+            continue;
+        };
+        let Some(plan_id) = path.rsplit('/').next().and_then(|name| name.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        let value = rest.split('"').nth(1).unwrap_or("");
+        if validate_plan_id(plan_id).is_ok() && EVAL_PROTOCOLS.contains(&value) {
+            found.insert(plan_id.to_string(), value.to_string());
+        }
+    }
+    found
 }
 
 /// Lists the app's submitted runs from Slurm accounting, newest first.
@@ -147,6 +182,12 @@ pub fn list_run_history(
         .lines()
         .filter_map(|line| parse_sacct_line(line, &plan_ids))
         .collect();
+    let protocols = plan_protocols(runner, &plans);
+    for entry in &mut entries {
+        if let Some(protocol) = protocols.get(&entry.plan_id) {
+            entry.eval_protocol = protocol.clone();
+        }
+    }
     entries.sort_by(|left, right| {
         right
             .started
@@ -278,6 +319,34 @@ mod tests {
         assert!(!entries[1].active);
         assert!(entries[1].plan_available);
         assert_eq!(entries[1].elapsed.as_deref(), Some("01:02:03"));
+    }
+
+    #[test]
+    fn history_carries_each_plans_evaluation_protocol() {
+        let runner = FakeRunner::default()
+            .with("ls -1", &format!("{PLAN_A}.json
+{PLAN_B}.json
+"))
+            .with(
+                "grep -H -o",
+                &format!("/data/results/plans/{PLAN_A}.json:\"eval_protocol\": \"legacy\"
+"),
+            )
+            .with(
+                "sacct -u",
+                &format!(
+                    "1|{}|COMPLETED|00:01:00|01:00:00|main|2026-10-28T10:00:00|2026-10-28T10:01:00
+                     2|{}|COMPLETED|00:01:00|01:00:00|main|2026-10-27T10:00:00|2026-10-27T10:01:00
+",
+                    job_name(PLAN_A),
+                    job_name(PLAN_B)
+                ),
+            );
+        let entries = list_run_history(&runner, &profile(), 50).expect("history");
+        let by_plan = |id: &str| entries.iter().find(|entry| entry.plan_id == id).unwrap();
+        assert_eq!(by_plan(PLAN_A).eval_protocol, "legacy");
+        // A plan saved before the field existed is the default.
+        assert_eq!(by_plan(PLAN_B).eval_protocol, "default");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for CI workflow path filters and triggers."""
 
+import re
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, cast
@@ -87,6 +88,24 @@ def test_desktop_path_filters_cover_required_directories() -> None:
     assert matches_any("coperceive/app/server.py"), (
         "Changes to coperceive/app/ must not skip desktop-macos"
     )
+    for desktop_py in (
+        "coperceive/demo/generate.py",
+        "coperceive/evaluation/evaluate.py",
+        "coperceive/evalview.py",
+        "coperceive/cli.py",
+        "coperceive/cluster_datasets.py",
+        "coperceive/scene/pack.py",
+        "coperceive/remote/scan.py",
+        "coperceive/remote_view/stream.py",
+        "coperceive/repro/export.py",
+        "coperceive/adapters/generic.py",
+        "coperceive/hdmap/store.py",
+        "coperceive/bundle/open.py",
+        "coperceive/validate.py",
+        "coperceive/viewdata.py",
+        "tests/fixtures/synthetic_scene/synth_001/manifest.json",
+    ):
+        assert matches_any(desktop_py), f"Changes to {desktop_py} must not skip desktop-macos"
     assert matches_any("scripts/desktop/e2e_mac.sh"), (
         "Changes to scripts/desktop/ must not skip desktop-macos"
     )
@@ -103,5 +122,161 @@ def test_desktop_path_filters_cover_required_directories() -> None:
         "Python library changes should skip desktop-macos"
     )
     assert not matches_any("tests/test_cli_griffin.py"), "Test changes should skip desktop-macos"
-    assert not matches_any("docs/ci.md"), "Documentation changes should skip desktop-macos"
+    assert not matches_any("docs/index.md"), "Documentation changes should skip desktop-macos"
     assert not matches_any("README.md"), "Root doc changes should skip desktop-macos"
+
+    # 3. Verify Guard check filter accuracy regex stays in sync with desktop filter
+    guard_step = next(s for s in changes_steps if s.get("name") == "Guard check filter accuracy")
+    guard_script = str(guard_step.get("run", ""))
+    m = re.search(r"CHANGED_CRITICAL=\$\(git diff[^\n]*grep -E '([^']+)'", guard_script)
+    assert m is not None, "Could not locate CHANGED_CRITICAL regex in ci.yml guard step"
+    critical_re = re.compile(m.group(1))
+    assert critical_re.search("coperceive/demo/generate.py"), (
+        "Guard regex must include coperceive/demo/generate.py"
+    )
+    assert critical_re.search("coperceive/evaluation/evaluate.py"), (
+        "Guard regex must include coperceive/evaluation/evaluate.py"
+    )
+    assert critical_re.search("coperceive/cli.py"), "Guard regex must include coperceive/cli.py"
+    assert not critical_re.search("coperceive/griffin/commands.py")
+    assert not critical_re.search("docs/ci.md")
+    assert not critical_re.search("README.md")
+
+
+def test_docs_path_filters_and_job() -> None:
+    """Verify the docs CI job is gated by the docs path filter and enforces strict builds."""
+    data = _load_ci_workflow()
+    jobs = cast(dict[str, Any], data.get("jobs", {}))
+    changes_job = cast(dict[str, Any], jobs["changes"])
+    outputs = cast(dict[str, Any], changes_job.get("outputs", {}))
+    assert "docs" in outputs, "changes job must expose a 'docs' output"
+
+    changes_steps = cast(list[dict[str, Any]], changes_job.get("steps", []))
+    paths_filter_step = next(
+        s for s in changes_steps if "dorny/paths-filter" in str(s.get("uses", ""))
+    )
+    filters_yaml = cast(
+        dict[str, Any],
+        yaml.safe_load(str(cast(dict[str, Any], paths_filter_step["with"])["filters"])),
+    )
+    docs_patterns = cast(list[str], filters_yaml.get("docs", []))
+    assert docs_patterns, f"Expected 'docs' patterns in filters, got {filters_yaml}"
+
+    def matches_docs(path: str) -> bool:
+        return any(fnmatch(path, pattern) for pattern in docs_patterns)
+
+    assert matches_docs("docs/index.md")
+    assert matches_docs("mkdocs.yml")
+    assert matches_docs("requirements-docs.txt")
+    assert matches_docs(".github/workflows/ci.yml")
+    assert matches_docs(".github/workflows/pages.yml")
+    assert not matches_docs("src-tauri/src/main.rs")
+    assert not matches_docs("coperceive/griffin/commands.py")
+
+    assert "docs" in jobs, "Workflow must include a 'docs' job"
+    docs_job = cast(dict[str, Any], jobs["docs"])
+    assert docs_job.get("needs") == "changes"
+    assert "needs.changes.outputs.docs == 'true'" in str(docs_job.get("if", ""))
+
+    docs_steps = cast(list[dict[str, Any]], docs_job["steps"])
+    run_cmds = "\n".join(str(s.get("run", "")) for s in docs_steps)
+    assert "requirements-docs.txt" in run_cmds
+    assert "mkdocs build --strict" in run_cmds
+    assert "|| true" not in run_cmds
+
+
+def test_pages_workflow_builds_docs_and_validates_dist() -> None:
+    """Verify pages.yml triggers on docs changes, builds strict docs, and validates paths."""
+    pages_path = _repo_root() / ".github" / "workflows" / "pages.yml"
+    assert pages_path.is_file(), f"Workflow file not found: {pages_path}"
+    with open(pages_path, encoding="utf-8") as f:
+        data = cast(dict[str, Any], yaml.safe_load(f))
+
+    on_raw = cast(dict[str, Any] | None, data.get("on") or data.get(True))  # type: ignore[reportCallIssue]
+    on_block = on_raw or {}
+    for event in ("push", "pull_request"):
+        paths = cast(list[str], cast(dict[str, Any], on_block[event])["paths"])
+        for expected in ("site/**", "docs/**", "mkdocs.yml", "requirements-docs.txt"):
+            assert expected in paths, f"Expected {expected!r} in pages.yml {event}.paths"
+
+    jobs = cast(dict[str, Any], data["jobs"])
+    deploy_job = cast(dict[str, Any], jobs["deploy"])
+    assert deploy_job.get("if") == (
+        "github.event_name == 'workflow_dispatch' || "
+        "(github.event_name == 'push' && github.ref == 'refs/heads/main')"
+    )
+
+    build_steps = cast(list[dict[str, Any]], cast(dict[str, Any], jobs["build"])["steps"])
+    run_cmds = "\n".join(str(s.get("run", "")) for s in build_steps)
+    assert "npm run build" in run_cmds
+    assert 'pip install -c "$RUNNER_TEMP/constraints.txt" -r requirements-docs.txt' in run_cmds
+    assert "mkdocs build --strict -d site/dist/docs" in run_cmds
+    assert run_cmds.index("npm run build") < run_cmds.index(
+        "mkdocs build --strict -d site/dist/docs"
+    )
+    assert "docs/index.html" in run_cmds
+    assert "docs/search/search_index.json" in run_cmds
+
+
+def test_all_workflow_pip_installs_are_constrained_by_uv_lock() -> None:
+    """Every pip install in .github/workflows/*.yml must use uv.lock constraints."""
+    workflows_dir = _repo_root() / ".github" / "workflows"
+    workflow_files = sorted(workflows_dir.glob("*.yml"))
+    assert workflow_files, f"No workflow files found under {workflows_dir}"
+
+    uv_install_re = re.compile(r"^(?:\.venv/bin/|python3?\s+-m\s+)?pip\d*\s+install\s+uv$")
+    torch_cpu_re = re.compile(
+        r"^(?:\.venv/bin/|python3?\s+-m\s+)?pip\d*\s+install\s+torch"
+        r"\s+--index-url\s+https://download\.pytorch\.org/whl/cpu$"
+    )
+    pip_install_re = re.compile(r"\b(?:pip\d*|python3?\s+-m\s+pip)\s+install\b")
+    constraint_flag = '-c "$RUNNER_TEMP/constraints.txt"'
+
+    checked_workflows: set[str] = set()
+    for wf_path in workflow_files:
+        with open(wf_path, encoding="utf-8") as f:
+            data = cast(dict[str, Any] | None, yaml.safe_load(f)) or {}
+        jobs = cast(dict[str, Any], data.get("jobs", {}))
+        for job_name, job_raw in jobs.items():
+            job = cast(dict[str, Any], job_raw)
+            defaults_run = cast(
+                dict[str, Any], cast(dict[str, Any], job.get("defaults", {})).get("run", {})
+            )
+            default_shell = str(defaults_run.get("shell", ""))
+            is_windows = "windows" in str(job.get("runs-on", "")).lower()
+            exported_constraints = False
+
+            for step in cast(list[dict[str, Any]], job.get("steps", [])):
+                run_text = str(step.get("run", ""))
+                if not run_text:
+                    continue
+                if "uv export --frozen" in run_text and '-o "$RUNNER_TEMP/constraints.txt"' in (
+                    run_text
+                ):
+                    exported_constraints = True
+                if is_windows and "$RUNNER_TEMP/constraints.txt" in run_text:
+                    step_shell = str(step.get("shell") or default_shell)
+                    assert step_shell == "bash", (
+                        f"{wf_path.name}:{job_name} uses $RUNNER_TEMP/constraints.txt "
+                        f"on Windows without shell: bash (got {step_shell!r})"
+                    )
+
+                logical_lines = re.sub(r"\\\n\s*", " ", run_text).splitlines()
+                for line in logical_lines:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#"):
+                        continue
+                    if not pip_install_re.search(stripped):
+                        continue
+                    if uv_install_re.fullmatch(stripped) or torch_cpu_re.fullmatch(stripped):
+                        continue
+                    assert constraint_flag in stripped, (
+                        f"{wf_path.name}:{job_name} has unconstrained pip install: {stripped}"
+                    )
+                    assert exported_constraints, (
+                        f"{wf_path.name}:{job_name} installs with {constraint_flag} "
+                        "before exporting constraints.txt from uv.lock"
+                    )
+                    checked_workflows.add(wf_path.name)
+
+    assert {"ci.yml", "release.yml", "pages.yml"}.issubset(checked_workflows)

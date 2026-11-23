@@ -17,6 +17,7 @@ import type { ServerEntry } from "./hpc";
 import {
   historyCanRerun,
   historyStateLabel,
+  evalProtocolLabel,
   reproPreviewLines,
   slurmSeconds,
   type JobSubmitOutcome,
@@ -26,7 +27,7 @@ import {
 } from "./runPlan";
 import { errorText } from "./errors";
 import BundlePanel from "./BundlePanel";
-import { openBundle, pickBundleFile } from "./local";
+import { openBundleViewer, pickBundleFile } from "./local";
 import {
   Facts,
   GridTable,
@@ -234,8 +235,8 @@ export default function RunHistory() {
     try {
       const file = await pickBundleFile();
       if (!file) return;
-      const opened = await openBundle(file);
-      setOpenedBundle(`Bundle checked: ${opened.manifest.title || opened.manifest.run_id}. Opening in the viewer is coming in a later version.`);
+      const opened = await openBundleViewer(file);
+      setOpenedBundle(`Opened read-only: ${opened.manifest.title || opened.manifest.run_id}.`);
     } catch (e) {
       setBundleError(errorText(e));
     }
@@ -332,6 +333,17 @@ export default function RunHistory() {
         </span>
       ),
     },
+    {
+      key: "protocol",
+      header: "AP protocol",
+      min: 104,
+      max: 140,
+      render: (entry) => (
+        <span style={{ fontSize: "12px" }}>
+          {entry.eval_protocol === "legacy" ? "Legacy (v0.1.1)" : "Default"}
+        </span>
+      ),
+    },
     { key: "state", header: "State", min: 104, max: 130, render: (entry) => <StateLabel entry={entry} /> },
     { key: "time", header: "Time used / limit", min: 176, max: 260, render: (entry) => <TimeUsed entry={entry} /> },
     {
@@ -356,6 +368,7 @@ export default function RunHistory() {
           items={[
             ["Time used", selected.elapsed ?? "—"],
             ["Limit", selected.time_limit ?? "—"],
+            ["AP protocol", evalProtocolLabel(selected.eval_protocol)],
             selected.partition ? ["Partition", selected.partition] : null,
             ["Started", selected.started ?? "—"],
             selected.ended ? ["Ended", selected.ended] : null,
@@ -512,7 +525,7 @@ export default function RunHistory() {
           </select>
         ) : null}
         <button type="button" className="c-secondary" onClick={() => void openBundleFile()}>
-          Check bundle…
+          Open bundle…
         </button>
         {profiles.length === 0 ? null : <div role="group" aria-label="Filter runs by state" className="c-chips">
           {FILTERS.map((item) => {

@@ -1,210 +1,103 @@
 # Griffin
 
-Phase 2 reads the public Griffin release and writes schema 1 scenes. Recordings are not committed. The measurements below that name a byte count, a digest, or a residual were taken on this machine on 2026-10-15 unless the sentence points at an earlier page.
+Griffin is a simulated aerial-ground dataset: the catalog describes it as cooperative vehicle and drone perception in CARLA and AirSim, with agents "vehicle + drone". Coperceive can download a preset, convert a release to schema 1 scenes, view them, and score predictions.
 
-Source repository: [wang-jh18-SVM/Griffin](https://github.com/wang-jh18-SVM/Griffin). Hugging Face dataset: `wjh-svm/Griffin`, files under `datasets/`. The toolkit `LICENSE.txt` is MIT, `Copyright (c) [2025] [Jiahao Wang]`. The dataset card YAML says `license: mit`. That is not permission to commit the recordings. See `THIRD_PARTY_NOTICES.md`.
+## Licence, citation and download
 
-## Commands
+**Licence.** Data licence: MIT, as declared in the [authors' dataset card](https://huggingface.co/datasets/wjh-svm/Griffin/blob/main/README.md). Code is separately MIT under [LICENSE.txt](https://github.com/wang-jh18-SVM/Griffin/blob/main/LICENSE.txt).
 
-```bash
-coperceive download griffin --subset 25m --preset dev --dest /path/outside/the/repo --accept-griffin-terms
-coperceive download griffin --subset 25m --components metadata,lidar --dest /path/outside/the/repo --dry-run
-coperceive convert griffin --subset 25m --raw-root /path/griffin-release --out /path/scenes
-```
+**Citation.** Use the canonical source and single BibTeX block in [Citation](#citation) below.
 
-`--subset` is `25m`, `40m`, `55m`, or `random`. Those names map to `griffin_50scenes_25m`, `griffin_50scenes_40m`, `griffin_50scenes_55m`, and `griffin_100scenes_random`.
+**Download.** [Hugging Face](https://huggingface.co/datasets/wjh-svm/Griffin) or the Baidu link in the [authors' preparation guide](https://github.com/wang-jh18-SVM/Griffin/blob/main/docs/Dataset_Preparation.md).
 
-`--components` is a comma-separated list. `metadata` means `drone_metadata` and `vehicle_metadata`. `lidar` means `vehicle_lidar`. Any other token is an archive basename taken from the Hub tree (`drone_camera_front`, and so on). `--preset dev` selects `drone_metadata`, `vehicle_metadata`, and `vehicle_lidar`. Pass one of `--preset` or `--components`.
+The current arXiv record in Citation is canonical here; the README citation is older. Upstream asset terms have not been checked.
 
-`--dry-run` asks the Hub tree for each selected file's size and prints those integers. It does not download, extract, or write the acknowledgement.
+## Overview
 
-## Where the files go
-
-```
-<dest>/griffin_50scenes_25m/
-  md5.txt
-  DOWNLOAD.txt
-  archives/
-  reassembled/          # only a split archive
-  griffin-release/
-    vehicle-side/
-    drone-side/
-```
-
-`coperceive convert` reads `--raw-root` as that `griffin-release` directory. One output directory is one scene and holds both agents. The layout of a scene is `docs/spec/format.md`.
-
-A leading `griffin-release/` segment inside a zip is stripped, as is any wrapper directory in front of `vehicle-side` or `drone-side`. On the 25 m dev tier the members are `griffin_50scenes_25m/griffin-release/<side>/...`, and that prefix is removed. The raw member names from the zip central directory are appended to `zip-members.txt` before the extract.
-
-## MD5
-
-`md5.txt` has a line for itself. On the 25 m file measured earlier, that line lists `904ee8d88c0d1db9878337298697306a` and the file's digest is `1cbc937bd675d2bee7c42919415e3782` (`docs/design/griffin-verification.md`). The downloader ignores the self-line and checks every payload it fetched. `md5sum -c md5.txt` still fails on the self-line, and on any archive that was not downloaded.
-
-A local payload whose digest already matches is not fetched again. A local file that does not match is deleted and fetched again. `md5.txt` itself cannot be resumed by its self-line. It is kept when it already names every selected payload.
-
-## Split archives
-
-On `griffin_100scenes_random`, the camera RGB archives are split. The tree listing on 2026-10-15 has `*.z01` of 26,843,545,600 bytes plus a closing `*.zip` for each of `drone_camera_{front,back,left,right,bottom}` and `vehicle_camera_{front,back,left,right}`. Metadata, LiDAR, and instance-segmentation archives in that subset are a single zip. The 25 m, 40 m, and 55 m trees have no `.z01`.
-
-Parts are concatenated in order `.z01`, `.z02`, …, then `.zip`, which is the same byte stream `zip -s 0` writes. The result is opened with `zipfile` and `testzip()` before extract. The dev preset does not select these parts. The reassembly path is covered by a synthetic archive in the unit tests. The 25 GiB parts were not downloaded here.
-
-## Disk
-
-Before the first byte is written, free space must cover the download plus a second copy of each compressed archive. A split archive also needs a third copy for the reassembled zip. That 2× figure is a lower bound. ASCII PLY expands by more than that, so each zip is opened and the sum of `ZipInfo.file_size` is required again before that zip is extracted.
-
-## Licence acknowledgement
-
-The download reads the dataset card and `LICENSE.txt` from the toolkit repository. It refuses to write dataset bytes unless the card's YAML `license` is `mit` and the toolkit file contains `MIT License` and `Copyright (c) [2025] [Jiahao Wang]`.
-
-The acknowledgement is one file per machine:
-
-`$XDG_DATA_HOME/coperceive/griffin-licence-accepted`
-
-or `~/.local/share/coperceive/griffin-licence-accepted` when `XDG_DATA_HOME` is unset. `--accept-griffin-terms` writes it. Later runs reuse it. `--dry-run` does not write it. The file stores the licence lines and a UTC timestamp. It does not store a token.
-
-## Token
-
-`HF_TOKEN` is read from the environment if it is already set. Otherwise the keyring service `huggingface`, username `HF_TOKEN`, is tried. The value is passed as the `token` argument to `huggingface_hub`. If neither source has one, the argument is `False`, so a cached Hub login is not used. The token is not put on the command line, written into the repo, or copied into `DOWNLOAD.txt` or the acknowledgement. A missing token is fine while the dataset accepts anonymous reads.
-
-## Conversion
-
-`coperceive convert griffin` runs the built-in manifest adapter (`coperceive/adapters/builtin/griffin.yaml`, [ADR 0009](../adr/0009-dataset-adapters.md)) through the shared ingest driver. The report below is unchanged. The pre-adapter converter is frozen in `tests/griffin_reference.py`; `tests/test_adapters_griffin.py` checks the two write the same scenes, and that check passed on the real 25 m release on 2026-10-17.
-
-Scenes are converted in parallel, at most 8 processes. A scene directory with a `COMPLETE.json` whose frame list matches `scene_infos.json` is left untouched. A `.partial/<scene_id>/` directory that already has that marker is renamed into place. Any other partial or incomplete directory is removed and built again. One scene's exception does not delete scenes that already finished. The process exits non-zero, and the next run retries the unfinished scenes.
-
-`COMPLETE.json` is not part of schema 1. `read_scene` ignores it.
-
-Both agents get the same platform strings: `subset` (the short name, such as `25m`), `map_name`, and `cruise_altitude_m`.
-
-When `vehicle-side/lidar/lidar_top/` exists, every frame listed for the scene must have a cloud. A metadata-only tree, with no LiDAR directory, writes zero clouds. A missing pose or label for a listed frame fails that scene.
-
-## Conventions
-
-Boxes are stored in the agent body frame (`frame: body`). Poses are `world ← body`. The world frame name on the scene is `ENU`.
-
-### Frame ids and time
-
-`scene_infos.json` lists frames. The pose, label, and LiDAR file stem is that integer, zero-padded to six digits. The pose JSON field `timestamp` is the same integer. Microseconds are `frame_id * 100000`. That scale is the 10 Hz lidar rate used in `docs/design/griffin-verification.md`. The JSON has no wall-clock field. The assumption is copied into the scene clock note. This phase did not re-open the paper PDF.
-
-`Dataset_Preparation.md` says each scene is about 15 seconds and about 150 frames. The 25 m metadata measured earlier has 47 scenes (the folder name says 50): 45 scenes of 149 frames, one of 148, and one of 147, summing to 7,000. The converter uses the list in `scene_infos.json`. It does not assume 150.
-
-### Boxes
-
-A 12-field label line is `type x y z l w h roll pitch yaw id visibility`. Translations and `l, w, h` are metres. Roll, pitch, and yaw are degrees. The toolkit's `ObjectData` docstring says the box is in ego coordinates, which this store calls the body frame.
-
-An 11-field line is the same without visibility. The toolkit fills visibility with `1.0`. This converter stores null, so a missing measurement is not invented.
-
-A 9-field line is `type x y z l w h yaw id`. The toolkit's branch for that width indexes the raw string (`line[0]`, `line[1]`, …) rather than the split tokens, and it fills roll, pitch, and visibility. This converter splits the tokens, uses roll 0 and pitch 0, and stores visibility as null. Those zeros are the toolkit's fill-in, not a measured angle.
-
-The field count is taken per line. The toolkit takes it from the first line of the file and then applies that width to every line. The error string in `load_label` says it expected 9 or 12, while the branch above that also accepts 11.
-
-### Ego, world, and axes
-
-The toolkit's `PoseData` docstring says the ego pose is in an ENU frame: `x` East, `y` North, `z` height from the ground, metres. Roll positive means left side up. Pitch positive means nose down. Yaw 0 means East, and positive yaw is counterclockwise.
-
-`trans_ego_vs_ENU` builds that pose with `Rotation.from_euler('xyz', [roll, pitch, yaw], degrees=True)`. That scipy sequence is `R = Rz(yaw) @ Ry(pitch) @ Rx(roll)`, which is `SE3.from_rpy_deg`. The same call is used for an object box in ego coordinates.
-
-The extrinsic in a calibration JSON is the sensor-to-ego matrix (`trans_sensor_vs_ego` returns it as `T_sensor_to_ego`). The scene stores that as `body ← sensor`. A matrix under `intrinsic` is the camera pinhole; image width and height are `2 * cx` and `2 * cy` rounded, which is the same stand-in the Phase 0 reader used. Image bytes are not in the dev tier, so pixel size was not measured from a PNG.
-
-Which horizontal axis is east is the toolkit comment above. It was not checked against a map. The earlier Town03-000 sample showed vehicle and drone boxes that share a track id landing on the same world point to 5.7e-14 m, which says the two agents share one frame. It does not say which axis is east. The shared-track residual for this conversion is in the run section below.
-
-### LiDAR
-
-`Dataset_Preparation.md` says lidar is `.bin` and that the drone has no lidar directory. The 25 m vehicle archive measured earlier contains ASCII PLY (`x`, `y`, `z`, `I` as float32) and no `.bin`. The converter reads that PLY. Intensity is the fourth float, stored little-endian in `points.bin` as schema 1 requires. There is no drone lidar archive in the 25 m tree.
-
-## This run
-
-Commands, from `/workspace`, on 2026-10-15. `HF_TOKEN` was unset. The Hub printed that the requests were unauthenticated. The download still finished.
-
-```bash
-.venv/bin/coperceive download griffin --subset 25m --preset dev \
-  --dest /tmp/griffin-phase2 --accept-griffin-terms
-.venv/bin/coperceive convert griffin --subset 25m \
-  --raw-root /tmp/griffin-phase2/griffin_50scenes_25m/griffin-release \
-  --out /tmp/griffin-scenes
-```
-
-Download elapsed 13 s (`SECONDS` around that command). Convert elapsed 5 s the same way, 4 workers (`min(8, nproc)`; this machine has 4 CPUs). A second convert of the same output skipped all 47 scenes in 0.029 s (`time.perf_counter` around `convert_griffin`).
-
-`md5sum` of the files just downloaded:
-
-| File | Digest |
+| | |
 | --- | --- |
-| md5.txt | `1cbc937bd675d2bee7c42919415e3782` |
-| drone_metadata.zip | `48e23147f1acf0761fb42340f677ad8c` |
-| vehicle_metadata.zip | `e119733a51a0ee8125017f986d26833d` |
-| vehicle_lidar.zip | `f044c8f1671bdfe4da21fc405abe8da7` |
+| Paper | [arXiv:2503.06983](https://arxiv.org/abs/2503.06983) (catalog `paper_url`) |
+| Official code | [wang-jh18-SVM/Griffin](https://github.com/wang-jh18-SVM/Griffin), the repository of catalog `licence_url` (`LICENSE.txt`) |
+| Splits | No train/validate/test list. Subsets `25m`, `40m`, `55m`, `random` (`griffin.yaml` `params.subset.allowed`). Catalog presets: `dev`, `one-scene`, `full` |
+| Adapter | `griffin` |
 
-The self-line in `md5.txt` still lists `904ee8d88c0d1db9878337298697306a`. Payload lines match the three zip digests. Tree sizes were 898, 14,384,997, 10,876,283, and 214,487,013 bytes. The pre-download free-space requirement was 479,497,484 bytes, which is those four sizes plus the three zip sizes again.
+The catalog status is `ready` and `requires_terms` is true. The download command refuses to write dataset bytes until the MIT acknowledgement is recorded.
 
-Extracted member counts from the central directories: drone metadata 14,012 entries (14,009 files), vehicle metadata 14,009 entries (14,006 files), vehicle LiDAR 7,002 entries (7,000 `.ply` files, 0 `.bin`). One sampled cloud, `021960.ply`, is ASCII with `property float32` x, y, z, I and 2,699 vertices. `du -sb` of `/tmp/griffin-phase2` was 880,896,098 bytes, zips included.
+## What Coperceive reads
 
-`scene_infos.json` on the two sides are equal. 47 scenes. Frame counts: 45 × 149, `Town03-010` × 148 (frames 014046–014193), `Town10HD-009` × 147 (frames 026768–026914). Sum 7,000. `Town03-000` is frames 11185–11333. Map counts: Town03 13, Town06 12, Town07 10, Town10HD 12. `cruise_altitude` min 23.084114109076907 m, median 25.236068336378246 m, max 26.919408368893848 m.
+| | |
+| --- | --- |
+| Agents | `vehicle` (type `vehicle`, root `vehicle-side`) and `drone` (type `uav`, root `drone-side`) |
+| LiDAR | Vehicle only: `lidar/lidar_top/{frame:06d}.ply` with `x y z` and intensity property `I`. If that directory is absent, clouds are skipped. Drone LiDAR: not in the release (`griffin.yaml` `streams.lidar.agents` and [GRF-9](../geometry/conventions.md#grf-9)) |
+| Cameras | `{agent}/camera/{sensor}/{frame:06d}.png`. A missing file is allowed. The dev tier has no image bytes (`image_size` reason in the manifest) |
+| Boxes and classes | Label text in the body frame. 12-, 11-, and 9-field lines. The category token is kept as written |
+| Maps | `info.map_name` is copied onto the platform record. The map file itself is not in this adapter |
+| Timestamps | Pose `timestamp` is the frame id. `time_us = frame_id × 100000`. The scale note says the files have no wall clock |
 
-Label lines: 177,697, every one 12 fields. No 11-field or 9-field line in this subset.
+## Expected folder layout
 
-The converter wrote 47 directories, 7,000 clouds, 19,922,961 points. `du -sb /tmp/griffin-scenes` was 333,097,959 bytes. `read_scene` on every directory: both agents, schema 1, world frame `ENU`. Drone platform on `Town03-000` is `subset=25m`, `map_name=Carla/Maps/Town03`, `cruise_altitude_m=25.7331649`. That scene has 149 poses, 149 clouds, and 40 shared objects.
-
-Shared-track world residual (`track_center_spread_m`, `max_gap_us=0`) over 813 tracks that occur on both agents at one timestamp: min 1.5694642960426368e-14 m, median 8.533456124013766e-14 m, max 4.576455661277233e-13 m. The earlier 15-frame Town03-000 sample was 5.7e-14 m. This is the full 25 m conversion. It is still roundoff. Which horizontal axis is east is the OpenDRIVE alignment in [ADR 0008](../adr/0008-hd-map.md), not this residual.
-
-Per-frame pose `z`, 7,000 frames. Drone: min 16.798789978027344 m, median 26.5300931930542 m, max 34.67467498779297 m. Drone minus vehicle: min 16.811032561585307 m, median 26.410048661287874 m, max 29.66659187246114 m. The scene `cruise_altitude` stays near 25 m. The per-frame separation does not.
-
-Drone calibration includes `lidar_bottom.json`, `lidar_front.json`, and `lidar_virtual.json`. They have an extrinsic and no intrinsic, so they are stored as lidar sensors. No drone point file exists, and no cloud is attached to them. Vehicle sensors are the four cameras plus `lidar_top`.
-
-The acknowledgement file is `/home/ubuntu/.local/share/coperceive/griffin-licence-accepted`. It records the MIT lines and `acknowledged_utc=2026-10-15T10:33:46Z`. It has no token.
-
-Not re-measured here: the 40 m and 55 m trees, the random-subset `.z01` bytes (the names and sizes were listed; the parts were not fetched), and image pixels. The east axis is measured in [ADR 0008](../adr/0008-hd-map.md). The slow test `tests/test_griffin_phase2.py::test_real_griffin_release_loads` passed with `COPERCEIVE_GRIFFIN_RAW` pointed at this release. Without that variable the same test is skipped.
-
-## Maps
-
-```bash
-coperceive maps fetch --dest /path/outside/the/repo
-coperceive maps ingest --xodr /path/Town03.xodr --map-name Carla/Maps/Town03 --out /path/maps
-coperceive maps align --maps /path/maps --scenes /path/scenes
-```
-
-`fetch` downloads CARLA 0.9.15 unless `--package` points at a local tar.gz, and extracts `Town03.xodr`, `Town06.xodr`, `Town07.xodr`, and `Town10HD.xodr`. `ingest` writes one sidecar directory per town. `align` stores `world_from_opendrive` from the vehicle poses. The `.xodr` bytes are not committed. The layout is `docs/spec/format.md`.
-
-## Validation
-
-`coperceive validate /tmp/griffin-scenes` was run again on this conversion on 2026-10-15 after the warning and gate changes. Elapsed 5.737 s. The aggregate is in `docs/validate.md`. The per-frame drone-minus-vehicle height (min 16.811032561585307 m, median 26.410151720046997 m, max 29.66659187246114 m) is wider than 25±2 m. Every scene's `cruise_altitude_m` is inside that band. The toolkit band is the cruise field. The low tail is a descent on Town06-001, 38 frames. Missing frames on this tier: 0. Hard failures: 0. Instantaneous acceleration warnings: 22. Smoothed acceleration warnings over 0.5 s: 0 (max 15.712867500264949 m/s²). Shared-track centre error stays at roundoff (median 2.929642751054232e-14 m over 61,302 pairs). Computed pairs under the size-scaled gate: 11.
-
-## Staging the val scenes for the viewer
-
-`scripts/griffin/stage_viewer.py` makes the 10 Griffin-25m `val` scenes viewable with lidar points, camera images and the CARLA town maps on a compute node, without copying the dataset. It writes only under `--scratch`, or under the server profile's scratch template (`--scratch-template` / `COPERCEIVE_SLURM_SCRATCH_TEMPLATE`, for example `/scratch/$USER/$SLURM_JOB_ID`), and refuses a scratch under `/home`.
-
-| Staged | How | Size for the 10 val scenes |
-| --- | --- | --- |
-| `raw/<side>/scene_infos.json` | written, val scenes only, dataset order, both sides (the rules of `scene_infos_val.py`) | 2 files |
-| `raw/<side>/{calib,pose,label}` | `rsync -a --files-from` from the release, val frames only | 13 + 2 × 2 × 1,490 files, a few MB |
-| `raw/vehicle-side/lidar/lidar_top/*.ply` | same rsync, val frames only; the converter must read them to write `points.bin` | 1,490 files, about 150 MB; `--no-lidar` skips them |
-| `scenes/<scene>/` | `coperceive convert griffin --subset 25m`, in process | 10 scenes |
-| `scenes/<scene>/<side>/camera` | one symlink per side to `<release>/<side>/camera` (absolute target) | 20 links; no PNG is copied (about 17 GB avoided) |
-| `maps/<Town>/` | `coperceive maps ingest` per town named by the staged scenes, then `coperceive maps align` | 4 towns |
-
-The adapter resolves symlinks and refuses files outside its raw root, which is why the metadata and the lidar are real copies. Images are recorded with `require_file: false` as `<side>/camera/<sensor>/<frame>.png` relative to the scene directory, so the camera links make them resolve into the release, and `coperceive serve --media-root <release>` allows that. The OpenDRIVE files are checked against the SHA-256 pins of [ADR 0008](../adr/0008-hd-map.md) before anything is staged; `--allow-unpinned-xodr` exists for the test fixture only.
-
-On the cluster, in an `srun` session (2 CPUs and 8 GB are enough; nothing runs on the login node). The `.venv`'s editable install points at `main`, so `PYTHONPATH` names the worktree, and it stays exported for the `serve` line that the script prints at the end:
-
-```bash
-srun --partition=main --cpus-per-task=2 --mem=8G --time=2:00:00 --pty bash
-hostname                                  # the node for the tunnel (HANDOVER.md, "Viewing from a laptop")
-module load python/3.13.14
-export PYTHONPATH=$HOME/coperceive-adr0010
-$HOME/coperceive-adr0010/.venv/bin/python $HOME/coperceive-adr0010/scripts/griffin/stage_viewer.py \
-    --raw /datasets/eemcs/ps/cv/huggingface/griffin/datasets/griffin_50scenes_25m/griffin_50scenes_25m/griffin-release \
-    --split $HOME/src/griffin/data/split_datas/griffin_50scenes_25m.json \
-    --xodr-dir $HOME/maps-src/carla-0.9.15 \
-    --predictions $HOME/results/627093/predictions \
-    --static $HOME/coperceive-web-dist \
-    --workers 2
-```
-
-`--static` names a web build made out of tree (`web/node_modules/.bin/vite build --outDir $HOME/coperceive-web-dist --emptyOutDir`); without it the packaged bundle is served, which may be older than `web/src` ([viewer](../viewer.md)). On 2026-10-17 a one-scene run of this script on the login node (Town06-007, `--no-lidar`, `--workers 1`) took 6.7 s: 609 files, both camera links resolving all 1,341 recorded images, Town06 ingested (847 polylines) and aligned (identity, median residual 0.0011 m over 149 poses); the full ten-scene run with lidar belongs in the allocation.
-
-Each of the five steps is timed on stdout. The summary lists the scenes with their cloud and point counts from `point_index.parquet`, the camera links with how many recorded image paths resolve through them (1,490 frames × 9 cameras = 13,410), each map with its alignment `measured` flag, chosen axis candidate and median residual, and the exact `serve` line:
+From `coperceive/adapters/builtin/griffin.yaml`:
 
 ```text
-<venv>/bin/coperceive serve --host 127.0.0.1 --port 8731 --root <scratch>/scenes --maps <scratch>/maps --predictions <predictions> --media-root <release> --static <web build>
+/data/griffin/griffin-release/
+  vehicle-side/
+    scene_infos.json
+    pose/{frame:06d}.json
+    calib/{sensor}.json
+    label/{frame:06d}.txt
+    camera/{sensor}/{frame:06d}.png
+    lidar/lidar_top/{frame:06d}.ply
+  drone-side/
+    scene_infos.json
+    pose/{frame:06d}.json
+    calib/{sensor}.json
+    label/{frame:06d}.txt
+    camera/{sensor}/{frame:06d}.png
 ```
 
-Re-running in the same scratch is incremental: rsync copies only what changed, converted scenes with a matching `COMPLETE.json` are skipped, existing links are kept, maps are rewritten and re-aligned. The scratch disappears with the allocation; `rm -rf` does not follow the camera links, so the release is never touched. The test is `tests/test_stage_viewer.py` on the synthetic release of `tests/griffin_release.py`.
+`drone-side/scene_infos.json` must equal the vehicle file (`scenes.index.must_equal`).
+
+## Open it in Coperceive
+
+**Get Data** lists Griffin because the catalog status is `ready`. The download and convert commands are:
+
+```bash
+coperceive download griffin --subset 25m --preset dev --dest /data/griffin --accept-griffin-terms
+coperceive convert griffin --subset 25m --raw-root /data/griffin/griffin-release --out /data/griffin-scenes
+coperceive validate /data/griffin-scenes
+coperceive eval run RUN_ID --root /data/griffin-scenes
+```
+
+`--subset` is `25m`, `40m`, `55m`, or `random`. `--preset` for download is `dev` (`coperceive download griffin --help`). `--raw-root` is the extracted `griffin-release` directory (`coperceive convert griffin --help`).
+
+The same tree can be ingested with `coperceive adapters ingest griffin --raw-root /data/griffin/griffin-release --param subset=25m --out /data/griffin-scenes`.
+
+## Known issues and conventions
+
+- The adapter requires a pose key `timestamp` that no source documents. See [GRF-3](../geometry/conventions.md#grf-3).
+- Image size is `2 × cx` by `2 × cy`, not a measured PNG, unless the principal point is the centre, which no source states. See [GRF-6](../geometry/conventions.md#grf-6).
+- Whether stored points are already in the ego frame: **unverified**. See [GRF-7](../geometry/conventions.md#grf-7).
+- The preparation note says `.bin`; the adapter reads `.ply` and requires a property `I`. Record layout: **unverified**. See [GRF-8](../geometry/conventions.md#grf-8).
+- Category letter case: **unverified**. See [GRF-13](../geometry/conventions.md#grf-13).
+- `info.map_name`, `info.cruise_altitude`, and an identical drone-side `scene_infos.json` are required by the adapter and are not in the sources the conventions page read. See [GRF-14](../geometry/conventions.md#grf-14).
+
+## Citation
+
+Source: <https://arxiv.org/bibtex/2503.06983>
+
+```bibtex
+@misc{wang2025griffinaerialgroundcooperativedetection,
+      title={Griffin: Aerial-Ground Cooperative Detection and Tracking Dataset and Benchmark},
+      author={Jiahao Wang and Xiangyu Cao and Jiaru Zhong and Yuner Zhang and Zeyu Han and Haibao Yu and Chuang Zhang and Lei He and Shaobing Xu and Jianqiang Wang},
+      year={2025},
+      eprint={2503.06983},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      doi={https://doi.org/10.1609/aaai.v40i12.37951},
+      url={https://arxiv.org/abs/2503.06983},
+}
+```
+
+## More detail
+
+- [Griffin — details](griffin-details.md)

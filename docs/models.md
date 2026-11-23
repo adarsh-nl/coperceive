@@ -14,7 +14,7 @@ coperceive model cache prune --out /path/predictions --plugin fake
 ## Commands
 
 - `coperceive model list` enumerates installed plugins registered under the `coperceive.models` entry-point group (`name  source  location`).
-- `coperceive model inspect <plugin> [--manifest FILE]` validates the manifest, prints it as canonical YAML, and reports the resolved interpreter path (or why it cannot be resolved).
+- `coperceive model inspect <plugin> [--manifest FILE] [--plugin-python PATH]` validates the manifest, prints it as canonical YAML, and reports the resolved interpreter path (or why it cannot be resolved) with where it came from: `interpreter_source: manifest environment.<kind>` or `interpreter_source: --plugin-python`.
 - `coperceive model check <plugin> [--manifest FILE] [--model NAME] [--keep] [--work DIR] [--raw-root DIR] [--option k=v ...]` builds a synthetic cooperative scene (vehicle and UAV, four pose times, camera PNGs and lidar sweeps as requested by the model's modalities) and verifies the ten conformance rules of [the spec](spec/model-plugin.md#conformance-coperceive-model-check):
   1. `hello` arrives first with `protocol: 1`, matching plugin name and version, every manifest model, and a 32-hex `environment.checkpoint_md5`.
   2. `configure` is answered with `configured` (or `error` code `unsupported`, which marks the model `skipped`).
@@ -27,6 +27,7 @@ coperceive model cache prune --out /path/predictions --plugin fake
   9. `cancel` on an outstanding frame is answered with `cancelled` when `capabilities.cancel` is true.
   10. Nothing but protocol JSON lines appears on `stdout`.
 - `coperceive model run <plugin> --scenes ROOT --out PREDICTIONS --run-id ID` runs a model in batch mode over every scene (or `--scene-ids a,b`), validates every returned box, writes `<out>/<run_id>/<scene_id>/boxes.parquet` and `<out>/<run_id>/run.json`, and populates the per-scene cache. When a plugin defines multiple models, `--model NAME` selects one (or the model keyed `default` is chosen implicitly). Exit codes: `0` when all selected scenes complete, `1` on a user or configuration error, `3` on a protocol violation or early child exit (leaving a `partial` run), `4` on a frame or run timeout (`partial`).
+  - `--evaluate` then scores the run exactly as `coperceive eval run <run-id> --root ROOT --predictions PREDICTIONS` would, on the run's scenes (its `--scene-ids` become `--scenes`, as the job stages only those) (complete or partial; `metrics.json` per scene and `evaluation.json` for the run). The protocol is the run's own (`--protocol`, recorded in `run.json`) unless `--eval-config PATH` names one; a config that disagrees with `--protocol`, or one that does not load, is refused before the model runs or a job is written. Exit `5` means the run completed but scoring failed; a model failure keeps its own code ([spec §Exit codes](spec/model-plugin.md#exit-codes)).
 - `coperceive model cache prune --out PREDICTIONS [--run-id ID] [--plugin NAME] [--model NAME]` removes cached scene directories and prints `pruned <count>`.
 
 ## Worked example: the fake plugin
@@ -93,6 +94,22 @@ Every manifest has `spec_version: 1`, `name`, `version`, `licence` (`notice` req
   - `modules: [...]` lists HPC environment modules for the Slurm emitter (`module load ...`).
   - `secrets: [VAR_NAME, ...]` names environment variables to pass through from the parent process; values are never stored in manifests, `run.json`, cache entries, logs or sbatch files, and any secret value of 4 or more characters is redacted to `[redacted]` in `parent.log`, `plugin.log` and error strings.
   - `inherit_ld_library_path: true` forwards `LD_LIBRARY_PATH` when required by CUDA modules.
+
+#### Plugin interpreter (`--plugin-python`)
+
+The manifest's `environment` is the default. When your environment has another name or lives elsewhere (a conda env called something else, a venv, a module-provided Python), pass its interpreter instead of editing the manifest:
+
+```bash
+coperceive model run <plugin> --plugin-python /path/to/envs/<your-env>/bin/python ...
+```
+
+- `model run` (with or without `--slurm`), `model check` and `model inspect` take it.
+- It is one full path to an interpreter, for conda and venv alike (a conda env's is `<prefix>/bin/python`; `conda run -n <your-env> which python` prints it). Nothing is activated, as for the manifest's `conda:`.
+- It is checked before anything runs or is submitted: the path must be an absolute path to an executable file, or the command stops with `--plugin-python: give a full path`, `--plugin-python: no interpreter at <path>` or `... is not executable`.
+- `--slurm` writes it into the job's `model run` line exactly as given, so the compute node uses the same path; the job checks it again when it starts.
+- `run.json` records it as `provenance.plugin_python`. A run without it has no such key.
+- A dependency the run starts (`depends_on`) is the same plugin and uses the same interpreter.
+- **In the desktop app:** New evaluation has an optional **Plugin interpreter** field for a built-in model. It starts from the server's default (Settings → Model runs → Plugin interpreter for built-in models), and each run can change or clear it. The app refuses a path that does not start with `/` (`--plugin-python: give a full path`) or that contains a line break, before a plan is saved or a job is submitted. The plan records the path, and the job's `model run` line ends with `--plugin-python <path>`, shell-quoted exactly as the CLI's. Empty means the manifest's `environment`, and the line is unchanged.
 - **`inputs`** declares `modalities` (`camera`, `lidar`, `radar`), `agents` (agent types or `any`), `sensors` (glob patterns), `frames` (`single` or stateful `sequence`), and optional `raw` path templates (with `{scene}`, `{agent}`, `{agent_root}`, `{sensor}`, `{time_us}`, `{frame}` plus `raw_agent_roots` and `raw_clock`). Every path sent to the child is resolved through `confine` against `--scenes`, `--raw-root` or `--media-root`.
 - **`outputs`** sets `categories`, `score_note`, `sources`, `agent` (`request` or a fixed agent type such as `vehicle` for fused outputs), `artifacts`, `transient_artifacts`, and `deterministic`.
 - **`resources`** sets `gpu`, `cpus`, `memory_gb`, `seconds_per_sample`, `staging_seconds`, `conversion_seconds`, `frame_timeout_s`, `run_timeout_s`, `grace_s`, `slurm_constraint` and `max_inflight`.
@@ -152,6 +169,7 @@ Adding `--slurm` emits `<out>/.slurm/<run_id>.sbatch` along with the exact `rsyn
 
 - **Staging and scratch:** jobs use `SCRATCH="/local/$SLURM_JOB_ID"` with an `EXIT` trap, stage only the scene files (omitting `points.bin` for camera-only models) and the raw files expanded from `inputs.raw` across thedependency closure, and time the `rsync` wall clock (`--staging-seconds "$STAGING"`).
 - **Fault-tolerant copy home:** the script runs `coperceive model run` under `set +e`, captures `RC=$?`, copies `$SCRATCH/out/`, every dependency run `<run_id>-<dep>`, and `<work>/` logs and non-transient artefacts (`*.log`, `artifacts/***`) to `~/results/$SLURM_JOB_ID/` and `<out>/` before exiting with `$RC`. A partial or failed run never loses its completed scenes or logs to the scratch trap.
+- **Scoring in the job (`--evaluate`):** the model's run line is unchanged. After the run has been copied home, the job runs `coperceive eval run "$RUN_ID" --root "$SCRATCH/scenes" --predictions "$SCRATCH/out"` (with the run's `--protocol` and the absolute `--eval-config` path as `--config`) on the scenes it staged, then copies the run directory home again with `metrics.json` and `evaluation.json`. A scoring step stopped by `--time` or memory never costs the run. The job exits with the model's code, or `5` when the model completed and scoring failed, including when the run left no `run.json` to score (reported on stderr, never skipped silently). The `--time` estimate below does not include scoring.
 - **Wall-time estimation (`--time`):** computed as:
   $$\text{staging\_s} + \text{conversion\_s} + \text{per\_sample\_s} \times N_{\text{samples}}$$
   summed over the model's dependency closure, rounded up to the next 10 minutes, and doubled for safety margin. On the first run, the three parts come from the manifest's `resources` (`staging_seconds`, `conversion_seconds`, `seconds_per_sample`). Once a run under `--out` has recorded a timing split in `provenance.timings` (`staging_s` from the parent's `rsync`, `conversion_s` and `inference_s` from the child's `configured.timings`, and `per_sample_s = inference_s / frames_run`), subsequent emissions automatically use the newest run's measured values.
@@ -175,6 +193,8 @@ The Griffin plugin (`coperceive-griffin-model`) wraps the four released Griffin-
 
 Each model also accepts `--option det_json=<path>` and `--option nusc_root=<dir>` to index an existing `results_nusc_det.json` without a GPU, which is what `coperceive model check` and login-node verification use.
 
+Every Griffin model declares the required parameter `ckpt_root`: the root folder of the released 25m checkpoints (the folder that holds `griffin_50scenes_25m/`). It has **no default**, because the released checkpoints live wherever your cluster keeps them. Pass it as `--option ckpt_root=<dir>`; without it `model run`/`model check` stop with a message naming `ckpt_root` before writing a script or starting a run. The worker receives it as `--ckpt-root`.
+
 ## Reproducing the Griffin numbers
 
 The four Griffin-25m camera-only Agile models can be reproduced and evaluated on an HPC cluster with Slurm and NVIDIA A40 GPUs using the `coperceive model run --slurm` commands below. The val split contains 10 scenes (1,490 frames).
@@ -189,6 +209,7 @@ coperceive model run griffin --model vehicle-side \
   --scenes /path/to/staged-scenes \
   --raw-root /path/to/griffin-release \
   --media-root /path/to/griffin-release \
+  --option ckpt_root=/path/to/griffin-ckpts \
   --out /path/to/predictions \
   --run-id griffin25m-vehicle-plugin \
   --slurm --submit
@@ -198,6 +219,7 @@ coperceive model run griffin --model drone-side \
   --scenes /path/to/staged-scenes \
   --raw-root /path/to/griffin-release \
   --media-root /path/to/griffin-release \
+  --option ckpt_root=/path/to/griffin-ckpts \
   --out /path/to/predictions \
   --run-id griffin25m-drone-plugin \
   --slurm --submit
@@ -207,6 +229,7 @@ coperceive model run griffin --model instance-fusion \
   --scenes /path/to/staged-scenes \
   --raw-root /path/to/griffin-release \
   --media-root /path/to/griffin-release \
+  --option ckpt_root=/path/to/griffin-ckpts \
   --out /path/to/predictions \
   --run-id griffin25m-instance-plugin \
   --slurm --submit
@@ -216,6 +239,7 @@ coperceive model run griffin --model early-fusion \
   --scenes /path/to/staged-scenes \
   --raw-root /path/to/griffin-release \
   --media-root /path/to/griffin-release \
+  --option ckpt_root=/path/to/griffin-ckpts \
   --out /path/to/predictions \
   --run-id griffin25m-early-plugin \
   --slurm --submit

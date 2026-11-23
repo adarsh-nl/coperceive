@@ -417,6 +417,12 @@ pub struct AppPersistentState {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub camera_images_by_profile: HashMap<String, String>,
 
+    /// Settings → Model runs: the plugin interpreter (`--plugin-python`) New evaluation
+    /// starts with for a built-in model, per server profile id. Absent = the manifest's
+    /// `environment`. There is no app-wide value: an interpreter path is a cluster's.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub plugin_python_by_profile: HashMap<String, String>,
+
     /// Remote viewer sessions to reattach to after a restart, by what they
     /// serve (server, cache directory, media roots) → session id.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -555,6 +561,187 @@ pub fn dataset_grouping_from(value: &serde_json::Value) -> Option<String> {
     DATASET_GROUPINGS.contains(&text).then(|| text.to_string())
 }
 
+/// Scope controlling which [`AppPersistentState`] keys a JSON patch may mutate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatePatchScope {
+    /// Main desktop window and test controller: all supported persistent keys.
+    Full,
+    /// Viewer webview (`http://127.0.0.1:*`): bounded viewer UI preferences only.
+    ViewerOnly,
+}
+
+const VIEWER_ALLOWED_PATCH_KEYS: &[&str] = &[
+    "scene_id",
+    "sample_index",
+    "timestamp_us",
+    "timestamp_ns",
+    "viewpoint",
+    "loop",
+    "theme_override",
+    "theme",
+    "dataset_grouping",
+    "camera_strip",
+    "viewer_style",
+    "cinema_drift",
+    "agent_visibility",
+    "layer_toggles",
+    "selected_camera",
+    "split_view",
+    "panel_collapse",
+    "layout",
+];
+
+/// Bounded subset of [`AppPersistentState`] readable by the viewer webview.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerPreferences {
+    pub dataset_grouping: String,
+    pub camera_strip: String,
+    pub viewer_style: String,
+    pub cinema_drift: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme_override: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_loop: Option<bool>,
+    /// Streaming settings chosen in the main window's Settings; the viewer only reads them.
+    pub buffer_target_seconds: u64,
+    pub client_memory_limit_bytes: u64,
+    pub show_stream_stats: bool,
+}
+
+/// Projects only viewer UI preferences out of [`AppPersistentState`].
+pub fn viewer_preferences(persistent: &AppPersistentState) -> ViewerPreferences {
+    ViewerPreferences {
+        dataset_grouping: persistent.dataset_grouping.clone(),
+        camera_strip: persistent.camera_strip.clone(),
+        viewer_style: persistent.viewer_style.clone(),
+        cinema_drift: persistent.cinema_drift,
+        theme_override: persistent.theme_override.clone(),
+        last_loop: persistent.last_loop,
+        buffer_target_seconds: persistent.buffer_target_seconds,
+        client_memory_limit_bytes: persistent.client_memory_limit_bytes,
+        show_stream_stats: persistent.show_stream_stats,
+    }
+}
+
+/// Applies a validated JSON patch to `persistent` under `scope`.
+pub fn apply_state_patch(
+    persistent: &mut AppPersistentState,
+    val: &serde_json::Value,
+    scope: StatePatchScope,
+) -> Result<(), String> {
+    let obj = val
+        .as_object()
+        .ok_or_else(|| "State patch must be a JSON object".to_string())?;
+    if scope == StatePatchScope::ViewerOnly {
+        for key in obj.keys() {
+            if !VIEWER_ALLOWED_PATCH_KEYS.contains(&key.as_str()) {
+                return Err(format!("Key '{key}' cannot be modified from the viewer window"));
+            }
+        }
+    }
+
+    if let Some(sc) = val.get("scene_id").and_then(|v| v.as_str()) {
+        persistent.last_scene_id = Some(sc.to_string());
+    }
+    if let Some(idx) = val.get("sample_index").and_then(|v| v.as_i64()) {
+        persistent.last_sample_index = Some(idx);
+    }
+    if let Some(ts) = val.get("timestamp_us").and_then(|v| v.as_i64()) {
+        persistent.last_timestamp_us = Some(ts);
+    } else if let Some(ts) = val.get("timestamp_ns").and_then(|v| v.as_i64()) {
+        persistent.last_timestamp_us = Some(ts / 1000);
+    }
+    if let Some(vp) = val.get("viewpoint").and_then(|v| v.as_str()) {
+        persistent.last_viewpoint = Some(vp.to_string());
+    }
+    if let Some(looping) = val.get("loop").and_then(|v| v.as_bool()) {
+        persistent.last_loop = Some(looping);
+    }
+    if let Some(th) = val.get("theme_override") {
+        if th.is_null() {
+            persistent.theme_override = None;
+        } else if let Some(s) = th.as_str() {
+            if s == "light" || s == "dark" {
+                persistent.theme_override = Some(s.to_string());
+            }
+        }
+    } else if let Some(th) = val.get("theme").and_then(|v| v.as_str()) {
+        if th == "light" || th == "dark" {
+            persistent.theme_override = Some(th.to_string());
+        }
+    }
+    if let Some(grouping) = val.get("dataset_grouping").and_then(dataset_grouping_from) {
+        persistent.dataset_grouping = grouping;
+    }
+    if let Some(strip) = val.get("camera_strip").and_then(camera_strip_from) {
+        persistent.camera_strip = strip;
+    }
+    if let Some(style) = val.get("viewer_style").and_then(viewer_style_from) {
+        persistent.viewer_style = style;
+    }
+    if let Some(drift) = val.get("cinema_drift").and_then(|v| v.as_bool()) {
+        persistent.cinema_drift = drift;
+    }
+    if let Some(vis) = val.get("agent_visibility") {
+        if let Ok(map) = serde_json::from_value::<HashMap<String, bool>>(vis.clone()) {
+            persistent.agent_visibility = Some(map);
+        }
+    }
+    if let Some(layers) = val.get("layer_toggles") {
+        if let Ok(lt) = serde_json::from_value::<LayerToggles>(layers.clone()) {
+            persistent.layer_toggles = Some(lt);
+        }
+    }
+    if let Some(cam) = val.get("selected_camera").and_then(|v| v.as_str()) {
+        persistent.selected_camera = Some(cam.to_string());
+    }
+    if let Some(split) = val.get("split_view").and_then(|v| v.as_bool()) {
+        persistent.split_view = Some(split);
+    }
+    if let Some(panels) = val.get("panel_collapse") {
+        if let Ok(pcs) = serde_json::from_value::<PanelCollapseState>(panels.clone()) {
+            persistent.panel_collapse = Some(pcs);
+        }
+    }
+    if let Some(l) = val.get("layout") {
+        if let Ok(mut layout) = serde_json::from_value::<LayoutSizes>(l.clone()) {
+            layout.clamp();
+            persistent.layout = Some(layout);
+        }
+    }
+
+    if scope == StatePatchScope::Full {
+        if let Some(reopen) = val.get("reopen_last_session").and_then(|v| v.as_bool()) {
+            persistent.reopen_last_session = reopen;
+        }
+        if let Some(auto_next) = val.get("auto_next_scene").and_then(|v| v.as_bool()) {
+            persistent.auto_next_scene = auto_next;
+        }
+        if let Some(open_first) = val.get("open_first_ready_scene").and_then(|v| v.as_bool()) {
+            persistent.open_first_ready_scene = open_first;
+        }
+        if let Some(win) = val.get("window_state") {
+            if let Ok(ws) = serde_json::from_value::<WindowState>(win.clone()) {
+                persistent.window_state = Some(ws);
+            }
+        }
+        if let Some(seconds) = val.get("buffer_target_seconds").and_then(buffer_target_seconds_from) {
+            persistent.buffer_target_seconds = seconds;
+        }
+        if let Some(bytes) = val
+            .get("client_memory_limit_bytes")
+            .and_then(client_memory_limit_bytes_from)
+        {
+            persistent.client_memory_limit_bytes = bytes;
+        }
+        if let Some(show) = val.get("show_stream_stats").and_then(|v| v.as_bool()) {
+            persistent.show_stream_stats = show;
+        }
+    }
+
+    Ok(())
+}
+
 pub const DEFAULT_REMOTE_VIEW_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const MIN_REMOTE_VIEW_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -574,6 +761,27 @@ pub struct CameraImagesSetting {
 }
 
 impl AppPersistentState {
+    /// A server's default plugin interpreter for New evaluation, if one is set.
+    pub fn plugin_python(&self, profile_id: &str) -> Option<String> {
+        self.plugin_python_by_profile.get(profile_id).cloned()
+    }
+
+    /// Set (or, with `None` or an empty path, clear) a server's default plugin
+    /// interpreter. Checked as a run's is: a full path, no line break.
+    pub fn set_plugin_python(&mut self, profile_id: &str, path: Option<&str>) -> Result<(), String> {
+        match path.filter(|path| !path.trim().is_empty()) {
+            Some(path) => {
+                crate::run_plan::validate_plugin_python(path)?;
+                self.plugin_python_by_profile
+                    .insert(profile_id.to_string(), path.to_string());
+            }
+            None => {
+                self.plugin_python_by_profile.remove(profile_id);
+            }
+        }
+        Ok(())
+    }
+
     pub fn camera_images(&self, profile_id: Option<&str>) -> CameraImagesSetting {
         let valid = |mode: &String| CAMERA_IMAGE_MODES.contains(&mode.as_str());
         let default = self
@@ -653,6 +861,7 @@ impl Default for AppPersistentState {
             recent_roots: Vec::new(),
             camera_images_default: None,
             camera_images_by_profile: HashMap::new(),
+            plugin_python_by_profile: HashMap::new(),
             viewer_sessions: HashMap::new(),
             auto_next_scene: false,
             last_cluster_datasets: HashMap::new(),
@@ -694,6 +903,11 @@ pub fn add_recent_root(state: &mut AppPersistentState, root: &str) {
     if state.recent_roots.len() > MAX_RECENT_ROOTS {
         state.recent_roots.truncate(MAX_RECENT_ROOTS);
     }
+}
+
+/// Returns true when the remembered recent-roots menu items need updating.
+pub fn recent_roots_changed(previous: &[String], updated: &[String]) -> bool {
+    previous != updated
 }
 
 fn name_ends_with_partial(path: &Path) -> bool {
@@ -1058,6 +1272,10 @@ pub mod tests {
             recent_roots: vec!["/path/to/data".into(), "/path/to/prev".into()],
             camera_images_default: Some("previews".into()),
             camera_images_by_profile: HashMap::from([("cluster-a".into(), "originals".into())]),
+            plugin_python_by_profile: HashMap::from([(
+                "cluster-a".into(),
+                "/opt/envs/opencood-official/bin/python".into(),
+            )]),
             viewer_sessions: HashMap::from([("alias|p|/r|".into(), "abc123".into())]),
             auto_next_scene: true,
             last_cluster_datasets: HashMap::from([("p".into(), serde_json::json!({"path": "/d/opv2v/test"}))]),
@@ -1077,6 +1295,35 @@ pub mod tests {
         let json = serde_json::to_string(&state).expect("serialize");
         let deserialized: AppPersistentState = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(state, deserialized);
+    }
+
+    #[test]
+    fn a_servers_plugin_interpreter_default_is_set_checked_and_cleared() {
+        let mut state = AppPersistentState::default();
+        assert_eq!(state.plugin_python("cluster-a"), None);
+        state
+            .set_plugin_python("cluster-a", Some("/opt/envs/opencood official/bin/python"))
+            .expect("a full path");
+        assert_eq!(
+            state.plugin_python("cluster-a").as_deref(),
+            Some("/opt/envs/opencood official/bin/python")
+        );
+        // Another server has its own (none here); an interpreter path is a cluster's.
+        assert_eq!(state.plugin_python("cluster-b"), None);
+        for bad in ["envs/opencood/bin/python", "/opt/envs/x\n/bin/python"] {
+            let error = state.set_plugin_python("cluster-a", Some(bad)).expect_err(bad);
+            assert!(error.starts_with("--plugin-python: "), "{error}");
+        }
+        // A refused value leaves the saved one as it was.
+        assert_eq!(
+            state.plugin_python("cluster-a").as_deref(),
+            Some("/opt/envs/opencood official/bin/python")
+        );
+        state.set_plugin_python("cluster-a", Some("  ")).expect("blank clears");
+        assert_eq!(state.plugin_python("cluster-a"), None);
+        state.set_plugin_python("cluster-a", Some("/usr/bin/python3")).expect("set");
+        state.set_plugin_python("cluster-a", None).expect("clear");
+        assert!(state.plugin_python_by_profile.is_empty());
     }
 
     #[test]
@@ -1547,5 +1794,110 @@ pub mod tests {
         let json = serde_json::to_string(&dismissed).expect("serialize");
         let round_trip: AppPersistentState = serde_json::from_str(&json).expect("deserialize");
         assert!(round_trip.welcome_card_dismissed);
+    }
+
+    #[test]
+    fn test_viewer_scope_patch_allows_ui_prefs_and_rejects_privileged_keys() {
+        let mut s = AppPersistentState::default();
+        apply_state_patch(
+            &mut s,
+            &serde_json::json!({
+                "camera_strip": "agent",
+                "viewer_style": "studio",
+                "cinema_drift": false,
+                "dataset_grouping": "day",
+                "scene_id": "scene_001",
+                "sample_index": 12,
+                "loop": false,
+            }),
+            StatePatchScope::ViewerOnly,
+        )
+        .expect("viewer prefs should apply");
+        assert_eq!(s.camera_strip, "agent");
+        assert_eq!(s.viewer_style, "studio");
+        assert!(!s.cinema_drift);
+        assert_eq!(s.dataset_grouping, "day");
+        assert_eq!(s.last_scene_id.as_deref(), Some("scene_001"));
+        assert_eq!(s.last_sample_index, Some(12));
+        assert_eq!(s.last_loop, Some(false));
+
+        for forbidden in [
+            serde_json::json!({ "reopen_last_session": false }),
+            serde_json::json!({ "library_root": "/tmp/evil" }),
+            serde_json::json!({ "last_data_root": "/tmp/evil" }),
+            serde_json::json!({ "auto_next_scene": true }),
+            serde_json::json!({ "open_first_ready_scene": false }),
+        ] {
+            assert!(
+                apply_state_patch(&mut s, &forbidden, StatePatchScope::ViewerOnly).is_err(),
+                "viewer scope must reject {forbidden}"
+            );
+        }
+
+        // Full scope applies main-window settings cleanly.
+        apply_state_patch(
+            &mut s,
+            &serde_json::json!({ "reopen_last_session": false, "auto_next_scene": true }),
+            StatePatchScope::Full,
+        )
+        .expect("full scope should apply");
+        assert!(!s.reopen_last_session);
+        assert!(s.auto_next_scene);
+    }
+
+    /// Release-sync guard: the v0.1.2 streaming settings are written from the main
+    /// window through the Full scope, refused from the viewer window, and readable
+    /// by the viewer through its preferences projection.
+    #[test]
+    fn test_streaming_settings_patch_scopes_and_viewer_projection() {
+        let mut s = AppPersistentState::default();
+        apply_state_patch(
+            &mut s,
+            &serde_json::json!({
+                "buffer_target_seconds": 5,
+                "client_memory_limit_bytes": 268435456u64,
+                "show_stream_stats": true,
+            }),
+            StatePatchScope::Full,
+        )
+        .expect("full scope should apply streaming settings");
+        assert_eq!(s.buffer_target_seconds, 5);
+        assert_eq!(s.client_memory_limit_bytes, 268435456);
+        assert!(s.show_stream_stats);
+
+        // Invalid values are ignored, as the controller did before.
+        apply_state_patch(
+            &mut s,
+            &serde_json::json!({ "buffer_target_seconds": 60, "client_memory_limit_bytes": 8192 }),
+            StatePatchScope::Full,
+        )
+        .expect("invalid values are dropped, not errors");
+        assert_eq!(s.buffer_target_seconds, 5);
+        assert_eq!(s.client_memory_limit_bytes, 268435456);
+
+        assert!(
+            apply_state_patch(
+                &mut s,
+                &serde_json::json!({ "show_stream_stats": false }),
+                StatePatchScope::ViewerOnly,
+            )
+            .is_err(),
+            "viewer scope must not write streaming settings"
+        );
+
+        let prefs = viewer_preferences(&s);
+        assert_eq!(prefs.buffer_target_seconds, 5);
+        assert_eq!(prefs.client_memory_limit_bytes, 268435456);
+        assert!(prefs.show_stream_stats);
+    }
+
+    #[test]
+    fn recent_roots_changed_skips_identical_order() {
+        let initial = vec!["/data/scene_a".to_string(), "/data/scene_b".to_string()];
+        assert!(!super::recent_roots_changed(&initial, &initial));
+
+        let reordered = vec!["/data/scene_b".to_string(), "/data/scene_a".to_string()];
+        assert!(super::recent_roots_changed(&initial, &reordered));
+        assert!(super::recent_roots_changed(&[], &initial));
     }
 }

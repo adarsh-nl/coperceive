@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * Open Folder (docs/design/v0.1.1/App Pages.dc.html): the folder check shown
+ * Open Folder (v0.1.1 layout): the folder check shown
  * for the chosen folder and the Recent table. Everything shown comes from
  * `inspect_folder` (the folder's scene manifests); nothing is assumed.
  */

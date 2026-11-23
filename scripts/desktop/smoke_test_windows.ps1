@@ -8,6 +8,39 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Stop-AppTree {
+    param([int]$RootPid)
+    if ($RootPid -le 0) { return }
+    $treePids = New-Object System.Collections.Generic.HashSet[int]
+    [void]$treePids.Add($RootPid)
+    $q = New-Object System.Collections.Generic.Queue[int]
+    $q.Enqueue($RootPid)
+    while ($q.Count -gt 0) {
+        $p = $q.Dequeue()
+        Get-CimInstance Win32_Process -Filter "ParentProcessId = $p" -ErrorAction SilentlyContinue | ForEach-Object {
+            $cid = [int]$_.ProcessId
+            if ($treePids.Add($cid)) { $q.Enqueue($cid) }
+        }
+    }
+    $prevEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & taskkill /F /T /PID $RootPid *> $null
+    } catch {
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+    foreach ($pidToStop in $treePids) {
+        Stop-Process -Id $pidToStop -Force -ErrorAction SilentlyContinue
+    }
+    $waitDeadline = [DateTime]::UtcNow.AddSeconds(10)
+    while ([DateTime]::UtcNow -lt $waitDeadline) {
+        $alive = @($treePids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+        if ($alive.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 200
+    }
+}
+
 if (-not (Test-Path $AppExe)) {
     if (Test-Path "src-tauri\target\debug\coperceive-desktop.exe") {
         $AppExe = "src-tauri\target\debug\coperceive-desktop.exe"
@@ -24,6 +57,67 @@ $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("coperceive-smoke-" + [S
 New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 $MarkerFile = Join-Path $TempDir "test_marker.txt"
 $StateDir = Join-Path $TempDir "state"
+
+# Normal (non-test) release launch must NOT start a loopback controller
+Write-Host ""
+Write-Host "--- Production Launch Controller Gate Check (Windows) ---"
+$ProdStateDir = Join-Path $TempDir "prod-state"
+New-Item -ItemType Directory -Path $ProdStateDir -Force | Out-Null
+$ProdStdOutFile = Join-Path $TempDir "prod_stdout.log"
+$ProdStdErrFile = Join-Path $TempDir "prod_stderr.log"
+foreach ($varName in @(
+    "COPERCEIVE_TEST_ENV",
+    "COPERCEIVE_TEST_MARKER_FILE",
+    "COPERCEIVE_CTRL_INFO_FILE",
+    "COPERCEIVE_AUTOCONNECT_ROOT",
+    "COPERCEIVE_DESKTOP_AUTOCONNECT_ROOT",
+    "COPERCEIVE_UPDATE_URL",
+    "COPERCEIVE_MOCK_DIALOG_FILE",
+    "COPERCEIVE_TEST_IMPORT_SOURCE"
+)) {
+    Remove-Item "Env:$varName" -ErrorAction SilentlyContinue
+}
+$env:COPERCEIVE_STATE_DIR = $ProdStateDir
+$prodProc = Start-Process -FilePath $AppExe -RedirectStandardOutput $ProdStdOutFile -RedirectStandardError $ProdStdErrFile -PassThru
+for ($i = 0; $i -lt 8; $i++) {
+    if ($prodProc.HasExited) {
+        if (Test-Path $ProdStdErrFile) { Get-Content $ProdStdErrFile }
+        if (Test-Path $ProdStdOutFile) { Get-Content $ProdStdOutFile }
+        Write-Error "Production launch exited prematurely with exit code $($prodProc.ExitCode)"
+        exit 8
+    }
+    Start-Sleep -Milliseconds 500
+}
+$prodOutText = ""
+if (Test-Path $ProdStdOutFile) { $prodOutText += (Get-Content $ProdStdOutFile -Raw) }
+if (Test-Path $ProdStdErrFile) { $prodOutText += (Get-Content $ProdStdErrFile -Raw) }
+if ($prodOutText -match "Loopback controller listening|\[desktop-ctrl\]") {
+    Stop-AppTree $prodProc.Id
+    Write-Host $prodOutText
+    Write-Error "Security failure: loopback controller started during normal (non-test) launch!"
+    exit 8
+}
+$prodPids = New-Object System.Collections.Generic.HashSet[int]
+[void]$prodPids.Add($prodProc.Id)
+$queue = New-Object System.Collections.Generic.Queue[int]
+$queue.Enqueue($prodProc.Id)
+while ($queue.Count -gt 0) {
+    $parentId = $queue.Dequeue()
+    Get-CimInstance Win32_Process -Filter "ParentProcessId = $parentId" -ErrorAction SilentlyContinue | ForEach-Object {
+        $childId = [int]$_.ProcessId
+        if ($prodPids.Add($childId)) { $queue.Enqueue($childId) }
+    }
+}
+$prodListeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $prodPids.Contains([int]$_.OwningProcess) })
+if ($prodListeners.Count -gt 0) {
+    Stop-AppTree $prodProc.Id
+    $prodListeners | Format-Table -AutoSize
+    Write-Error "Security failure: unexpected listening TCP socket(s) during normal launch!"
+    exit 8
+}
+Stop-AppTree $prodProc.Id
+Start-Sleep -Seconds 1
+Write-Host "PROD_LAUNCH_VERIFIED: os=windows listening_ports=0 ctrl_disabled=true"
 
 $env:COPERCEIVE_AUTOCONNECT_ROOT = $FixtureRoot
 $env:COPERCEIVE_TEST_MARKER_FILE = $MarkerFile
@@ -56,7 +150,7 @@ $StdErrFile = Join-Path $TempDir "app_stderr.log"
 $proc = Start-Process -FilePath $AppExe -RedirectStandardOutput $StdOutFile -RedirectStandardError $StdErrFile -PassThru
 
 Write-Host "Waiting for auto-connect and sidecar startup (PID: $($proc.Id))..."
-$timeout = 45
+$timeout = 90
 $elapsed = 0
 while (-not (Test-Path $MarkerFile) -and $elapsed -lt $timeout) {
     if ($proc.HasExited) {
@@ -72,7 +166,18 @@ while (-not (Test-Path $MarkerFile) -and $elapsed -lt $timeout) {
 }
 
 if (-not (Test-Path $MarkerFile)) {
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Write-Host "=== Live child processes of PID $($proc.Id) ==="
+    Get-CimInstance Win32_Process -Filter "ParentProcessId = $($proc.Id)" -ErrorAction SilentlyContinue |
+        Select-Object ProcessId, Name | Format-Table -AutoSize
+    Write-Host "=== Desktop app logs in LOCALAPPDATA ==="
+    $desktopLogDir = Join-Path $env:LOCALAPPDATA "nl.adarsh.coperceive\logs"
+    if (Test-Path $desktopLogDir) {
+        Get-ChildItem -Path $desktopLogDir -Filter "*.log" -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "--- $($_.FullName) ---"
+            Get-Content $_.FullName
+        }
+    }
+    Stop-AppTree $proc.Id
     Write-Host "=== App stderr ==="
     if (Test-Path $StdErrFile) { Get-Content $StdErrFile }
     Write-Host "=== App stdout ==="
@@ -99,7 +204,7 @@ $headers = @{ "Authorization" = "Bearer $token" }
 $response = Invoke-RestMethod -Uri "$origin/api/scenes" -Headers $headers -Method Get
 $sceneCount = @($response).Count
 if ($sceneCount -lt 1) {
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Stop-AppTree $proc.Id
     Write-Error "Expected >= 1 scene in response, got $sceneCount"
     exit 4
 }
@@ -109,7 +214,7 @@ Write-Host "Verified: /api/scenes returned $sceneCount scene(s) with HTTP 200 OK
 Write-Host "Checking GET $origin/api/health..."
 $healthResp = Invoke-RestMethod -Uri "$origin/api/health" -Headers $headers -Method Get
 if ($healthResp.status -ne "ok") {
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Stop-AppTree $proc.Id
     Write-Error "Unexpected /api/health response: $($healthResp | ConvertTo-Json -Compress)"
     exit 5
 }
@@ -136,7 +241,7 @@ function Capture-ScreenShot([string]$filename) {
 }
 
 if (-not $ctrlPort -or $ctrlPort -eq 0 -or $ctrlPort -eq "0" -or -not $ctrlSecret) {
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Stop-AppTree $proc.Id
     Write-Error "Controller port/secret missing in $MarkerFile"
     exit 6
 }
@@ -162,7 +267,7 @@ while ($waited -lt 50) {
     $waited++
 }
 if (-not $viewerReady) {
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Stop-AppTree $proc.Id
     Write-Error "Viewer webview did not respond to controller eval probe within timeout!"
     exit 6
 }
@@ -194,13 +299,13 @@ while ($waited -lt 30) {
     $waited++
 }
 if (-not $hpcReady) {
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Stop-AppTree $proc.Id
     Write-Error "Main window did not navigate to HPC tab within timeout!"
     exit 7
 }
 Capture-ScreenShot "dataset_view.png"
 
-Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+Stop-AppTree $proc.Id
 Start-Sleep -Seconds 1
 
 Write-Host ""
@@ -243,7 +348,7 @@ while ($elapsed -lt 45) {
 }
 
 if (-not $demoCtrlPort -or $demoCtrlPort -eq "0" -or -not $demoCtrlSecret) {
-    Stop-Process -Id $demoAppProc.Id -Force -ErrorAction SilentlyContinue
+    Stop-AppTree $demoAppProc.Id
     if (Test-Path $DemoStdErrFile) { Get-Content $DemoStdErrFile }
     if (Test-Path $DemoStdOutFile) { Get-Content $DemoStdOutFile }
     Write-Error "Controller port/secret not written to $DemoMarkerFile within timeout"
@@ -283,7 +388,7 @@ if (-not $promptReady) {
         $dumpResp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $dumpBody
         $pageText = $dumpResp.result
     } catch {}
-    Stop-Process -Id $demoAppProc.Id -Force -ErrorAction SilentlyContinue
+    Stop-AppTree $demoAppProc.Id
     Write-Host "Main window page content: $pageText"
     if (Test-Path $DemoStdErrFile) { Get-Content $DemoStdErrFile }
     Write-Error "First-run library location prompt ('Use default') did not appear within timeout!"
@@ -296,7 +401,7 @@ $useDefaultBody = @{
 } | ConvertTo-Json
 $useDefaultResp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $useDefaultBody
 if ($useDefaultResp.result -ne "clicked") {
-    Stop-Process -Id $demoAppProc.Id -Force -ErrorAction SilentlyContinue
+    Stop-AppTree $demoAppProc.Id
     Write-Error "Failed to click 'Use default' button: $($useDefaultResp | ConvertTo-Json -Compress)"
     exit 21
 }
@@ -328,7 +433,7 @@ if (-not $welcomeReady) {
         $dumpResp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $dumpBody
         $pageText = $dumpResp.result
     } catch {}
-    Stop-Process -Id $demoAppProc.Id -Force -ErrorAction SilentlyContinue
+    Stop-AppTree $demoAppProc.Id
     Write-Host "Main window page content: $pageText"
     if (Test-Path $DemoStdErrFile) { Get-Content $DemoStdErrFile }
     Write-Error "Welcome card did not appear on empty state dir within timeout!"
@@ -344,13 +449,13 @@ $clickBody = @{
 } | ConvertTo-Json
 $clickResp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $clickBody
 if ($clickResp.result -ne "clicked") {
-    Stop-Process -Id $demoAppProc.Id -Force -ErrorAction SilentlyContinue
+    Stop-AppTree $demoAppProc.Id
     Write-Error "Failed to click 'Open the demo' button: $($clickResp | ConvertTo-Json -Compress)"
     exit 22
 }
 
 Write-Host "Polling until demo scene is generated, opened in viewer, and renders LiDAR points, camera strip, and boxes..."
-$viewerScript = "(() => { document.querySelector('section.cam-strip[data-open=`"true`"] .cam-thumb')?.scrollIntoView?.(); const title = (document.querySelector('.dataset-badge .dataset-name')?.textContent || '').trim(); const points = [...document.querySelectorAll('.agent-points')].reduce((s, el) => s + (parseInt((el.getAttribute('title') || '0').split(' ')[0], 10) || 0), 0); const cameras = [...document.querySelectorAll('section.cam-strip[data-open=`"true`"] .cam-thumb canvas')].filter(c => c.width > 0 && c.height > 0).length; const boxes = parseInt((document.querySelector('button.eye[aria-label=`"Boxes`"] .eye-meta')?.textContent || '0').trim(), 10) || 0; const ready = title === 'Demo (synthetic)' && points > 0 && cameras >= 1 && boxes > 0; return { ready, title, points, cameras, boxes }; })()"
+$viewerScript = "(() => { document.querySelector('section.cam-strip[data-open=`"true`"] .cam-thumb')?.scrollIntoView?.(); const title = (document.querySelector('.dataset-badge .dataset-name')?.textContent || '').trim(); const points = [...document.querySelectorAll('.agent-points')].reduce((s, el) => s + (parseInt((el.getAttribute('title') || '0').split(' ')[0], 10) || 0), 0); const cameras = [...document.querySelectorAll('section.cam-strip[data-open=`"true`"] .cam-thumb canvas')].filter(c => c.width > 0 && c.height > 0).length; const boxes = parseInt((document.querySelector('button.eye[aria-label=`"Boxes`"] .eye-meta')?.textContent || '0').trim(), 10) || 0; const notice = (document.querySelector('.webgl-missing')?.textContent || '').trim(); const hasWebglUnavailable = notice.includes('3D view unavailable') && notice.includes('Copy diagnostics'); const ready = title === 'Demo (synthetic)' && points > 0 && cameras >= 1 && boxes > 0 && !hasWebglUnavailable; return { ready, title, points, cameras, boxes, hasWebglUnavailable }; })()"
 $viewerBody = @{
     window = "viewer"
     script = $viewerScript
@@ -379,7 +484,7 @@ for ($i = 0; $i -lt 480; $i++) {
 }
 
 if (-not $demoLoaded) {
-    Stop-Process -Id $demoAppProc.Id -Force -ErrorAction SilentlyContinue
+    Stop-AppTree $demoAppProc.Id
     Write-Host "Last viewer state: $lastViewerState"
     if (Test-Path $DemoStdOutFile) { Get-Content $DemoStdOutFile }
     if (Test-Path $DemoStdErrFile) { Get-Content $DemoStdErrFile }
@@ -412,7 +517,7 @@ for ($i = 0; $i -lt 60; $i++) {
 }
 
 if (-not $compareOk) {
-    Stop-Process -Id $demoAppProc.Id -Force -ErrorAction SilentlyContinue
+    Stop-AppTree $demoAppProc.Id
     Write-Host "Last predictions state: $lastCompareState"
     Write-Error "Predictions/evaluation view did not show 'synthetic predictions' for selected output!"
     exit 24
@@ -420,7 +525,7 @@ if (-not $compareOk) {
 Write-Host "Verified predictions/evaluation view: $lastCompareState"
 Capture-ScreenShot "demo_viewer.png"
 
-Stop-Process -Id $demoAppProc.Id -Force -ErrorAction SilentlyContinue
+Stop-AppTree $demoAppProc.Id
 Start-Sleep -Seconds 1
 
 $demoOutcomeLine = ""
@@ -469,6 +574,8 @@ $openPayload = @{
                 profileId = "cluster-a"
                 adapter = "v2xset"
                 rawRoot = "/data/v2xset"
+                # The index's cache.relative_path (sha1 of the raw root's real path).
+                cacheRelative = "coperceive-cache/v2xset/10c21c9efb52/all"
             }
         }
     )
@@ -492,7 +599,7 @@ while (-not (Test-Path $tempResult) -and $waited -lt 100) {
     $waited++
 }
 $sw.Stop()
-Stop-Process -Id $probeProc.Id -Force -ErrorAction SilentlyContinue
+Stop-AppTree $probeProc.Id
 
 if (Test-Path $tempResult) {
     Write-Host "Fake-SSH dataset open completed in $($sw.ElapsedMilliseconds) ms"

@@ -4,25 +4,45 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
+import json
 import os
 import re
 import sys
-from collections.abc import Callable, Mapping
+import traceback
+from collections.abc import Callable, Generator, Mapping
 from pathlib import Path
 from typing import cast
 
 import yaml
 
 from coperceive.adapters.paths import PathError, Template
+from coperceive.evaluation.commands import EVAL_USER_ERRORS, print_scoring
+from coperceive.evaluation.config import ConfigError
 from coperceive.evaluation.predictions import PredictionError
+from coperceive.evaluation.scoring import resolve_config, score_run
 from coperceive.model import Scene
-from coperceive.models.batch import BatchError, BatchReport, RunOptions, run_batch, utc_now
+from coperceive.models.batch import (
+    EXIT_EVAL,
+    EXIT_OK,
+    BatchError,
+    BatchReport,
+    RunOptions,
+    run_batch,
+    utc_now,
+)
 from coperceive.models.cache import CacheError, prune
 from coperceive.models.check import check_plugin, render_check
 from coperceive.models.inputs import InputError
-from coperceive.models.registry import RegistryError, list_plugins, resolve_manifest
-from coperceive.models.runner import resolve_interpreter
+from coperceive.models.registry import (
+    PluginInfo,
+    RegistryError,
+    list_plugins,
+    manifest_path,
+    resolve_manifest,
+)
+from coperceive.models.runner import PLUGIN_PYTHON_FLAG, check_plugin_python, plugin_interpreter
 from coperceive.models.slurm import (
     SlurmError,
     plan_sbatch,
@@ -30,7 +50,7 @@ from coperceive.models.slurm import (
     validate_partition,
     write_plan,
 )
-from coperceive.models.spec import Manifest, ModelSpecError, select_model
+from coperceive.models.spec import Manifest, ModelSpecError, load_manifest, select_model
 from coperceive.robustness.apply import export_perturbed_inputs
 from coperceive.robustness.spec import PerturbationError, load_perturbation
 from coperceive.store import read_scene
@@ -59,14 +79,34 @@ _USER_ERRORS = (
 )
 
 
+def _add_plugin_python(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        PLUGIN_PYTHON_FLAG,
+        dest="plugin_python",
+        default=None,
+        metavar="PATH",
+        help="The plugin's interpreter (full path to its python) instead of the manifest's "
+        "environment; checked before anything runs, passed to a Slurm job as given.",
+    )
+
+
 def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:  # type: ignore[type-arg]
     model = sub.add_parser("model", help="Model plugins: list, inspect, check, run (ADR 0011).")
     commands = model.add_subparsers(dest="model_command", required=True)
 
     listing = commands.add_parser("list", help="Installed model plugins.")
+    listing.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Machine-readable listing: each plugin's manifest as a resolved path, its "
+            "modules, and per model whether it needs a GPU and which --option keys it takes."
+        ),
+    )
     listing.set_defaults(func=list_command)
 
     inspect = commands.add_parser("inspect", help="Print the validated manifest and interpreter.")
+    _add_plugin_python(inspect)
     _plugin_arguments(inspect)
     inspect.set_defaults(func=inspect_command)
 
@@ -77,6 +117,7 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     check.add_argument("--work", default=None, help="Work root; default a temporary directory.")
     check.add_argument("--raw-root", default=None, help="Raw release for models with raw inputs.")
     check.add_argument("--option", action="append", default=[], metavar="K=V")
+    _add_plugin_python(check)
     check.set_defaults(func=check_command)
 
     run = commands.add_parser("run", help="Run a model over scenes; write a predictions run.")
@@ -93,6 +134,32 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     run.add_argument("--artifacts", default=None, help="An earlier run's cache for depends_on.")
     run.add_argument("--no-auto-dependencies", action="store_true")
     run.add_argument("--option", action="append", default=[], metavar="K=V")
+    run.add_argument(
+        "--protocol",
+        choices=("default", "legacy"),
+        default=None,
+        help=(
+            "Evaluation protocol to record for this run (run.json provenance); a later "
+            "eval run without --protocol or a config protocol uses it. default: per-frame "
+            "ranking, connected-union ground truth (70 m). legacy: the v0.1.1 rules."
+        ),
+    )
+    run.add_argument(
+        "--evaluate",
+        action="store_true",
+        help=(
+            "After the run (complete or partial), score it as 'eval run <run-id>' would and "
+            "write metrics.json and evaluation.json. With --slurm, inside the same job. "
+            "Exit 5: the run completed but scoring failed; a model failure keeps its code."
+        ),
+    )
+    run.add_argument(
+        "--eval-config",
+        default=None,
+        metavar="PATH",
+        help="Evaluation config YAML for --evaluate (as eval run --config). Default: the spec.",
+    )
+    _add_plugin_python(run)
     run.add_argument("--frame-timeout", type=float, default=None)
     run.add_argument("--run-timeout", type=float, default=None)
     run.add_argument("--no-cache", action="store_true")
@@ -199,13 +266,105 @@ def _csv(value: str | None) -> tuple[str, ...] | None:
 # -- commands ----------------------------------------------------------------------------------
 
 
-def list_command(_args: argparse.Namespace) -> None:
+LIST_FORMAT = "coperceive-model-list"
+LIST_FORMAT_VERSION = 1
+
+
+def list_command(args: argparse.Namespace) -> None:
     rows = list_plugins()
+    if getattr(args, "json", False):
+        # Importing a plugin runs its code: whatever it prints (through Python or straight
+        # to file descriptor 1) goes to stderr, so stdout holds only the JSON document.
+        with _stdout_to_stderr():
+            plugins = [_plugin_json(row) for row in rows]
+        payload = {
+            "format": LIST_FORMAT,
+            "format_version": LIST_FORMAT_VERSION,
+            "plugins": plugins,
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
     width = max((len(row.name) for row in rows), default=4)
     for row in rows:
         print(f"{row.name.ljust(width)}  {row.source.ljust(11)}  {row.location}")
     if not rows:
         print("no model plugins installed (entry point group coperceive.models)")
+
+
+def _plugin_json(row: PluginInfo) -> dict[str, object]:
+    """One plugin of ``model list --json``. A plugin whose manifest cannot be resolved or
+    read is listed with ``manifest: null`` and the reason, never dropped or guessed."""
+    entry: dict[str, object] = {
+        "name": row.name,
+        "source": row.source,
+        "location": row.location,
+        "manifest": None,
+        "error": None,
+        "modules": [],
+        "models": {},
+    }
+    try:
+        path = manifest_path(row.name)
+        manifest = load_manifest(path)
+        if manifest.name != row.name:
+            # resolve_manifest (what `model run <name>` uses) refuses this too.
+            raise RegistryError(
+                f"entry point {row.name!r} names a manifest called {manifest.name!r}"
+            )
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - one plugin's error is its own row
+        # A third-party plugin may raise anything while it is imported (a RuntimeError, a
+        # SyntaxError, or sys.exit()); that is reported as its error, never the end of the
+        # whole listing. KeyboardInterrupt is not caught: Ctrl-C still stops the listing.
+        if isinstance(exc, SystemExit):
+            code = exc.code
+            reason = code if isinstance(code, str) and code else f"SystemExit: {code!r}"
+            entry["error"] = f"{reason} (the plugin exited while it was imported)"
+        else:
+            entry["error"] = str(exc) or type(exc).__name__
+        return entry
+    entry["manifest"] = str(path.resolve())
+    entry["modules"] = list(manifest.environment.modules)
+    entry["models"] = {
+        key: {
+            "gpu": spec.resources.gpu,
+            "options": sorted(spec.options),
+            "cpus": spec.resources.cpus,
+            "memory_gb": spec.resources.memory_gb,
+            "transient_artifacts": list(spec.outputs.transient_artifacts),
+            "depends_on": sorted({dependency.model for dependency in spec.depends_on}),
+            # plan_sbatch writes it as #SBATCH --constraint (the Griffin GPU pin).
+            "slurm_constraint": spec.resources.slurm_constraint,
+            # plan_sbatch's --time estimate (time_limit) from the manifest's resources.
+            "seconds_per_sample": spec.resources.seconds_per_sample,
+            "staging_seconds": spec.resources.staging_seconds,
+            "conversion_seconds": spec.resources.conversion_seconds,
+            # True when inputs.raw is non-empty: the model reads files under --raw-root.
+            # An empty list (OpenCOOD CoBEVT, the fake plugin) does not.
+            "raw_inputs": bool(spec.inputs.raw),
+        }
+        for key, spec in manifest.models.items()
+    }
+    return entry
+
+
+@contextlib.contextmanager
+def _stdout_to_stderr() -> Generator[None, None, None]:
+    """Send stdout to stderr for the block, at the Python level and at file descriptor 1."""
+    sys.stdout.flush()
+    try:
+        saved = os.dup(1)
+    except OSError:
+        saved = None
+    try:
+        if saved is not None:
+            os.dup2(2, 1)
+        with contextlib.redirect_stdout(sys.stderr):
+            yield
+    finally:
+        sys.stderr.flush()
+        if saved is not None:
+            os.dup2(saved, 1)
+            os.close(saved)
 
 
 def inspect_command(args: argparse.Namespace) -> None:
@@ -217,11 +376,17 @@ def _inspect(args: argparse.Namespace) -> None:
     payload = _as_plain(manifest)
     print(yaml.safe_dump(payload, sort_keys=False), end="")
     assert manifest.source is not None
+    override = Path(args.plugin_python) if args.plugin_python else None
     try:
-        interpreter = resolve_interpreter(manifest.environment, plugin_dir=manifest.source.parent)
+        interpreter, source = plugin_interpreter(
+            manifest.environment, plugin_dir=manifest.source.parent, override=override
+        )
+        print(f"interpreter_source: {source}")
         print(f"interpreter: {interpreter}")
     except ModelSpecError as exc:
         print(f"interpreter: unresolved ({exc})")
+        if override is not None:
+            raise SystemExit(1) from None
 
 
 def _as_plain(value: object) -> object:
@@ -262,6 +427,7 @@ def _check(args: argparse.Namespace) -> None:
         raw_root=Path(args.raw_root) if args.raw_root else None,
         parent_env=dict(os.environ),
         options=_options(list(args.option)) or None,
+        plugin_python=_plugin_python(args),
     )
     print(render_check(manifest.name, results), end="")
     if args.keep:
@@ -277,7 +443,9 @@ def run_command(args: argparse.Namespace) -> None:
 def _run(args: argparse.Namespace) -> None:
     args.run_id = _check_run_id(str(args.run_id))
     manifest = _manifest(args)
+    _plugin_python(args)
     options = _run_options(args)
+    _check_evaluate(options)
     out = Path(args.out)
     if args.slurm:
         _emit_slurm(args, manifest, options, out)
@@ -301,9 +469,64 @@ def _run(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         raise SystemExit(1)
-    if report.exit_code != 0:
+    code = report.exit_code
+    if code != 0:
         print(f"run {report.status}: {report.reason}", file=sys.stderr)
-        raise SystemExit(report.exit_code)
+    if options.evaluate:
+        scored = _evaluate(Path(args.scenes), out, str(args.run_id), options)
+        code = combined_exit_code(code, scored)
+    if code != 0:
+        raise SystemExit(code)
+
+
+def _check_evaluate(options: RunOptions) -> None:
+    """``--eval-config`` needs ``--evaluate``; the config (and its agreement with
+    ``--protocol``) is checked now, so a bad one fails before the model runs or a job is
+    written. The run's recorded protocol is ``--protocol`` itself, so nothing is missing."""
+    if options.eval_config is not None and not options.evaluate:
+        raise BatchError("--eval-config needs --evaluate")
+    if not options.evaluate:
+        return
+    try:
+        resolve_config(options.eval_config, options.eval_protocol)
+    except (ConfigError, OSError) as exc:
+        raise BatchError(f"--evaluate: {exc}") from None
+
+
+def _evaluate(scenes: Path, out: Path, run_id: str, options: RunOptions) -> bool:
+    """Score the run as ``eval run --scenes <the run's scenes>`` does; True when every scene
+    scored. Never raises a
+    user error: a scoring failure is reported, recorded in evaluation.json, and returned."""
+    try:
+        scoring = score_run(
+            scenes,
+            out,
+            run_id,
+            config_path=options.eval_config,
+            protocol=options.eval_protocol,
+            # The run's own selection, as the job's staged scenes are: eval run --scenes.
+            scene_ids=options.scene_ids,
+            created_utc=utc_now(),
+            command="model run --evaluate",
+        )
+    except EVAL_USER_ERRORS as exc:
+        print(f"evaluate failed: {exc}", file=sys.stderr)
+        return False
+    except Exception:
+        # Not a user error: a bug. Print it, but keep the model's own exit code.
+        print("evaluate failed:", file=sys.stderr)
+        traceback.print_exc()
+        return False
+    print_scoring(scoring.report)
+    return scoring.ok
+
+
+def combined_exit_code(model_code: int, scored: bool) -> int:
+    """``model run --evaluate``'s exit code (docs/spec/model-plugin.md, §Exit codes): the
+    model's own non-zero code always wins; a complete run whose scoring failed is 5."""
+    if model_code != EXIT_OK:
+        return model_code
+    return EXIT_OK if scored else EXIT_EVAL
 
 
 def _emit_slurm(
@@ -380,7 +603,21 @@ def _run_options(args: argparse.Namespace) -> RunOptions:
         force=bool(args.force),
         staging_seconds=args.staging_seconds,
         perturbation=load_perturbation(args.perturb) if isinstance(args.perturb, str) else None,
+        eval_protocol=args.protocol if isinstance(args.protocol, str) else None,
+        evaluate=bool(args.evaluate),
+        eval_config=Path(args.eval_config) if args.eval_config else None,
+        plugin_python=Path(args.plugin_python) if args.plugin_python else None,
     )
+
+
+def _plugin_python(args: argparse.Namespace) -> Path | None:
+    """``--plugin-python`` checked now: a bad path fails before anything runs or is submitted."""
+    if not args.plugin_python:
+        return None
+    try:
+        return check_plugin_python(Path(args.plugin_python))
+    except ModelSpecError as exc:
+        raise BatchError(str(exc)) from None
 
 
 def _print_report(report: BatchReport, out: Path, run_id: str) -> None:

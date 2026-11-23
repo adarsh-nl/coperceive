@@ -4,16 +4,17 @@
 //! Everything here is read-only except `cancel`, which requires an explicit
 //! confirmation and only acts on a job whose name this app generated from the
 //! saved plan (`coperceive-run-<plan-id>`). Job ids and log paths are validated
-//! before they reach a shell; log paths must stay under the profile's
-//! `results_root` (the same lexical containment rule the plan checks use).
+//! before they reach a shell; log paths must stay under their folder: the CLI's log
+//! folder for a built-in model's run (`RunPlan::logs_dir`), the profile's `results_root`
+//! for a custom pipeline (the same lexical containment rule the plan checks use).
 
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::hpc::{is_under, normalise_path, JobState, ServerProfile};
-use crate::job_submit::safe_job_name;
-use crate::run_plan::validate_plan_id;
+use crate::job_submit::{load_saved_plan, safe_job_name};
+use crate::run_plan::{checked_logs_dir, validate_plan_id, RunPlan};
 use crate::slurm_adapter::{map_slurm_state, RemoteRunner};
 use crate::ssh::shell_quote;
 
@@ -296,23 +297,35 @@ fn array_line<'a>(output: &'a str, separator: char, priority: &[&str]) -> Option
         .copied()
 }
 
+fn log_extension(stream: &str) -> Result<&'static str, String> {
+    match stream {
+        "stdout" | "out" => Ok("out"),
+        "stderr" | "err" => Ok("err"),
+        other => Err(format!("{other:?} is not a log stream; use stdout or stderr.")),
+    }
+}
+
+/// Where the job's log is. A built-in model's job logs where `coperceive model run
+/// --slurm` does, `<logs>/%x-%j.{out,err}` (the plan's `logs_dir`; `%x` is the job name,
+/// `coperceive-run-<plan id>`); a custom pipeline's into results_root under that name.
+/// Either path must stay under its folder.
 fn log_path(
     profile: &ServerProfile,
-    plan_id: &str,
+    plan: &RunPlan,
     job_id: &str,
     stream: &str,
 ) -> Result<String, String> {
-    let extension = match stream {
-        "stdout" | "out" => "out",
-        "stderr" | "err" => "err",
-        other => {
-            return Err(format!(
-                "{other:?} is not a log stream; use stdout or stderr."
-            ))
-        }
+    let extension = log_extension(stream)?;
+    let name = expected_job_name(&plan.id)?;
+    let root = if plan.pipeline.source == "builtin" {
+        let logs = plan
+            .logs_dir
+            .as_deref()
+            .ok_or_else(|| "The saved plan does not record its log folder.".to_string())?;
+        normalise_path(checked_logs_dir(logs)?, "log folder")?
+    } else {
+        normalise_path(&profile.results_root, "results_root")?
     };
-    let name = expected_job_name(plan_id)?;
-    let root = normalise_path(&profile.results_root, "results_root")?;
     let path = format!(
         "{}/{}-{job_id}.{extension}",
         root.trim_end_matches('/'),
@@ -321,7 +334,7 @@ fn log_path(
     let normalised = normalise_path(&path, "job log path")?;
     if !is_under(&normalised, &root) {
         return Err(format!(
-            "The job log path {normalised:?} escapes the profile's results_root {root:?}; refusing to read it."
+            "The job log path {normalised:?} escapes its log folder {root:?}; refusing to read it."
         ));
     }
     Ok(normalised)
@@ -353,7 +366,11 @@ pub fn tail_log(
             "Ask for between {MIN_LOG_LINES} and {MAX_LOG_LINES} log lines, got {lines}."
         ));
     }
-    let path = log_path(profile, plan_id, job_id, stream)?;
+    log_extension(stream)?;
+    expected_job_name(plan_id)?;
+    // The saved plan says which kind of run it is, and where a built-in run logs.
+    let plan = load_saved_plan(runner, profile, plan_id)?;
+    let path = log_path(profile, &plan, job_id, stream)?;
     let command = format!(
         "tail -n {lines} -- {} 2>/dev/null",
         shell_quote(&path)
@@ -684,9 +701,45 @@ mod tests {
         assert!(runner.calls().lock().unwrap().is_empty());
     }
 
+    /// The plan job_watch reads back: a custom pipeline, or a built-in model whose job
+    /// logs to the CLI's ~/logs.
+    fn saved_plan(builtin: bool) -> String {
+        let plan = crate::run_plan::RunPlan {
+            id: plan_id().to_string(),
+            pipeline: crate::run_plan::PlanPipelineRef {
+                source: if builtin { "builtin" } else { "custom" }.to_string(),
+                ..Default::default()
+            },
+            logs_dir: builtin.then(|| "/home/bob/logs".to_string()),
+            nothing_submitted: true,
+            ..Default::default()
+        };
+        serde_json::to_string(&plan).unwrap()
+    }
+
+    #[test]
+    fn a_builtin_runs_log_is_read_where_the_cli_writes_it() {
+        let runner = FakeRunner::default()
+            .with("/plans/", &saved_plan(true))
+            .with("tail -n 50 --", "model run exit 0\n");
+        let tail = tail_log(&runner, &profile(), plan_id(), "424242", "stderr", 50).expect("tail");
+        assert_eq!(tail.stream, "stderr");
+        let calls = runner.calls();
+        let calls = calls.lock().unwrap();
+        let command = &calls.iter().find(|(cmd, _)| cmd.starts_with("tail ")).unwrap().0;
+        // %x-%j with %x = the job's name, coperceive-run-<plan id>.
+        assert_eq!(
+            command,
+            &format!("tail -n 50 -- /home/bob/logs/{}-424242.err 2>/dev/null", expected_name())
+        );
+        assert_eq!(expected_name(), format!("coperceive-run-{}", plan_id()));
+    }
+
     #[test]
     fn logs_are_bounded_on_the_expected_path() {
-        let runner = FakeRunner::default().with(
+        let runner = FakeRunner::default()
+            .with("/plans/", &saved_plan(false))
+            .with(
             "tail -n 50 --",
             "starting run\nwrote predictions\n",
         );
@@ -695,7 +748,7 @@ mod tests {
         assert_eq!(tail.lines, 50);
         let calls = runner.calls();
         let calls = calls.lock().unwrap();
-        let command = &calls[0].0;
+        let command = &calls.iter().find(|(cmd, _)| cmd.starts_with("tail ")).unwrap().0;
         assert!(command.starts_with("tail -n 50 -- "), "{command}");
         assert!(command.contains("-424242.out"), "{command}");
         assert!(command.contains(&profile().results_root), "{command}");

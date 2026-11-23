@@ -100,9 +100,9 @@ user chooses per prepare, before confirming:
 ```json
 {
   "schema": "coperceive-cluster-detect-1",
-  "path": "/datasets/eemcs/ps/cv/opencood/opv2v/test",
+  "path": "/data/opv2v/test",
   "adapter": "opv2v",
-  "raw_root": "/datasets/eemcs/ps/cv/opencood/opv2v",
+  "raw_root": "/data/opv2v",
   "split": "test",
   "params": {"split": "test"},
   "licence": {
@@ -151,7 +151,7 @@ user chooses per prepare, before confirming:
 {
   "schema": "coperceive-cluster-index-1",
   "adapter": "opv2v",
-  "raw_root": "/datasets/eemcs/ps/cv/opencood/opv2v",
+  "raw_root": "/data/opv2v",
   "split": "test",
   "params": {"split": "test"},
   "licence": {"status": "unknown", "spdx": null, "notice": "…", "links": ["…"]},
@@ -224,7 +224,7 @@ Written inside every cache split directory. Atomically replaced (temp + rename).
 {
   "schema": "coperceive-cluster-dataset-cache-1",
   "adapter": "opv2v",
-  "raw_root": "/datasets/eemcs/ps/cv/opencood/opv2v",
+  "raw_root": "/data/opv2v",
   "split": "test",
   "params": {"split": "test"},
   "cache_root": "/scratch/alice/.../coperceive-cache/opv2v/3b1e2f0a9c77/test",
@@ -263,11 +263,17 @@ Written inside every cache split directory. Atomically replaced (temp + rename).
 | `preparing` | a prepare job is running (or was started) for it. |
 | `ready` | complete schema-1 scene is in the cache. |
 | `failed` | preparation failed; `reason` is the plain error. |
-| `stale` | raw fingerprint changed since `ready`; it must be re-prepared. |
+| `stale` | the raw fingerprint or the adapter manifest changed since `ready`; it must be re-prepared. |
 
 A scene is `ready` only when the cache directory contains both `manifest.json`
 and `COMPLETE.json`. A scene whose `raw_fingerprint` no longer matches the
-dataset's current fingerprint is `stale` even if it was ready. `job_id` is the
+dataset's current fingerprint is `stale` even if it was ready (`reason`:
+`raw dataset fingerprint changed`). So is a scene whose `COMPLETE.json` records
+another `manifest_sha256` than the adapter's current manifest (`reason`:
+`adapter manifest changed`): Coperceive's conversion rules for the dataset changed,
+as for scenes prepared with v0.1.1 before the v0.1.2 adapter fixes. A prepare
+builds a stale scene again; local `coperceive ingest` does the same instead of
+skipping it. `job_id` is the
 Slurm id that last prepared it; `null` otherwise.
 
 ## Per-scene status — `coperceive-cluster-scene-status-1`
@@ -283,6 +289,7 @@ plus the cache-level fields:
   "raw_root": "/datasets/.../opv2v",
   "split": "test",
   "updated_unix": 1793462000,
+  "raw_check": {"state": "complete", "reason": null},
   "scenes": [
     {
       "scene_id": "2021_09_09_20_09_24",
@@ -297,9 +304,29 @@ plus the cache-level fields:
 ```
 
 The same record is used inside `dataset.json.scenes`; `scene_id` is implied by
-the map key there. The UI polls this command; `state`/`reason` are the only
+the map key there.
+
+`raw_check` says whether status could check the raw split for changes:
+
+| state | meaning |
+| --- | --- |
+| `complete` | the walk of the raw split and the stored fingerprint are both complete, so they were compared. |
+| `incomplete` | one of the walks hit its entry or time bound (`reason`: `raw check incomplete`). Nothing was marked stale, and a raw change may not show. The app shows a note. |
+| `not_run` | the raw files were not checked. |
+
+A walk cut off by its bound covers a different part of the tree each run, so
+its digest can change with no raw change. Only two complete walks mark ready
+scenes stale (`raw dataset fingerprint changed`), in status and in a prepare. A
+prepare keeps a complete stored fingerprint rather than replace it with a
+truncated one. Clusters running an older Coperceive send no `raw_check`. The UI polls this command; `state`/`reason` are the only
 fields it needs to render progress and failures, and `job_id` links a preparing
 scene to its Slurm job.
+
+`dataset status --cache C --live-claims` adds `live_claims`: the `preparing`
+scenes whose claim is younger than four hours and whose job is still in this
+user's queue (one `squeue -h -r -u <user>`). Without squeue every such claim
+counts as live. The app reads it only when it previews "Prepare remaining", not
+on every poll.
 
 ## Bounds and safety
 
@@ -570,10 +597,23 @@ return JSON and use the saved server profile and `coperceive_command`.
 
 | Tauri command | arguments | returns |
 | --- | --- | --- |
-| `dataset_prepare` | `{ "profileId": string, "adapter": "griffin"\|"opv2v"\|"v2xset", "rawRoot": string, "split": string \| null, "scenes"?: string[] \| "all", "workers"?: number, "images"?: "originals"\|"previews" }` | **submission preview**: `{ "plan_id": string, "job_name": string, "partition": string, "walltime": string, "cpus_per_task": 1, "array_tasks": number, "throttle": number, "gres": null, "estimated_cache_bytes": number, "images": "originals"\|"previews", "estimated_preview_bytes": number, "cache_root": string, "script": string, "preview_hash": string }` |
+| `dataset_prepare` | `{ "profileId": string, "adapter": "griffin"\|"opv2v"\|"v2xset", "rawRoot": string, "split": string \| null, "scenes"?: string[] \| "all" \| "remaining", "workers"?: number, "images"?: "originals"\|"previews" }` | **submission preview**: `{ "plan_id": string, "job_name": string, "partition": string, "walltime": string, "cpus_per_task": 1, "array_tasks": number, "throttle": number, "gres": null, "estimated_cache_bytes": number, "images": "originals"\|"previews", "estimated_preview_bytes": number, "cache_root": string, "script": string, "preview_hash": string }` |
 | `dataset_prepare_submit` | `{ "profileId": string, "previewHash": string, "confirmed": boolean }` | `{ "job_id": string, "state": "pending"\|"running"\|"completed"\|"failed"\|"cancelled"\|"unknown", "queue_reason": string \| null, "plan_id": string }` |
-| `dataset_status` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null }` | `coperceive-cluster-scene-status-1` document |
-| `dataset_open` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null, "sceneId"?: string }` | `{ "origin": string, "token": string, "server_version": string, "data_root": string, "target_type": "remote" }` |
+| `dataset_status` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null, "cacheRelative": string }` | `coperceive-cluster-scene-status-1` document |
+| `dataset_open` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null, "cacheRelative": string, "sceneId"?: string }` | `{ "origin": string, "token": string, "server_version": string, "data_root": string, "target_type": "remote" }` |
+
+`cacheRelative` is the index's `cache.relative_path`. `dataset_status` and
+`dataset_open` read `<results_root>/<cacheRelative>`, the split the index named
+and the prepare job writes. The app never computes the path from `rawRoot`,
+because the hash is taken from the raw root's real path on the server. The path
+must be `coperceive-cache/<adapter>/<12 hex>/<split>` (`all` without a split),
+or the command is refused. The dataset view reads status only once it has an
+index, cached or fresh.
+
+The prepare job is named `coperceive-dataset-<hash>-<split>` after that path,
+so jobs for two datasets that each have a `test` split never share a name. Each
+array task runs `dataset prepare --scenes <one scene>`, which exits 2 when that
+scene failed, and not when another scene in the cache did.
 
 `images` omitted means the user's default for this server profile (Settings →
 Cluster datasets → "Camera images when preparing"; else the app-wide default;
@@ -583,7 +623,7 @@ different `preview_hash`. `estimated_preview_bytes` is the extra disk the
 previews mode would use for the selected scenes, whichever mode is chosen, so
 the UI can show the cost next to that option.
 
-`scenes` omitted means all scenes, same as `"all"`. `workers` is the array throttle (scenes at once), optional: when omitted the backend uses `min(selected_scene_count, 8)`; it is clamped to 1–16 either way. The preview has `cpus_per_task: 1`, `array_tasks` (one per selected scene; "all" is every scene the index lists) and `throttle`; the script lists the scenes in a shell-quoted `SCENES=(…)` array, and each task runs `dataset prepare --workers 1 --scenes "${SCENES[$SLURM_ARRAY_TASK_ID]}"`. `cache_root` is the absolute cache split directory (`results_root` + `cache.relative_path`) so the UI never computes it. `split` is `null` only for
+`scenes` omitted means all scenes, same as `"all"`. `"remaining"` ("Prepare remaining") is resolved when the preview is made, from `dataset status --cache C --live-claims`: the indexed scenes the cache does not know, or knows as `not_prepared`, `failed` or `stale`. A `preparing` scene is left out while its claim is live: younger than four hours, and its job still in this user's `squeue`. Ready scenes are never submitted again. When nothing is left, the preview is refused with "Every scene is prepared or being prepared." An older coperceive without `--live-claims` (capability `cluster-datasets-6`) gets a plain `dataset status`, and every preparing scene counts as live. A prepare task still checks each claim itself, so a scene claimed by another user's live job is skipped, not prepared twice. `workers` is the array throttle (scenes at once), optional: when omitted the backend uses `min(selected_scene_count, 8)`; it is clamped to 1–16 either way. The preview has `cpus_per_task: 1`, `array_tasks` (one per selected scene; "all" is every scene the index lists) and `throttle`; the script lists the scenes in a shell-quoted `SCENES=(…)` array, and each task runs `dataset prepare --workers 1 --scenes "${SCENES[$SLURM_ARRAY_TASK_ID]}"`. `cache_root` is the absolute cache split directory (`results_root` + `cache.relative_path`) so the UI never computes it. `split` is `null` only for
 Griffin. `dataset_prepare` renders the full script but submits nothing.
 `dataset_prepare_submit` requires the exact `preview_hash`; a changed preview or
 an unconfirmed call submits nothing and returns a plain error. The preview is

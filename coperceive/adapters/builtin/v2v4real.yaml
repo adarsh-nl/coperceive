@@ -94,7 +94,9 @@ streams:
     reader: yaml_record
     path: "{agent_root}/{frame:06d}.yaml"
     missing: skip
-    frame: world
+    # Each vehicle's boxes are in its own LiDAR frame, the frame of lidar_pose, so the body
+    # frame (conventions V4R-7; the paper and the loader; checked on real data, PR #166).
+    frame: body
     records: {path: vehicles, mapping_key: track_id}
     # angle is [roll, yaw, pitch] in degrees (OpenCOOD data-annotation page).
     fields: {roll: angle.0, yaw: angle.1, pitch: angle.2}

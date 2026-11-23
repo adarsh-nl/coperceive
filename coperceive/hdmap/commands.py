@@ -10,7 +10,7 @@ import sys
 import tarfile
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from coperceive.hdmap.align import align_maps
 from coperceive.hdmap.identify import (
@@ -21,6 +21,7 @@ from coperceive.hdmap.identify import (
     write_town_table,
 )
 from coperceive.hdmap.install import (
+    MAX_MAP_BYTES,
     TOWN_BYTES,
     TOWN_SHA256,
     TOWN_VERIFICATION,
@@ -139,7 +140,11 @@ def fetch_command(args: argparse.Namespace) -> None:
     if not package.is_file():
         print(f"package not found: {package}", file=sys.stderr)
         raise SystemExit(2)
-    written = extract_towns(package, dest)
+    try:
+        written = extract_towns(package, dest)
+    except (OSError, ValueError, tarfile.TarError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
     for town, path in written:
         print(f"wrote {path} sha256 {sha256_file(path)} map_name Carla/Maps/{town}")
     if len(written) != len(CARLA_TOWNS):
@@ -149,22 +154,130 @@ def fetch_command(args: argparse.Namespace) -> None:
 
 
 def extract_towns(package: Path, dest: Path) -> list[tuple[str, Path]]:
-    """Pull the four town OpenDRIVE files out of an official CARLA package."""
+    """Pull the four town OpenDRIVE files out of an official CARLA package.
+
+    Each member is copied in chunks and refused (ValueError) over ``MAX_MAP_BYTES``, the
+    cap the pinned installs use; the largest official town is under 5 MB. A refused member
+    leaves an earlier file of the same name as it was.
+
+    tarfile itself reads a GNU long-name/long-link payload and a pax header payload whole,
+    before any member reaches this loop, and follows a GNU sparse map through any number of
+    extension blocks; it also keeps every member header it has read. So the archive is read
+    with ``_BoundedTarFile``: a long-name or pax payload over ``MAX_TAR_HEADER_BYTES``, more
+    than ``MAX_TAR_HEADER_CHAIN`` such headers in front of one member, and any GNU sparse
+    member are refused (ValueError), and the list of headers read so far is dropped after
+    each member. Memory therefore stays bounded whatever the package holds. What is not
+    bounded is time: a package of millions of empty members is read to its end.
+    """
     wanted = {f"{town}.xodr": town for town in CARLA_TOWNS}
     found: dict[str, Path] = {}
-    with tarfile.open(package, "r:*") as archive:
-        for member in archive:
+    with _BoundedTarFile.open(package, "r:*") as archive:
+        while (member := archive.next()) is not None:
+            # TarFile.next() appends each header to .members; extractfile() of a regular
+            # file does not need them, and two million empty members would cost ~800 MB.
+            archive.members.clear()
             name = Path(member.name).name
             town = wanted.get(name)
             if town is None or not member.isfile():
                 continue
+            if member.size > MAX_MAP_BYTES:
+                raise ValueError(_oversized(member.name, member.size))
             handle = archive.extractfile(member)
             if handle is None:
                 continue
             target = dest / name
-            target.write_bytes(handle.read())
+            _copy_capped(handle, target, member.name)
             found[town] = target
     return [(town, found[town]) for town in CARLA_TOWNS if town in found]
+
+
+# A path or link name is at most PATH_MAX (4096) bytes on Linux, and the pax records of a
+# real member (path, linkpath, times, uid/gid names) are a few hundred bytes.
+MAX_TAR_HEADER_BYTES = 64 * 1024
+# Header extensions in front of one member: a pax global, a pax extended, a GNU long name
+# and a GNU long link is four. tarfile handles each one by recursion.
+MAX_TAR_HEADER_CHAIN = 8
+_LONG_TYPES = (tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK)
+_PAX_TYPES = (tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE)
+
+
+class TarHeaderError(ValueError):
+    """A tar header extension that an OpenDRIVE package has no use for, or too large."""
+
+
+class _BoundedTarInfo(tarfile.TarInfo):
+    """A TarInfo that refuses header payloads tarfile would otherwise read whole."""
+
+    def _proc_member(self, archive: Any) -> Any:
+        # Called by TarInfo.fromtarfile() for every header, before tarfile reads the
+        # header's payload.
+        kind = self.type
+        if kind == tarfile.GNUTYPE_SPARSE:
+            raise TarHeaderError(_sparse(self.name))
+        if kind not in _LONG_TYPES and kind not in _PAX_TYPES:
+            return super()._proc_member(archive)  # pyright: ignore[reportAttributeAccessIssue]
+        label = "long name header" if kind in _LONG_TYPES else "pax header"
+        if self.size > MAX_TAR_HEADER_BYTES:
+            raise TarHeaderError(
+                f"a tar {label} of {self.size} bytes is over the {MAX_TAR_HEADER_BYTES} "
+                f"byte limit; this is not the official CARLA {CARLA_VERSION} package"
+            )
+        chain: int = archive.header_chain + 1
+        if chain > MAX_TAR_HEADER_CHAIN:
+            raise TarHeaderError(
+                f"more than {MAX_TAR_HEADER_CHAIN} tar header extensions in front of one "
+                f"member; this is not the official CARLA {CARLA_VERSION} package"
+            )
+        archive.header_chain = chain
+        try:
+            return super()._proc_member(archive)  # pyright: ignore[reportAttributeAccessIssue]
+        finally:
+            archive.header_chain = chain - 1
+
+    def _proc_gnusparse_10(self, next: Any, pax_headers: Any, tarfile: Any) -> None:
+        # pax format 1.0 sparse: the map is read from the data blocks until it has the
+        # number of entries the first line claims, with no bound.
+        raise TarHeaderError(_sparse(self.name))
+
+
+def _sparse(member: str) -> str:
+    return (
+        f"{member}: a GNU sparse member is not in an official CARLA {CARLA_VERSION} "
+        "package; refusing it"
+    )
+
+
+class _BoundedTarFile(tarfile.TarFile):
+    tarinfo = _BoundedTarInfo
+    members: list[tarfile.TarInfo]  # set by TarFile.__init__; not in typeshed
+    header_chain = 0
+
+
+_COPY_CHUNK = 1 << 20
+
+
+def _oversized(member: str, size: int) -> str:
+    return (
+        f"{member} in the package is {size} bytes, over the {MAX_MAP_BYTES} byte limit "
+        f"for an OpenDRIVE file; this is not the official CARLA {CARLA_VERSION} package"
+    )
+
+
+def _copy_capped(handle: IO[bytes], target: Path, member: str) -> None:
+    """Copy ``handle`` to ``target`` through a partial file, at most ``MAX_MAP_BYTES``."""
+    partial = target.with_name(f".{target.name}.part")
+    written = 0
+    try:
+        with partial.open("wb") as out:
+            while chunk := handle.read(_COPY_CHUNK):
+                written += len(chunk)
+                if written > MAX_MAP_BYTES:
+                    raise ValueError(_oversized(member, written))
+                out.write(chunk)
+        partial.replace(target)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
 
 
 def ingest_command(args: argparse.Namespace) -> None:

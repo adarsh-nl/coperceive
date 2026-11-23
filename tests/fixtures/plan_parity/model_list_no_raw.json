@@ -1,0 +1,39 @@
+{
+  "format": "coperceive-model-list",
+  "format_version": 1,
+  "plugins": [
+    {
+      "error": null,
+      "location": "coperceive_opencood_model:MANIFEST",
+      "manifest": "/opt/coperceive/plugins/opencood/coperceive_opencood_model/model.yaml",
+      "models": {
+        "cobevt-lidar-v2xset": {
+          "conversion_seconds": 60.0,
+          "cpus": 8,
+          "depends_on": [],
+          "gpu": true,
+          "memory_gb": 16,
+          "options": [
+            "allow_partial_weights",
+            "checkpoint",
+            "checkpoint_config",
+            "checkpoint_weights",
+            "device",
+            "ego_agent",
+            "max_checkpoint_bytes",
+            "score_threshold",
+            "trust_checkpoint_pickle"
+          ],
+          "raw_inputs": false,
+          "seconds_per_sample": 0.08,
+          "slurm_constraint": null,
+          "staging_seconds": 180.0,
+          "transient_artifacts": []
+        }
+      },
+      "modules": [],
+      "name": "opencood",
+      "source": "entry-point"
+    }
+  ]
+}

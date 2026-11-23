@@ -3,6 +3,8 @@ import test from "node:test";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import {
+  pluginPythonLabel,
+  pluginPythonProblem,
   collectValues,
   emptyEnvironmentOverride,
   environmentKindLabel,
@@ -11,6 +13,8 @@ import {
   formatArgv,
   historyCanRerun,
   slurmSeconds,
+  defaultWalltime,
+  walltimeProblem,
   historyStateLabel,
   historyTiming,
   reproPreviewLines,
@@ -21,10 +25,22 @@ import {
   shouldPollJob,
   initialArgumentForm,
   planIsSaveable,
+  artifactFingerprintText,
+  builtinPlanInputProblem,
+  pipelineNeedsCheckpoint,
+  pipelineNeedsCkptRoot,
+  pipelineNeedsRawRoot,
+  pipelineNeedsSplit,
+  DEFAULT_EVAL_PROTOCOL,
+  EVAL_PROTOCOL_CHOICES,
+  evalProtocolConfigLabel,
+  evalProtocolLabel,
+  sameEvalProtocol,
   planSummary,
   progressLabel,
   validateArgumentForm,
   type JobWatchStatus,
+  type PipelineEntry,
   type PipelineSpec,
   type RunPlan,
 } from "./runPlan.ts";
@@ -69,6 +85,9 @@ function plan(overrides: Partial<RunPlan> = {}): RunPlan {
     environment_note: "Environment from the server profile.",
     checkpoint: { path: "/data/code/checkpoints/model.pt", sha256: "abc", kind: "file", real_path: "/data/code/checkpoints/model.pt" },
     split: { path: "/data/code/splits/test.txt", sha256: "def", kind: "file", real_path: "/data/code/splits/test.txt" },
+    ckpt_root: { path: "", sha256: null, kind: "", real_path: null },
+    model_options: [],
+    eval_protocol: "default",
     output_dir: "/data/results/runs/plan-1",
     scratch_dir: "/work/alice",
     checks: [{ name: "checkpoint", label: "Checkpoint", ok: true, detail: "", hint: null, duration_ms: 1 }],
@@ -137,6 +156,230 @@ test("a plan is saveable only when every check passed and both hashes exist", ()
   const noHash = plan({ checkpoint: { path: "/x", sha256: null, kind: "folder", real_path: "/x" } });
   assert.strictEqual(planIsSaveable(noHash), false);
   assert.strictEqual(planIsSaveable(null), false);
+});
+
+/** Griffin as `list_builtin_pipelines` returns it from `coperceive model list --json`. */
+function griffinEntry(builtin: PipelineEntry["builtin"] | undefined = undefined): PipelineEntry {
+  return {
+    id: "griffin",
+    name: "griffin",
+    description: "Installed model plugin; runs coperceive model run on the cluster.",
+    source: "builtin",
+    spec: { ...spec, name: "griffin", arguments: [] },
+    registration_path: null,
+    plugin_manifest: "/opt/coperceive/plugins/griffin/coperceive_griffin_model/model.yaml",
+    builtin:
+      builtin === undefined
+        ? {
+            name: "griffin",
+            manifest: "/opt/coperceive/plugins/griffin/coperceive_griffin_model/model.yaml",
+            error: null,
+            modules: ["nvidia/cuda-11.8"],
+            models: {
+              "vehicle-side": { gpu: true, options: ["ckpt_root", "det_json", "min_score", "nusc_root", "subset"] },
+              "weights-from-option": { gpu: false, options: ["checkpoint"] },
+            },
+          }
+        : builtin,
+  };
+}
+
+test("a built-in model needs a checkpoint only when its manifest declares the option", () => {
+  // Griffin vehicle-side pins its own weights: the backend refuses a checkpoint for it.
+  assert.strictEqual(pipelineNeedsCheckpoint(griffinEntry(), "vehicle-side"), false);
+  assert.strictEqual(pipelineNeedsCheckpoint(griffinEntry(), "weights-from-option"), true);
+  // A model the listing does not know, or a cluster too old to list models: no field;
+  // the cluster's own message says why when the plan is checked.
+  assert.strictEqual(pipelineNeedsCheckpoint(griffinEntry(), "nope"), false);
+  assert.strictEqual(pipelineNeedsCheckpoint(griffinEntry(null), "vehicle-side"), false);
+  assert.strictEqual(pipelineNeedsSplit(griffinEntry()), true);
+  // A custom pipeline follows its own argument roles.
+  const custom: PipelineEntry = { ...griffinEntry(null), source: "custom", spec };
+  assert.strictEqual(pipelineNeedsCheckpoint(custom, ""), true);
+  assert.strictEqual(pipelineNeedsSplit(custom), true);
+  const bare: PipelineEntry = { ...custom, spec: { ...spec, arguments: [] } };
+  assert.strictEqual(pipelineNeedsCheckpoint(bare, ""), false);
+  assert.strictEqual(pipelineNeedsSplit(bare), false);
+  assert.strictEqual(pipelineNeedsCheckpoint(null, ""), false);
+});
+
+test("a built-in plan requires the model and raw root but not a media root", () => {
+  const base = { model: "vehicle-side", rawRoot: "/data/griffin-release", mediaRoot: "" };
+  // An empty media root is a valid plan: the CLI's --media-root is optional, and the job
+  // script then contains no --media-root at all.
+  assert.strictEqual(builtinPlanInputProblem(base), null);
+  assert.strictEqual(builtinPlanInputProblem({ ...base, mediaRoot: "/data/griffin-release" }), null);
+  // The model key and the raw root are still required.
+  const message = "Choose the model key and raw root for this built-in model.";
+  assert.strictEqual(builtinPlanInputProblem({ ...base, model: "  " }), message);
+  assert.strictEqual(builtinPlanInputProblem({ ...base, rawRoot: " " }), message);
+});
+
+test("a model with no raw inputs allows an empty raw root, and Griffin still requires one", () => {
+  const message = "Choose the model key and raw root for this built-in model.";
+  const griffin = griffinEntry();
+  griffin.builtin!.models["vehicle-side"].raw_inputs = true;
+  assert.strictEqual(pipelineNeedsRawRoot(griffin, "vehicle-side"), true);
+  assert.strictEqual(
+    builtinPlanInputProblem({
+      model: "vehicle-side",
+      rawRoot: "",
+      mediaRoot: "",
+      needsRawInputs: pipelineNeedsRawRoot(griffin, "vehicle-side"),
+    }),
+    message,
+  );
+  // An older listing omits the field: the raw root stays required.
+  assert.strictEqual(pipelineNeedsRawRoot(griffinEntry(), "vehicle-side"), true);
+
+  const cobevt = griffinEntry();
+  cobevt.builtin!.models["cobevt-lidar-v2xset"] = {
+    gpu: true,
+    options: ["checkpoint"],
+    raw_inputs: false,
+  };
+  assert.strictEqual(pipelineNeedsRawRoot(cobevt, "cobevt-lidar-v2xset"), false);
+  assert.strictEqual(
+    builtinPlanInputProblem({
+      model: "cobevt-lidar-v2xset",
+      rawRoot: " ",
+      mediaRoot: "",
+      needsRawInputs: pipelineNeedsRawRoot(cobevt, "cobevt-lidar-v2xset"),
+    }),
+    null,
+  );
+  // The model key is still required.
+  assert.notStrictEqual(
+    builtinPlanInputProblem({
+      model: " ",
+      rawRoot: "",
+      mediaRoot: "",
+      needsRawInputs: false,
+    }),
+    null,
+  );
+});
+
+test("a built-in model needs a checkpoint root only when its manifest declares ckpt_root", () => {
+  // Griffin's released checkpoints root is a required parameter with no default.
+  assert.strictEqual(pipelineNeedsCkptRoot(griffinEntry(), "vehicle-side"), true);
+  assert.strictEqual(pipelineNeedsCkptRoot(griffinEntry(), "weights-from-option"), false);
+  assert.strictEqual(pipelineNeedsCkptRoot(griffinEntry(), "nope"), false);
+  assert.strictEqual(pipelineNeedsCkptRoot(griffinEntry(null), "vehicle-side"), false);
+  assert.strictEqual(pipelineNeedsCkptRoot({ ...griffinEntry(), source: "custom" }, "vehicle-side"), false);
+});
+
+test("the New evaluation panel shows the declared checkpoint root next to the raw root", () => {
+  const source = readFileSync(new URL("./NewEvaluation.tsx", import.meta.url), "utf8");
+  assert.ok(source.includes("pipelineNeedsCkptRoot(selectedPipeline, model)"), "ckpt_root rule");
+  assert.ok(source.includes('id="plan-ckpt-root"'), "ckpt_root field");
+  assert.ok(source.includes('ckpt_root: selectedPipeline.source === "builtin" && needsCkptRoot'), "request field");
+  assert.ok(source.includes("pipelineNeedsRawRoot(selectedPipeline, model)"), "raw root rule");
+  assert.ok(source.includes("needsRawInputs: needsRawRoot"), "raw root reaches the check");
+});
+
+test("the AP protocol choice defaults to OpenCOOD-style and records legacy when chosen", () => {
+  assert.strictEqual(DEFAULT_EVAL_PROTOCOL, "default");
+  assert.deepStrictEqual(
+    EVAL_PROTOCOL_CHOICES.map((choice) => choice.value),
+    ["default", "legacy"],
+  );
+  assert.strictEqual(EVAL_PROTOCOL_CHOICES[0]?.label, "Default");
+  assert.strictEqual(
+    EVAL_PROTOCOL_CHOICES[0]?.description,
+    "OpenCOOD-style: per-frame ranking, ground truth from every connected agent within 70 m",
+  );
+  assert.strictEqual(EVAL_PROTOCOL_CHOICES[1]?.label, "Legacy (v0.1.1)");
+  assert.strictEqual(EVAL_PROTOCOL_CHOICES[1]?.description, "for numbers comparable to v0.1.1");
+  assert.ok(evalProtocolLabel("legacy").includes("for numbers comparable to v0.1.1"));
+  // The form sends the choice; it starts on the default.
+  const source = readFileSync(new URL("./NewEvaluation.tsx", import.meta.url), "utf8");
+  assert.ok(source.includes("plan-eval-protocol"), "protocol radios");
+  assert.ok(source.includes("eval_protocol: evalProtocol"), "request field");
+  assert.ok(source.includes("useState<EvalProtocol>(DEFAULT_EVAL_PROTOCOL)"), "default preselected");
+});
+
+test("the evaluated-run protocol label matches eval report and eval compare", () => {
+  assert.strictEqual(evalProtocolConfigLabel(null), "legacy (pooled, ego-only)");
+  assert.strictEqual(
+    evalProtocolConfigLabel({ ranking_scope: "pooled", gt_scope: "ego_only" }),
+    "legacy (pooled, ego-only)",
+  );
+  assert.strictEqual(
+    evalProtocolConfigLabel({
+      ranking_scope: "per_frame",
+      gt_scope: "connected_union",
+      comm_range_m: 70,
+    }),
+    "ranking per_frame, ground truth connected_union (70 m)",
+  );
+  assert.strictEqual(
+    sameEvalProtocol(
+      { ranking_scope: "per_frame", gt_scope: "connected_union", comm_range_m: 70 },
+      { ranking_scope: "per_frame", gt_scope: "connected_union", comm_range_m: 50 },
+    ),
+    false,
+  );
+  assert.strictEqual(
+    sameEvalProtocol(
+      { ranking_scope: "pooled", gt_scope: "ego_only" },
+      { ranking_scope: "pooled", gt_scope: "ego_only", comm_range_m: 70 },
+    ),
+    true,
+  );
+});
+
+test("a Griffin plan with no checkpoint and a fingerprinted scenes folder can be saved", () => {
+  const griffin = plan({
+    checkpoint: { path: "", sha256: null, kind: "", real_path: null },
+    split: {
+      path: "/data/griffin/scenes",
+      sha256: null,
+      kind: "folder",
+      real_path: "/data/griffin/scenes",
+      listing_sha256: "1f".repeat(32),
+      file_count: 12,
+    },
+  });
+  assert.strictEqual(planIsSaveable(griffin), true);
+  // An empty folder, or one without a listing, has no fingerprint.
+  const empty = plan({ ...griffin, split: { ...griffin.split, file_count: 0 } });
+  assert.strictEqual(planIsSaveable(empty), false);
+  const unlisted = plan({ ...griffin, split: { ...griffin.split, listing_sha256: null } });
+  assert.strictEqual(planIsSaveable(unlisted), false);
+  // A checkpoint that was given must still have its sha256.
+  const unhashed = plan({ ...griffin, checkpoint: { path: "/x.pt", sha256: null, kind: "file", real_path: "/x.pt" } });
+  assert.strictEqual(planIsSaveable(unhashed), false);
+});
+
+test("a folder's fingerprint is shown as its listing, not as a missing sha256", () => {
+  assert.strictEqual(
+    artifactFingerprintText({
+      path: "/data/griffin/scenes",
+      sha256: null,
+      kind: "folder",
+      real_path: "/data/griffin/scenes",
+      listing_sha256: "ab".repeat(32),
+      file_count: 12,
+    }),
+    `listing sha256 ${"ab".repeat(32)} (12 files)`,
+  );
+  assert.strictEqual(
+    artifactFingerprintText({ path: "/x.pt", sha256: "cd".repeat(32), kind: "file", real_path: "/x.pt" }),
+    `sha256 ${"cd".repeat(32)}`,
+  );
+  assert.strictEqual(
+    artifactFingerprintText({ path: "/x", sha256: null, kind: "file", real_path: "/x" }),
+    "not recorded",
+  );
+});
+
+test("the New evaluation panel asks the plan helpers, not a built-in rule, for the checkpoint", () => {
+  const source = readFileSync(new URL("./NewEvaluation.tsx", import.meta.url), "utf8");
+  assert.ok(source.includes("pipelineNeedsCheckpoint(selectedPipeline, model)"), "checkpoint rule");
+  assert.ok(source.includes("pipelineNeedsSplit(selectedPipeline)"), "split rule");
+  assert.ok(!source.includes('Split sha256'), "a folder split is shown by its listing");
+  assert.ok(source.includes("artifactFingerprintText(plan.split)"), "split fingerprint text");
 });
 
 test("summaries are plain language and mention the resolved environment", () => {
@@ -285,4 +528,48 @@ test("repro card preview names what is included and what is missing", () => {
   assert.ok(lines.missing.some((line) => line.includes("Python version")));
   assert.ok(lines.missing.some((line) => line.includes("has not scored")));
   assert.ok(lines.missing.some((line) => line.includes("metrics.scene-a")));
+});
+
+test("a built-in run's walltime defaults to the CLI's estimate, never to four hours", () => {
+  assert.strictEqual(defaultWalltime({ time_estimate: "01:00:00" }), "01:00:00");
+  assert.strictEqual(defaultWalltime({ time_estimate: null }), "");
+  assert.strictEqual(defaultWalltime(null), "");
+  assert.match(walltimeProblem("", { time_estimate: null }) ?? "", /Enter the walltime/);
+  assert.strictEqual(walltimeProblem("01:00:00", { time_estimate: "01:00:00" }), null);
+});
+
+test("a walltime over the partition's discovered limit is refused before the preview", () => {
+  const plan = { time_estimate: "01:00:00", partition_max_time: "1-00:00:00" };
+  assert.strictEqual(walltimeProblem("1-00:00:00", plan), null);
+  assert.match(walltimeProblem("1-00:00:01", plan) ?? "", /longer than the partition's time limit 1-00:00:00/);
+  assert.match(walltimeProblem("48:00:00", plan) ?? "", /1-00:00:00/);
+  // No discovered limit: nothing to refuse.
+  assert.strictEqual(walltimeProblem("7-00:00:00", { time_estimate: "01:00:00", partition_max_time: null }), null);
+});
+
+test("a plugin interpreter must be a full path on one line, as model run --plugin-python checks", () => {
+  // Empty or blank: no override, the manifest's environment decides.
+  assert.equal(pluginPythonProblem(""), null);
+  assert.equal(pluginPythonProblem("   "), null);
+  // Full paths pass as typed: spaces, quotes and $(...) are quoted by the job script, not refused.
+  for (const path of [
+    "/opt/envs/opencood-official/bin/python",
+    "/opt/envs/opencood official/bin/python",
+    "/opt/envs/it's \"x\"/bin/python",
+    "/opt/envs/$(touch pwned)/bin/python",
+  ]) {
+    assert.equal(pluginPythonProblem(path), null, path);
+  }
+  // A relative path would resolve against the compute node's directory.
+  assert.equal(
+    pluginPythonProblem("envs/opencood/bin/python"),
+    "--plugin-python: give a full path (got envs/opencood/bin/python)",
+  );
+  assert.match(pluginPythonProblem("~/envs/x/bin/python") ?? "", /give a full path/);
+  // A line break (or any control character) would split the job-script line.
+  for (const path of ["/opt/envs/x\n/bin/python", "/opt/envs/x\r/bin/python", "/opt/envs/x\u0000/python"]) {
+    assert.match(pluginPythonProblem(path) ?? "", /line break or another control character/, JSON.stringify(path));
+  }
+  assert.equal(pluginPythonLabel(""), "From the model's manifest (environment)");
+  assert.equal(pluginPythonLabel("/opt/envs/a/bin/python"), "/opt/envs/a/bin/python");
 });

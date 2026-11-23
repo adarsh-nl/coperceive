@@ -346,6 +346,11 @@ print(f"Step CD-4 verified: wrong hash ({wrong['error']!r}) and confirmed:false 
       f"({unconfirmed['error']!r}) submit nothing; no sbatch in the fake-ssh log")
 PY
 
+# Status and viewing read the cache split the index named (cache.relative_path);
+# the app never computes it from the raw root.
+CACHE_RELATIVE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["steps"][0]["value"]["cache"]["relative_path"])' "${TMP_DIR}/preview-result.json")"
+DATASET_ARGS="${DATASET_ARGS}, \"cacheRelative\": \"${CACHE_RELATIVE}\""
+
 # --- Flow B: confirmed submit of one scene, status, partial open --------------
 run_flow one "[
   {\"command\": \"dataset_prepare\", \"args\": {${DATASET_ARGS}, \"scenes\": [\"scene_0000\"], \"workers\": 1}},
@@ -371,6 +376,44 @@ assert states == {"scene_0000": "ready", "scene_0001": "not_prepared", "scene_00
 print(f"Step CD-6 verified: dataset_status -> {states}")
 served = json.load(open(f"{tmp}/one-served.json", encoding="utf-8"))
 assert served == ["scene_0000"], served
+PY
+
+# --- Flow P: the same cache whatever spelling of the raw root -----------------
+# A trailing slash used to give another cache hash in the app than on the
+# server, so the prepared scene read as not prepared.
+run_flow slash "[
+  {\"command\": \"dataset_status\", \"args\": {$(profile_args), \"adapter\": \"opv2v\", \"rawRoot\": \"${RAW_ROOT}/\", \"split\": \"test\", \"cacheRelative\": \"${CACHE_RELATIVE}\"}}
+]"
+check slash <<'PY'
+import json, sys
+result, ssh_log, tmp, raw = sys.argv[1:5]
+(step,) = json.load(open(result, encoding="utf-8"))["steps"]
+assert step["ok"], step
+states = {scene["scene_id"]: scene["state"] for scene in step["value"]["scenes"]}
+assert states["scene_0000"] == "ready", states
+print(f"Step CD-P verified: dataset_status with the raw root spelled with a trailing slash -> {states}")
+PY
+
+# --- Flow R: "Prepare remaining" previews only the scenes not prepared yet -----
+# scene_0000 is ready (Flow B): the preview lists the other two, read from the
+# cache's `dataset status` at preview time, and nothing is submitted.
+run_flow remaining "[
+  {\"command\": \"dataset_prepare\", \"args\": {${DATASET_ARGS}, \"scenes\": \"remaining\"}}
+]"
+check remaining <<'PY'
+import json, sys
+result, ssh_log, tmp, raw = sys.argv[1:5]
+(step,) = json.load(open(result, encoding="utf-8"))["steps"]
+assert step["ok"], step
+preview = step["value"]
+assert (preview["cpus_per_task"], preview["array_tasks"], preview["throttle"]) == (1, 2, 2), preview
+assert "#SBATCH --array=0-1%2" in preview["script"], preview["script"]
+assert "SCENES=(scene_0001 scene_0002)" in preview["script"], preview["script"]
+log = open(ssh_log, encoding="utf-8").read().splitlines()
+# The ready scene is left out from the cache's status (the --live-claims flag is unit-tested).
+assert "dataset-status" in log, log
+assert not [line for line in log if line.startswith("sbatch")], log
+print("Step CD-R verified: Prepare remaining -> scene_0001 scene_0002")
 PY
 
 # --- Flow C: prepare all with default workers, status, open -------------------
@@ -439,7 +482,13 @@ python3 - "${TMP_DIR}" <<'PY'
 import glob, sys
 tmp = sys.argv[1]
 files = sorted(glob.glob(f"{tmp}/*-request.json") + glob.glob(f"{tmp}/*-result.json"))
-assert len(files) == 8, files
+# Exactly the flows run so far: detect, preview, one (A-B), slash (P), remaining (R) and all (C).
+expected = sorted(
+    f"{tmp}/{flow}-{kind}.json"
+    for flow in ("detect", "preview", "one", "slash", "remaining", "all")
+    for kind in ("request", "result")
+)
+assert files == expected, files
 for path in files:
     text = open(path, encoding="utf-8").read().lower()
     for forbidden in ("password", "private_key", "secret", "bearer"):
@@ -575,6 +624,10 @@ PY
 # with no viewer job; the scenes still preparing are not served.
 TRAIN_ARGS="${DATASET_ARGS/\"split\": \"test\"/\"split\": \"train\"}"
 [ "${TRAIN_ARGS}" != "${DATASET_ARGS}" ] || fail "could not derive the train split arguments"
+# Both splits share the raw root, so the train cache is the test one's sibling.
+TRAIN_RELATIVE="${CACHE_RELATIVE%/test}/train"
+TRAIN_ARGS="${TRAIN_ARGS/\"cacheRelative\": \"${CACHE_RELATIVE}\"/\"cacheRelative\": \"${TRAIN_RELATIVE}\"}"
+case "${TRAIN_ARGS}" in *"${TRAIN_RELATIVE}"*) ;; *) fail "could not derive the train cache path" ;; esac
 run_flow trainone "[
   {\"command\": \"dataset_prepare\", \"args\": {${TRAIN_ARGS}, \"scenes\": [\"train_0000\"], \"workers\": 1}},
   {\"command\": \"dataset_prepare_submit\", \"args\": {$(profile_args), \"previewHash\": \"@last_preview_hash\", \"confirmed\": true}}
@@ -796,12 +849,111 @@ for i in {1..90}; do
     sleep 0.5
 done
 [ "${HEADER_OK}" -eq 1 ] || fail "viewer header kept stale remote state after opening local scene: ${LAST_HEADER}"
+
+# Step 3: Attach a full remote session (`remote_connect`) and switch to local again;
+# `disconnect_remote_in_background` must send `remote stop` over SSH (`remote-stop` in FAKE_SSH_LOG).
+REMOTE_CACHE_ROOT=$(python3 - "${CLUSTER}/results" <<'PY'
+from pathlib import Path
+import sys
+
+results_dir = Path(sys.argv[1])
+candidates = sorted(
+    p.parent.parent
+    for p in results_dir.rglob("COMPLETE.json")
+    if p.parent.name == "scene_0000" and (p.parent / "manifest.json").is_file()
+)
+if not candidates:
+    manifests = sorted(str(p) for p in results_dir.rglob("manifest.json"))
+    raise SystemExit(f"No prepared scene_0000 under {results_dir}; manifests={manifests}")
+print(candidates[0])
+PY
+) || fail "failed to locate prepared remote cache root for Flow F Step 3"
+
+REMOTE_CONNECT_PAYLOAD=$(python3 - "${PROFILE_ID}" "${REMOTE_CACHE_ROOT}" <<'PY'
+import json, sys
+
+dataset_meta = {
+    "dataset": {
+        "scenes": [
+            {"scene_id": "scene_0000", "state": "ready"},
+            {"scene_id": "scene_0001", "state": "ready"},
+            {"scene_id": "scene_0002", "state": "ready"},
+        ],
+        "label": "OPV2V test",
+        "server": "Dataset e2e fake cluster",
+    }
+}
+connect_args = {
+    "alias": "cluster-b",
+    "dataRoot": sys.argv[2],
+    "profileId": sys.argv[1],
+}
+js = (
+    "(async () => { "
+    f"const r = await window.__TAURI_INTERNALS__.invoke('remote_connect', {json.dumps(connect_args)}); "
+    f"await window.__TAURI_INTERNALS__.invoke('set_viewer_dataset_scenes', {json.dumps(dataset_meta)}); "
+    "return r; "
+    "})()"
+)
+print(json.dumps({"window": "main", "script": js}))
+PY
+)
+curl -s -f -X POST \
+    -H "Authorization: Bearer ${CTRL_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d "${REMOTE_CONNECT_PAYLOAD}" \
+    "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || fail "failed to invoke remote_connect in Flow F"
+
+REMOTE_ATTACHED=0
+LAST_REMOTE_ATTACH=""
+for i in {1..90}; do
+    if grep -q "^remote-start$" "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null; then
+        RESP=$(curl -s -X POST \
+            -H "Authorization: Bearer ${CTRL_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"window":"viewer","script":"(() => { const body = document.body ? document.body.innerText : \"\"; const ok = body.includes(\"scene_0000\") && body.includes(\"Streaming over SSH\") && !body.includes(\"demo-junction\"); return { ok, snippet: body.slice(0, 300) }; })()"}' \
+            "http://127.0.0.1:${CTRL_PORT}/eval" 2>/dev/null || echo "")
+        if [ -n "${RESP}" ]; then
+            LAST_REMOTE_ATTACH="${RESP}"
+        fi
+        if echo "${RESP}" | grep -q '"ok":true'; then
+            REMOTE_ATTACHED=1
+            break
+        fi
+    fi
+    sleep 0.5
+done
+[ "${REMOTE_ATTACHED}" -eq 1 ] || fail "remote_connect did not attach remote viewer before second local switch (${LAST_REMOTE_ATTACH}; ssh log: $(tr '\n' ',' < "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null))"
+
+curl -s -f -X POST \
+    -H "Authorization: Bearer ${CTRL_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d "${LOCAL_OPEN_PAYLOAD}" \
+    "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || fail "failed to invoke second start_local in Flow F"
+
+REMOTE_STOPPED=0
+for i in {1..40}; do
+    if grep -q "^remote-stop$" "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null; then
+        RESP=$(curl -s -X POST \
+            -H "Authorization: Bearer ${CTRL_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"window":"viewer","script":"(() => { const body = document.body ? document.body.innerText : \"\"; return { ok: body.includes(\"demo-junction\") && !body.includes(\"Streaming over SSH\") }; })()"}' \
+            "http://127.0.0.1:${CTRL_PORT}/eval" 2>/dev/null || echo "")
+        if echo "${RESP}" | grep -q '"ok":true'; then
+            REMOTE_STOPPED=1
+            break
+        fi
+    fi
+    sleep 0.5
+done
+[ "${REMOTE_STOPPED}" -eq 1 ] || fail "switching to local after remote_connect did not send remote-stop and clear header (ssh log: $(tr '\n' ',' < "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null))"
+
 mkdir -p /tmp/e2e-shots
 screencapture -x /tmp/e2e-shots/remote-then-local-header.png 2>/dev/null || true
 kill -TERM "${APP_PID}" 2>/dev/null || true
 wait "${APP_PID}" 2>/dev/null || true
 APP_PID=""
-echo "Step CD-19 verified: opening local scene after fake-SSH session in same process cleared streaming header: ${LAST_HEADER}"
+echo "Step CD-19 verified: opening local scene after fake-SSH session in same process sent remote-stop and cleared streaming header: ${LAST_HEADER}"
 
 # --- Flow E: an older coperceive on the cluster --------------------------------
 # The profile's interpreter is fake_old_python.sh: no `capabilities`, no

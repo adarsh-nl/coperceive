@@ -4,7 +4,7 @@ Status: accepted. The licence is Apache-2.0. The repository stays private.
 
 ## Context
 
-The project is meant to be open source and owned by Adarsh. Dependencies and datasets have their own terms. Griffin’s toolkit is MIT. Griffin’s recordings are not redistributed by this repository. OpenCOOD's academic-only licence is a poor fit for a library other labs should be able to ship.
+The project is meant to be open source and owned by the maintainer. Dependencies and datasets have their own terms. Griffin’s toolkit is MIT. Griffin’s recordings are not redistributed by this repository. OpenCOOD's academic-only licence is a poor fit for a library other labs should be able to ship.
 
 ## Options
 
@@ -20,7 +20,7 @@ The project is meant to be open source and owned by Adarsh. Dependencies and dat
 
 ## Decision
 
-Recommend Apache-2.0. The tree uses that text until Adarsh says otherwise. Copyright line: Adarsh (github.com/adarsh-nl), 2026. No surname and no email were invented.
+Recommend Apache-2.0. The tree uses that text until the maintainer says otherwise. Copyright line: the maintainer (github.com/adarsh-nl), 2026. No surname and no email were invented.
 
 ## Consequences
 

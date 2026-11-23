@@ -33,6 +33,31 @@ export interface PipelineSpec {
   description: string;
 }
 
+/** One model of an installed plugin, as `coperceive model list --json` reports it. */
+export interface BuiltinModel {
+  gpu: boolean;
+  /** The `--option` keys the model's manifest declares. */
+  options: string[];
+  /**
+   * True when the manifest's `inputs.raw` is non-empty. Absent on a listing from an
+   * older coperceive: the raw root stays required.
+   */
+  raw_inputs?: boolean;
+  cpus?: number | null;
+  memory_gb?: number | null;
+  transient_artifacts?: string[];
+  depends_on?: string[];
+}
+
+/** An installed plugin from the cluster's `coperceive model list --json`. */
+export interface BuiltinPlugin {
+  name: string;
+  manifest: string | null;
+  error: string | null;
+  modules: string[];
+  models: Record<string, BuiltinModel>;
+}
+
 export interface PipelineEntry {
   id: string;
   name: string;
@@ -41,6 +66,9 @@ export interface PipelineEntry {
   spec: PipelineSpec;
   registration_path: string | null;
   plugin_manifest: string | null;
+  /** The cluster's listing of a built-in plugin; absent for a custom pipeline or a
+   * cluster whose coperceive is too old to list its models. */
+  builtin?: BuiltinPlugin | null;
 }
 
 export interface RunPlanRequest {
@@ -55,6 +83,15 @@ export interface RunPlanRequest {
   model: string;
   raw_root: string;
   media_root: string;
+  /** A model parameter the plan records as a path (Griffin's required ckpt_root). */
+  ckpt_root: string;
+  /** The AP protocol the run is made for: `default` or `legacy`. */
+  eval_protocol: string;
+  /**
+   * The plugin's interpreter for a built-in model (`--plugin-python`): a full path on
+   * the cluster, or empty for the manifest's environment.
+   */
+  plugin_python?: string;
   environment_override: EnvironmentSetup | null;
 }
 
@@ -63,6 +100,10 @@ export interface PlanArtifact {
   sha256: string | null;
   kind: string;
   real_path: string | null;
+  /** A folder's fingerprint: the sha256 of its file listing (path and size of every file). */
+  listing_sha256?: string | null;
+  /** How many files that listing holds. */
+  file_count?: number | null;
 }
 
 export interface PlanCheck {
@@ -97,12 +138,24 @@ export interface RunPlan {
   model: string;
   raw_root: PlanArtifact;
   media_root: PlanArtifact;
+  /** The model's ckpt_root parameter; empty for a model that declares none. */
+  ckpt_root: PlanArtifact;
+  /** The --option keys the model's manifest declared when the plan was saved. */
+  model_options?: string[];
+  /** The AP protocol recorded with the plan; old plans are `default`. */
+  eval_protocol: string;
+  /** The `--plugin-python` the run line passes; empty or absent = the manifest's environment. */
+  plugin_python?: string;
   work_dir: string;
   staging_seconds: number | null;
   output_dir: string;
   scratch_dir: string;
   /** Model-evaluation GPU default, e.g. gpu:lovelace:1; null for CPU-only. */
   gres?: string | null;
+  /** A built-in run's --time as `coperceive model run --slurm` estimates it. */
+  time_estimate?: string | null;
+  /** The profile partition's discovered time limit; null when none was found. */
+  partition_max_time?: string | null;
   checks: PlanCheck[];
   contract_check_script: string;
   nothing_submitted: boolean;
@@ -195,11 +248,182 @@ export function validateArgumentForm(spec: PipelineSpec, form: ArgumentForm): st
   return errors;
 }
 
-/** Every check passed, so the plan can be saved. */
+/**
+ * Whether the plan needs a checkpoint path. A built-in model takes one only when its
+ * manifest declares a `checkpoint` option (Griffin's models pin their own weights, and
+ * the cluster refuses a checkpoint for them). A model the listing does not know, or a
+ * cluster too old to list its models, gets no field: checking the plan names the reason.
+ * A custom pipeline takes one when its registration has a checkpoint-role argument.
+ */
+export function pipelineNeedsCheckpoint(entry: PipelineEntry | null, model: string): boolean {
+  if (!entry) return false;
+  if (entry.source === "builtin") {
+    return entry.builtin?.models[model.trim()]?.options.includes("checkpoint") ?? false;
+  }
+  return entry.spec.arguments.some((argument) => argument.role === "checkpoint");
+}
+
+/**
+ * Whether a built-in model declares the required ckpt_root parameter (Griffin's released
+ * checkpoints folder). Like the checkpoint rule, the cluster's model list is the authority:
+ * a model the listing does not know gets no field, and the plan check names the reason.
+ */
+export function pipelineNeedsCkptRoot(entry: PipelineEntry | null, model: string): boolean {
+  if (!entry || entry.source !== "builtin") return false;
+  return entry.builtin?.models[model.trim()]?.options.includes("ckpt_root") ?? false;
+}
+
+export type EvalProtocol = "default" | "legacy";
+
+export const DEFAULT_EVAL_PROTOCOL: EvalProtocol = "default";
+
+/** The two choices New evaluation offers, with the wording of docs/eval.md. */
+export const EVAL_PROTOCOL_CHOICES: ReadonlyArray<{
+  value: EvalProtocol;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "default",
+    label: "Default",
+    description:
+      "OpenCOOD-style: per-frame ranking, ground truth from every connected agent within 70 m",
+  },
+  {
+    value: "legacy",
+    label: "Legacy (v0.1.1)",
+    description: "for numbers comparable to v0.1.1",
+  },
+];
+
+/**
+ * Why a plugin interpreter path cannot be used, or null when it can (empty = none).
+ * The same rules as the app's Rust check and `coperceive model run --plugin-python`:
+ * a full path (the job passes it exactly as given, so a relative one would resolve
+ * against the compute node's directory) and no line break or other control character.
+ */
+export function pluginPythonProblem(value: string): string | null {
+  if (value.trim() === "") return null;
+  // Control characters (U+0000–U+001F, U+007F–U+009F): a job-script line must stay one line.
+  const isControl = (code: number) => code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+  if ([...value].some((char) => isControl(char.codePointAt(0) ?? 0))) {
+    return "--plugin-python: the interpreter path contains a line break or another control character.";
+  }
+  if (!value.startsWith("/")) return `--plugin-python: give a full path (got ${value})`;
+  return null;
+}
+
+/** The plan review's line for the plugin interpreter. */
+export function pluginPythonLabel(value: string | null | undefined): string {
+  return value && value.trim() !== "" ? value : "From the model's manifest (environment)";
+}
+
+/** One line for the plan review, the run history and the job watch. */
+export function evalProtocolLabel(value: string | null | undefined): string {
+  const found = EVAL_PROTOCOL_CHOICES.find((choice) => choice.value === value);
+  return found ? `${found.label} — ${found.description}` : `${DEFAULT_EVAL_PROTOCOL} (not recorded)`;
+}
+
+/** The `metrics.json` config keys that identify an evaluated run's protocol. */
+export interface EvalProtocolConfig {
+  ranking_scope?: string | null;
+  gt_scope?: string | null;
+  comm_range_m?: number | null;
+}
+
+/**
+ * The label `coperceive eval report` prints (coperceive/evaluation/report.py,
+ * config_protocol_label): a config without the keys, or pooled + ego-only, is the
+ * legacy protocol. `eval compare` refuses two runs whose labels differ.
+ */
+export function evalProtocolConfigLabel(config: EvalProtocolConfig | null | undefined): string {
+  if (!config || config.ranking_scope == null || config.gt_scope == null) {
+    return "legacy (pooled, ego-only)";
+  }
+  if (config.ranking_scope === "pooled" && config.gt_scope === "ego_only") {
+    return "legacy (pooled, ego-only)";
+  }
+  let text = `ranking ${config.ranking_scope}, ground truth ${config.gt_scope}`;
+  if (config.gt_scope === "connected_union" && typeof config.comm_range_m === "number") {
+    text += ` (${config.comm_range_m} m)`;
+  }
+  return text;
+}
+
+/** Whether two evaluated runs can be compared (same ranking scope, GT scope and range). */
+export function sameEvalProtocol(
+  a: EvalProtocolConfig | null | undefined,
+  b: EvalProtocolConfig | null | undefined,
+): boolean {
+  return evalProtocolConfigLabel(a) === evalProtocolConfigLabel(b);
+}
+
+/**
+ * Whether a built-in model reads raw files (`inputs.raw` in its manifest). The cluster's
+ * model list reports that as `raw_inputs`. A listing that omits the field, or a model it
+ * does not name, keeps the raw root required.
+ */
+export function pipelineNeedsRawRoot(entry: PipelineEntry | null, model: string): boolean {
+  if (!entry || entry.source !== "builtin") return false;
+  return entry.builtin?.models[model.trim()]?.raw_inputs !== false;
+}
+
+/** A built-in model always runs over its scenes; a custom pipeline when it declares one. */
+export function pipelineNeedsSplit(entry: PipelineEntry | null): boolean {
+  if (!entry) return false;
+  if (entry.source === "builtin") return true;
+  return entry.spec.arguments.some((argument) => argument.role === "test_data");
+}
+
+/**
+ * Why a built-in model's plan inputs cannot be checked, or null. The model key is required.
+ * The raw root is required only when the model declares raw inputs (`needsRawInputs`,
+ * from `inputs.raw`); omitted means required, as an older listing does. The media root is
+ * optional, exactly as the CLI's repeatable `--media-root` is (the job script then leaves
+ * the flag out).
+ */
+export function builtinPlanInputProblem(input: {
+  model: string;
+  rawRoot: string;
+  mediaRoot: string;
+  needsRawInputs?: boolean;
+}): string | null {
+  const needsRaw = input.needsRawInputs !== false;
+  if (!input.model.trim() || (needsRaw && !input.rawRoot.trim())) {
+    return "Choose the model key and raw root for this built-in model.";
+  }
+  // input.mediaRoot is deliberately not checked: it is optional.
+  return null;
+}
+
+/** A file with its sha256, or a non-empty folder with its listing fingerprint (as Rust's
+ * `PlanArtifact::is_fingerprinted`). */
+export function artifactIsFingerprinted(artifact: PlanArtifact): boolean {
+  if (artifact.sha256) return true;
+  return (
+    artifact.kind === "folder" &&
+    Boolean(artifact.listing_sha256) &&
+    (artifact.file_count ?? 0) > 0
+  );
+}
+
+/** What identifies the recorded checkpoint or split, in words for the plan view. */
+export function artifactFingerprintText(artifact: PlanArtifact): string {
+  if (artifact.sha256) return `sha256 ${artifact.sha256}`;
+  if (artifact.kind === "folder" && artifact.listing_sha256) {
+    const files = artifact.file_count ?? 0;
+    return `listing sha256 ${artifact.listing_sha256} (${files} ${files === 1 ? "file" : "files"})`;
+  }
+  return "not recorded";
+}
+
+/** Every check passed and every given path is fingerprinted, so the plan can be saved
+ * (the same rule as Rust's `RunPlan::is_saveable`). */
 export function planIsSaveable(plan: RunPlan | null): boolean {
   if (!plan) return false;
   if (!plan.checks.every((check) => check.ok)) return false;
-  if (!plan.checkpoint.sha256 || !plan.split.sha256) return false;
+  if (plan.checkpoint.path && !plan.checkpoint.sha256) return false;
+  if (plan.split.path && !artifactIsFingerprinted(plan.split)) return false;
   return plan.nothing_submitted === true;
 }
 
@@ -442,6 +666,8 @@ export interface RunHistoryEntry {
   started: string | null;
   ended: string | null;
   plan_available: boolean;
+  /** The protocol the saved plan records; old plans are `default`. */
+  eval_protocol?: string;
 }
 
 /** Seconds in a Slurm duration ("[D-]HH:MM:SS", "MM:SS"), or null. */
@@ -451,6 +677,30 @@ export function slurmSeconds(value: string | null): number | null {
   if (!match) return null;
   const [, days, hours, minutes, seconds] = match;
   return Number(days ?? 0) * 86400 + Number(hours ?? 0) * 3600 + Number(minutes) * 60 + Number(seconds);
+}
+
+/** The form's walltime for a plan: the CLI's own estimate, never a fixed default. */
+export function defaultWalltime(plan: Pick<RunPlan, "time_estimate"> | null): string {
+  return plan?.time_estimate ?? "";
+}
+
+/** Why the walltime cannot be submitted (checked before the preview), or null. With no
+ * discovered partition limit nothing is refused; the server checks it again. */
+export function walltimeProblem(
+  walltime: string,
+  plan: Pick<RunPlan, "time_estimate" | "partition_max_time"> | null,
+): string | null {
+  const text = walltime.trim();
+  if (!text) {
+    return "Enter the walltime for this run: the plan has no time estimate.";
+  }
+  const limit = plan?.partition_max_time ?? null;
+  const wanted = slurmSeconds(text);
+  const max = slurmSeconds(limit);
+  if (limit && wanted !== null && max !== null && wanted > max) {
+    return `The walltime ${text} is longer than the partition's time limit ${limit}; enter ${limit} or less.`;
+  }
+  return null;
 }
 
 /** Plain-language state for a history row. */

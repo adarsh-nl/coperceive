@@ -2236,8 +2236,9 @@ echo ""
 echo "--- Step 5d: Update banner from a mock latest.json ---"
 export UPDATE_PORT_FILE="${TMP_DIR}/update.port"
 export UPDATE_LOG_FILE="${TMP_DIR}/update-hits.log"
-rm -f "${UPDATE_PORT_FILE}" "${UPDATE_LOG_FILE}"
-python3 - << 'PY' &
+UPDATE_SERVER_ERR="${TMP_DIR}/update-server.stderr.log"
+rm -f "${UPDATE_PORT_FILE}" "${UPDATE_PORT_FILE}.tmp" "${UPDATE_LOG_FILE}" "${UPDATE_SERVER_ERR}"
+python3 - << 'PY' 2>"${UPDATE_SERVER_ERR}" &
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2261,6 +2262,13 @@ body = json.dumps(
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/healthz":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
         with open(log_file, "a", encoding="utf-8") as handle:
             handle.write(self.path + "\n")
         if ".tar.gz" in self.path or ".app" in self.path:
@@ -2322,28 +2330,41 @@ class Handler(BaseHTTPRequestHandler):
 
 
 server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-with open(port_file, "w", encoding="utf-8") as handle:
+tmp_port_file = port_file + ".tmp"
+with open(tmp_port_file, "w", encoding="utf-8") as handle:
     handle.write(str(server.server_address[1]))
+os.replace(tmp_port_file, port_file)
 server.serve_forever()
 PY
 UPDATE_SERVER_PID=$!
-for i in {1..40}; do
-    if [ -s "${UPDATE_PORT_FILE}" ]; then
-        break
-    fi
+UPDATE_WAIT_LIMIT=30
+UPDATE_WAIT_START=${SECONDS}
+UPDATE_DEADLINE=$((UPDATE_WAIT_START + UPDATE_WAIT_LIMIT))
+UPDATE_READY=0
+while [ "${SECONDS}" -lt "${UPDATE_DEADLINE}" ]; do
     if ! kill -0 "${UPDATE_SERVER_PID}" 2>/dev/null; then
         echo "Error: mock update server exited" >&2
+        cat "${UPDATE_SERVER_ERR}" >&2 || true
         exit 17
+    fi
+    if [ -s "${UPDATE_PORT_FILE}" ]; then
+        CANDIDATE_PORT="$(cat "${UPDATE_PORT_FILE}")"
+        if curl -fsS --max-time 1 "http://127.0.0.1:${CANDIDATE_PORT}/healthz" >/dev/null 2>&1; then
+            UPDATE_READY=1
+            break
+        fi
     fi
     sleep 0.1
 done
-if [ ! -s "${UPDATE_PORT_FILE}" ]; then
-    echo "Error: mock update server did not bind" >&2
+if [ "${UPDATE_READY}" -ne 1 ]; then
+    echo "Error: mock update server did not bind within ${UPDATE_WAIT_LIMIT}s" >&2
+    cat "${UPDATE_SERVER_ERR}" >&2 || true
     exit 17
 fi
+UPDATE_WAIT_ELAPSED=$((SECONDS - UPDATE_WAIT_START))
 UPDATE_PORT=$(cat "${UPDATE_PORT_FILE}")
 export COPERCEIVE_UPDATE_URL="http://127.0.0.1:${UPDATE_PORT}/latest.json"
-echo "Step 5d mock latest.json at ${COPERCEIVE_UPDATE_URL}"
+echo "Step 5d mock latest.json at ${COPERCEIVE_UPDATE_URL} (ready in ${UPDATE_WAIT_ELAPSED}s)"
 
 osascript <<EOF || true
 tell application "System Events"
@@ -3202,6 +3223,33 @@ def eval_js(script, timeout=15):
         raise RuntimeError(data["error"])
     return data.get("result")
 
+def poll_until(read_fn, expected_desc, match_fn, context, timeout_s=5.0, interval_s=0.1):
+    deadline = time.monotonic() + timeout_s
+    last_val = None
+    while True:
+        last_val = read_fn()
+        if match_fn(last_val):
+            return last_val
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"{context}: holds {last_val!r}, expected {expected_desc} after {timeout_s:.1f}s"
+            )
+        time.sleep(interval_s)
+
+def wait_for_field_value(field_id, expected, context, timeout_s=5.0, interval_s=0.1):
+    script = f"(() => (document.getElementById({json.dumps(field_id)}) || {{}}).value)()"
+    return poll_until(
+        lambda: eval_js(script),
+        repr(expected),
+        lambda v: v == expected,
+        f"{context} (#{field_id})",
+        timeout_s=timeout_s,
+        interval_s=interval_s,
+    )
+
+def wait_for_dom(predicate_js, context, timeout_s=5.0, interval_s=0.1):
+    return poll_until(lambda: eval_js(predicate_js), "truthy", bool, context, timeout_s, interval_s)
+
 # 1. Click HPC Workspace tab
 res = eval_js("""(() => {
     const tab = Array.from(document.querySelectorAll('nav button')).find(b => (b.textContent || '').trim() === 'HPC Workspace');
@@ -3210,7 +3258,10 @@ res = eval_js("""(() => {
     return 'clicked';
 })()""")
 print(f"Step 5h HPC tab navigation: {res}")
-time.sleep(0.5)
+wait_for_dom(
+    "(() => document.getElementById('hpc-user') ? 'already_open' : (Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Add server') ? 'ready' : ''))()",
+    "Step 5h HPC Workspace tab",
+)
 
 # 2. Click Add server button if editor is not open
 res = eval_js("""(() => {
@@ -3221,7 +3272,7 @@ res = eval_js("""(() => {
     return 'clicked';
 })()""")
 print(f"Step 5h Add server button: {res}")
-time.sleep(0.5)
+wait_for_dom("(() => document.getElementById('hpc-user') ? 'open' : '')()", "Step 5h Add server editor")
 
 # 3. Assert HTML attributes disable platform autocorrect and autocapitalize
 attrs = json.loads(eval_js("""(() => {
@@ -3265,7 +3316,22 @@ eval_js("""(() => {
         sel.dispatchEvent(new Event('change', { bubbles: true }));
     }
 })()""")
-time.sleep(0.2)
+wait_for_dom(
+    "(() => { const p = document.getElementById('hpc-partition'); return p && !p.disabled ? 'enabled' : ''; })()",
+    "Step 5h Slurm partition field enable",
+)
+
+def focus_and_clear(field_id):
+    res = eval_js(f"""(() => {{
+        const el = document.getElementById({json.dumps(field_id)});
+        if (!el) return 'missing';
+        el.focus();
+        el.value = '';
+        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        return 'focused';
+    }})()""")
+    assert res == "focused", f"Input #{field_id} missing when focusing: {res}"
+    wait_for_field_value(field_id, "", f"Clearing #{field_id}")
 
 cases = [
     ("hpc-user", "cluster-user"),
@@ -3274,16 +3340,7 @@ cases = [
 ]
 
 for field_id, text in cases:
-    # Focus field and clear it
-    eval_js(f"""(() => {{
-        const el = document.getElementById('{field_id}');
-        if (!el) return 'missing';
-        el.focus();
-        el.value = '';
-        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-        return 'focused';
-    }})()""")
-    time.sleep(0.2)
+    focus_and_clear(field_id)
 
     # Use AppleScript System Events to keystroke the text into the focused field
     as_script = f'''
@@ -3295,25 +3352,18 @@ for field_id, text in cases:
     end tell
     '''
     subprocess.run(["osascript", "-e", as_script], check=True)
-    time.sleep(0.3)
-
-    val = eval_js(f"(() => (document.getElementById('{field_id}') || {{}}).value)()")
-    assert val == text, f"Expected typed value '{text}', got '{val}' (auto-capitalisation bug!)"
+    val = wait_for_field_value(
+        field_id,
+        text,
+        f"Typed #{field_id} lowercase check (auto-capitalisation bug!)",
+    )
     print(f"Step 5h typed #{field_id}: '{val}' (matched expected lowercase)")
 
 # 5. Test macOS Edit Menu Shortcuts (Cmd+A, Cmd+C, Cmd+V, Cmd+X)
 print("Testing macOS Edit menu shortcuts in real app...", flush=True)
 
 # Test Cmd+A + typing: type text into #hpc-user, Cmd+A, type replacement, assert field holds ONLY replacement
-eval_js("""(() => {
-    const el = document.getElementById('hpc-user');
-    if (!el) return 'missing';
-    el.focus();
-    el.value = '';
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    return 'focused';
-})()""")
-time.sleep(0.2)
+focus_and_clear("hpc-user")
 
 as_type_initial = '''
 tell application "System Events"
@@ -3324,10 +3374,7 @@ tell application "System Events"
 end tell
 '''
 subprocess.run(["osascript", "-e", as_type_initial], check=True)
-time.sleep(0.3)
-
-val_orig = eval_js("(() => (document.getElementById('hpc-user') || {}).value)()")
-assert val_orig == "original-text", f"Setup failed: expected 'original-text', got '{val_orig}'"
+val_orig = wait_for_field_value("hpc-user", "original-text", "Step 5i Cmd+A initial setup")
 
 # Cmd+A (Select All) then type "replaced"
 as_select_all_and_replace = '''
@@ -3341,14 +3388,12 @@ tell application "System Events"
 end tell
 '''
 subprocess.run(["osascript", "-e", as_select_all_and_replace], check=True)
-time.sleep(0.3)
-
-val_replaced = eval_js("(() => (document.getElementById('hpc-user') || {}).value)()")
-assert val_replaced == "replaced", f"Cmd+A failed! Expected 'replaced', got '{val_replaced}'"
+val_replaced = wait_for_field_value("hpc-user", "replaced", "Cmd+A select-all and replace failed")
 print(f"Step 5i Cmd+A select-all and replace verified: '{val_replaced}'")
 
 # Test Cmd+C / Cmd+V round trip:
 # Select all in #hpc-user with Cmd+A and copy with Cmd+C
+subprocess.run(["pbcopy"], input="", text=True, check=False)
 as_copy = '''
 tell application "System Events"
     tell process "Coperceive"
@@ -3360,18 +3405,15 @@ tell application "System Events"
 end tell
 '''
 subprocess.run(["osascript", "-e", as_copy], check=True)
-time.sleep(0.2)
+poll_until(
+    lambda: subprocess.run(["pbpaste"], check=False, capture_output=True, text=True).stdout,
+    repr("replaced"),
+    lambda v: v == "replaced",
+    "Cmd+C copy clipboard",
+)
 
 # Focus #hpc-host, clear it
-eval_js("""(() => {
-    const el = document.getElementById('hpc-host');
-    if (!el) return 'missing';
-    el.focus();
-    el.value = '';
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    return 'focused';
-})()""")
-time.sleep(0.2)
+focus_and_clear("hpc-host")
 
 # Paste with Cmd+V into #hpc-host
 as_paste = '''
@@ -3383,10 +3425,7 @@ tell application "System Events"
 end tell
 '''
 subprocess.run(["osascript", "-e", as_paste], check=True)
-time.sleep(0.3)
-
-val_pasted = eval_js("(() => (document.getElementById('hpc-host') || {}).value)()")
-assert val_pasted == "replaced", f"Cmd+C / Cmd+V round trip failed! Expected 'replaced', got '{val_pasted}'"
+val_pasted = wait_for_field_value("hpc-host", "replaced", "Cmd+C / Cmd+V round trip failed")
 print(f"Step 5i Cmd+C copy and Cmd+V paste verified: '{val_pasted}'")
 
 # Test Cmd+X (Cut) and Cmd+V (Paste):
@@ -3401,16 +3440,10 @@ tell application "System Events"
 end tell
 '''
 subprocess.run(["osascript", "-e", as_cut], check=True)
-time.sleep(0.3)
-
-val_cut = eval_js("(() => (document.getElementById('hpc-host') || {}).value)()")
-assert val_cut == "", f"Cmd+X cut failed! Expected empty field, got '{val_cut}'"
+val_cut = wait_for_field_value("hpc-host", "", "Cmd+X cut failed")
 
 subprocess.run(["osascript", "-e", as_paste], check=True)
-time.sleep(0.3)
-
-val_recut_pasted = eval_js("(() => (document.getElementById('hpc-host') || {}).value)()")
-assert val_recut_pasted == "replaced", f"Cmd+V paste after cut failed! Expected 'replaced', got '{val_recut_pasted}'"
+val_recut_pasted = wait_for_field_value("hpc-host", "replaced", "Cmd+V paste after cut failed")
 print(f"Step 5i Cmd+X cut and Cmd+V paste verified: '{val_recut_pasted}'")
 
 # 6. Close server editor

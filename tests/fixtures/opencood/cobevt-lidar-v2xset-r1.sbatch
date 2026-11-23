@@ -129,5 +129,5 @@ rsync -a "$SCRATCH/out/" <tmp>/results/"$SLURM_JOB_ID"/
 rsync -a --include='*/' --include='*.log' --include='artifacts/***' --exclude='*' --prune-empty-dirs "$SCRATCH/work/" <tmp>/results/"$SLURM_JOB_ID"/work/
 mkdir -p <tmp>/predictions/r1
 rsync -a "$SCRATCH/out/$RUN_ID/" <tmp>/predictions/r1/
-echo "done: <tmp>/predictions/r1 (exit $RC)"
+echo "done:" <tmp>/predictions/r1 "(exit $RC)"
 exit "$RC"

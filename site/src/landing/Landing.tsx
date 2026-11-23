@@ -59,6 +59,34 @@ function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; c
   );
 }
 
+function SimulatedBadge() {
+  return (
+    <span
+      data-simulated-badge
+      style={{
+        position: "absolute",
+        right: "var(--gx)",
+        bottom: 12,
+        zIndex: 2,
+        pointerEvents: "none",
+        display: "inline-flex",
+        alignItems: "center",
+        padding: "4px 10px",
+        borderRadius: 999,
+        background: "#111114",
+        border: "1px solid rgba(255,255,255,0.22)",
+        fontFamily: MONO_CSS,
+        fontSize: 11,
+        lineHeight: 1.2,
+        letterSpacing: "0.02em",
+        color: "#d2d2d7",
+      }}
+    >
+      Simulated
+    </span>
+  );
+}
+
 export function Landing() {
   const storyRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -190,6 +218,7 @@ export function Landing() {
             <nav aria-label="Page" className="lm-nav" style={{ display: "flex", alignItems: "center", gap: 28, fontSize: 14, color: "#a1a1a6" }}>
               <a href="#pipeline" className="lm-link lm-anchor">Pipeline</a>
               <a href="#install" className="lm-link lm-anchor">Install</a>
+              <a href="/coperceive/docs/" className="lm-link">Docs</a>
               <a href={REPO} className="lm-link" style={{ padding: "9px 16px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.18)", color: "#f5f5f7" }}>GitHub</a>
             </nav>
           </header>
@@ -223,6 +252,7 @@ export function Landing() {
           <div aria-hidden="true" style={{ position: "absolute", right: 24, top: "50%", transform: "translateY(-50%)", width: 2, height: 160, background: "rgba(255,255,255,0.1)", borderRadius: 2, overflow: "hidden" }}>
             <div ref={barRef} data-progress style={{ width: "100%", height: "0%", background: "#E03A22" }} />
           </div>
+          <SimulatedBadge />
         </div>
       </div>
 
@@ -310,6 +340,7 @@ export function Landing() {
               <span style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ width: 8, height: 8, background: "#E0A431", borderRadius: 1 }} />false positive</span>
               <span style={{ color: "#86868b" }}>· drag to orbit · hover a box</span>
             </div>
+            <SimulatedBadge />
           </div>
         </section>
       </main>

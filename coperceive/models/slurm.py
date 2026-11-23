@@ -23,6 +23,7 @@ import math
 import re
 import shlex
 import subprocess
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,9 +32,19 @@ from typing import cast
 from coperceive.errors import CoperceiveError
 from coperceive.evaluation.predictions import list_runs, read_run_meta
 from coperceive.model import Scene
-from coperceive.models.batch import RunOptions, select_agents
+from coperceive.models.batch import EXIT_EVAL, RunOptions, select_agents
 from coperceive.models.inputs import raw_files, selected_sensors
-from coperceive.models.spec import Manifest, ModelSpec, check_options
+from coperceive.models.spec import (
+    Manifest,
+    ModelSpec,
+    ModelSpecError,
+    check_artifact_name,
+    check_model_key,
+    check_module_name,
+    check_options,
+    check_secret_name,
+    check_slurm_constraint,
+)
 from coperceive.repro.environment import environment_capture_lines
 from coperceive.viewdata import pose_times
 
@@ -76,7 +87,11 @@ def validate_partition(partition: str) -> str:
     return partition
 
 
-_SCRATCH_TEMPLATE_RE = re.compile(r"^[A-Za-z0-9_./${}~-]+$")
+_SCRATCH_PLAIN = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./-")
+# The variables a scratch template may name, as $NAME or ${NAME}: the same two the desktop
+# app's validator (src-tauri/src/hpc.rs) and scripts/griffin/stage_viewer.py expand.
+_SCRATCH_VARIABLES = frozenset({"USER", "SLURM_JOB_ID"})
+_SHELL_NAME = re.compile(r"[A-Za-z0-9_]*")
 
 
 def validate_scratch_template(template: str) -> str:
@@ -84,7 +99,10 @@ def validate_scratch_template(template: str) -> str:
 
     The template is the user/profile choice (for example
     ``/scratch/$USER/$SLURM_JOB_ID``); it must be a safe shell word with a
-    per-job variable so parallel jobs never share a directory.
+    per-job variable so parallel jobs never share a directory. The job's EXIT trap
+    removes this directory, so it may name only ``$USER`` and ``$SLURM_JOB_ID`` (or
+    ``${USER}``/``${SLURM_JOB_ID}``), never a ``..`` segment or a ``~`` (which stays
+    literal inside the job's double quotes): those could make the trap remove a parent.
     """
     if not template or not template.strip():
         raise SlurmError(
@@ -92,12 +110,13 @@ def validate_scratch_template(template: str) -> str:
             "(for example /scratch/$USER/$SLURM_JOB_ID) and pass it with "
             "--slurm-scratch-template or COPERCEIVE_SLURM_SCRATCH_TEMPLATE."
         )
-    if not _SCRATCH_TEMPLATE_RE.match(template):
+    names = _scratch_variables(template)
+    if any(segment == ".." for segment in template.split("/")):
         raise SlurmError(
-            f"scratch template {template!r} has characters that are unsafe in a job script. "
-            "Use the cluster profile's path (letters, digits, _ . / $ { } ~ -)."
+            f"scratch template {template!r} has a '..' segment; the job's EXIT trap removes "
+            "the scratch directory, so it must not climb to a parent."
         )
-    if "$SLURM_JOB_ID" not in template:
+    if "SLURM_JOB_ID" not in names:
         raise SlurmError(
             f"scratch template {template!r} needs $SLURM_JOB_ID so each job gets its own "
             "directory (for example /scratch/$USER/$SLURM_JOB_ID)."
@@ -105,8 +124,92 @@ def validate_scratch_template(template: str) -> str:
     return template
 
 
+def _scratch_variables(template: str) -> list[str]:
+    """The variable names ``template`` uses, in order; a SlurmError for any other text
+    than plain path characters, ``$USER``/``${USER}`` and ``$SLURM_JOB_ID``/``${SLURM_JOB_ID}``.
+    A ``$NAME`` takes the longest name, as bash does: ``$USER_x`` is ``USER_x``."""
+    names: list[str] = []
+    rest = template
+    while True:
+        index = rest.find("$")
+        plain = rest if index < 0 else rest[:index]
+        for ch in plain:
+            if ch in _SCRATCH_PLAIN:
+                continue
+            hint = (
+                " A '~' is not expanded inside the job's quotes; give the absolute path."
+                if ch == "~"
+                else ""
+            )
+            raise SlurmError(
+                f"scratch template {template!r} contains {ch!r}, which is unsafe in a job "
+                "script. Use letters, digits, '_', '.', '/', '-' and the tokens $USER, "
+                f"${{USER}}, $SLURM_JOB_ID, ${{SLURM_JOB_ID}}.{hint}"
+            )
+        if index < 0:
+            return names
+        after = rest[index + 1 :]
+        if after.startswith("{"):
+            end = after.find("}")
+            if end < 0:
+                raise SlurmError(
+                    f"scratch template {template!r} has an unterminated ${{...}} token; "
+                    "close it with '}'."
+                )
+            name = after[1:end]
+            token = "${" + name + "}"
+            rest = after[end + 1 :]
+        else:
+            match = _SHELL_NAME.match(after)
+            name = "" if match is None else match.group(0)
+            token = "$" + name
+            rest = after[len(name) :]
+        if name not in _SCRATCH_VARIABLES:
+            raise SlurmError(
+                f"scratch template {template!r} uses {token!r}, which the job does not "
+                "expand for scratch. Use $USER or $SLURM_JOB_ID."
+            )
+        names.append(name)
+
+
+_RUN_ID = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def validate_run_id(run_id: str) -> str:
+    """Check a run id before it is written into ``#SBATCH --job-name``, the header comment
+    and the ``.slurm/<run_id>.*`` file names: the rule ``coperceive model run`` applies."""
+    if run_id in {"", ".", ".."} or _RUN_ID.fullmatch(run_id) is None:
+        raise SlurmError(
+            f"run id {run_id!r} cannot go into a job script; a run id may contain only "
+            "letters, digits, '.', '_' and '-'."
+        )
+    return run_id
+
+
+def _has_control_character(text: str) -> bool:
+    """A line break or any other control character (Unicode category Cc)."""
+    return any(unicodedata.category(ch) == "Cc" for ch in text)
+
+
 class SlurmError(CoperceiveError):
     """The job could not be planned or submitted."""
+
+
+def validate_logs_dir(logs_dir: Path) -> Path:
+    """Check the ``--slurm-logs`` folder before it becomes ``#SBATCH --output=``/``--error=``.
+
+    Slurm reads an ``#SBATCH`` value up to the first blank, so a folder with a space, a tab
+    or a line break would send the job's logs to another path (or break the script). It is
+    refused with the reason instead of being quoted, which ``#SBATCH`` lines do not honour.
+    """
+    text = str(logs_dir.resolve())
+    if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 0x7F for ch in text):
+        raise SlurmError(
+            f"The Slurm log folder {text!r} (--slurm-logs) contains a space or a control "
+            "character; #SBATCH --output/--error cannot hold one. Choose a log folder whose "
+            "path has no spaces."
+        )
+    return logs_dir
 
 
 def interpreter_module(python: Path) -> str | None:
@@ -322,12 +425,60 @@ def checkpoint_files(
     if not source.is_file():
         raise SlurmError(f"--option {checkpoint.option}={value!r} is not a file to stage")
     name = source.name
-    if not name or any(ch.isspace() or ch in "\"'`$&;|<>()" for ch in name):
+    # The staged path sits inside "..." in the job script: a backslash there would escape
+    # the closing quote, and a control character has no place in a script line.
+    if not name or any(
+        ch.isspace() or ch in "\"'`$&;|<>()\\" or unicodedata.category(ch) == "Cc" for ch in name
+    ):
         raise SlurmError(
             f"checkpoint file name {name!r} has characters a shell word cannot carry safely"
         )
     staged = f"$SCRATCH/checkpoints/{checkpoint.option}/{name}"
     return ((checkpoint.option, str(source.resolve()), staged),)
+
+
+def _check_header_values(manifest: Manifest, spec: ModelSpec, run_id: str, python: Path) -> None:
+    """Every manifest string and CLI value the script writes outside ``shlex.quote``.
+
+    ``parse_manifest`` already refuses these; a Manifest built in code skips the parser,
+    so the emitter checks again before any of them reaches a script line: the job name,
+    the constraint, secret names, module names, the key of every model the job runs (header
+    comment, ``"$SCRATCH/out/<run_id>-<key>/"``), their transient artefact names (inside
+    ``--exclude='artifacts/<key>/<name>/***'``) and the checkpoint option name (inside
+    ``"$SCRATCH/checkpoints/<option>"``).
+    """
+    job_name = f"model-{manifest.name}-{run_id}"
+    if _RUN_ID.fullmatch(job_name) is None:
+        raise SlurmError(
+            f"job name {job_name!r} cannot go into #SBATCH --job-name; the manifest name "
+            f"{manifest.name!r} must be [a-z0-9_-]+."
+        )
+    if spec.resources.slurm_constraint is not None:
+        check_slurm_constraint(
+            spec.resources.slurm_constraint, f"models.{spec.key}.resources.slurm_constraint"
+        )
+    for secret in manifest.environment.secrets:
+        check_secret_name(secret, "environment.secrets")
+    try:
+        for module in manifest.environment.modules:
+            check_module_name(module, "environment.modules")
+        for key, member in manifest.models.items():
+            check_model_key(key, "models")
+            check_model_key(member.key, "models")
+            for name in member.outputs.transient_artifacts:
+                check_artifact_name(name, f"models.{key}.outputs.transient_artifacts")
+            for dependency in member.depends_on:
+                check_model_key(dependency.model, f"models.{key}.depends_on")
+                check_artifact_name(dependency.artifact, f"models.{key}.depends_on")
+            if member.checkpoint is not None:
+                check_model_key(member.checkpoint.option, f"models.{key}.checkpoint.option")
+    except ModelSpecError as error:
+        raise SlurmError(f"{error}; this manifest value cannot go into a job script") from None
+    if _has_control_character(str(python)):
+        raise SlurmError(
+            f"the interpreter path {str(python)!r} has a line break or control character; "
+            "it cannot go into a job script (pass --slurm-python with a plain path)."
+        )
 
 
 def plan_sbatch(
@@ -347,7 +498,18 @@ def plan_sbatch(
     repo_root: Path | None = None,
 ) -> SlurmPlan:
     """The sbatch of ADR 0011 decision 5 for ``coperceive model run`` over ``scenes``."""
+    run_id = validate_run_id(run_id)
     scratch_template = validate_scratch_template(scratch_template)
+    if options.eval_protocol not in (None, "default", "legacy"):
+        raise SlurmError(
+            f"model run --protocol must be default or legacy, got {options.eval_protocol!r}"
+        )
+    # Validate every option before anything is written: an unknown option, a bad value or a
+    # required option with no value (a manifest option with no default) is refused here,
+    # naming the option, instead of on the compute node after the job was submitted.
+    check_options(spec, options.options)
+    _check_header_values(manifest, spec, run_id, python)
+    validate_logs_dir(logs_dir)
     samples = sum(len(pose_times(scene)) for scene in scenes.values())
     closure = model_closure(manifest, spec, options)
     scene_set: set[str] = set()
@@ -518,7 +680,13 @@ def plan_sbatch(
                     f"{shlex.quote(str(out_root.resolve() / f'{run_id}-{member.key}'))}/",
                 )
             ],
-            f'echo "done: {shlex.quote(str(target))} (exit $RC)"',
+            *(
+                evaluate_lines(python, options, results=results, target=target)
+                if options.evaluate
+                else []
+            ),
+            # The path is its own shell word: a quoted word inside "..." would not be.
+            f'echo "done:" {shlex.quote(str(target))} "(exit $RC)"',
             'exit "$RC"',
             "",
         ]
@@ -541,6 +709,54 @@ def plan_sbatch(
         estimate_source=source,
         checkpoints=checkpoints,
     )
+
+
+def evaluate_lines(python: Path, options: RunOptions, *, results: Path, target: Path) -> list[str]:
+    """``--evaluate`` in the job: score the run after it has come home.
+
+    The model's run line is unchanged. Its output is copied home first (above), so a
+    scoring step stopped by ``--time`` or memory never costs a finished run. Then
+    ``eval run`` scores it on the scenes this job staged, and the run directory, now with
+    ``metrics.json`` and ``evaluation.json``, is copied home again. A run without
+    ``run.json`` counts as a scoring failure, not a skip. A model failure keeps its code;
+    a complete run whose scoring failed exits 5 (spec §Exit codes).
+    """
+    argv = [
+        shlex.quote(str(python)),
+        "-m",
+        "coperceive",
+        "eval",
+        "run",
+        '"$RUN_ID"',
+        "--root",
+        '"$SCRATCH/scenes"',
+        "--predictions",
+        '"$SCRATCH/out"',
+    ]
+    if options.eval_protocol is not None:
+        argv.extend(["--protocol", shlex.quote(options.eval_protocol)])
+    if options.eval_config is not None:
+        argv.extend(["--config", shlex.quote(str(options.eval_config.resolve()))])
+    return [
+        "",
+        "# --evaluate: score the run, as 'eval run' does, on the scenes staged above.",
+        "EVAL_RC=0",
+        'if [ -f "$SCRATCH/out/$RUN_ID/run.json" ]; then',
+        "  set +e",
+        "  " + " ".join(argv),
+        "  EVAL_RC=$?",
+        "  set -e",
+        '  echo "eval run exit $EVAL_RC"',
+        f'  rsync -a "$SCRATCH/out/" {shlex.quote(str(results))}/"$SLURM_JOB_ID"/',
+        f'  rsync -a "$SCRATCH/out/$RUN_ID/" {shlex.quote(str(target))}/',
+        "else",
+        "  # No run.json means nothing to score: a failure, never a silent skip.",
+        '  echo "eval run skipped: no run.json for $RUN_ID" >&2',
+        "  EVAL_RC=1",
+        "fi",
+        "# The model's own failure wins; a complete run whose scoring failed exits 5.",
+        f'if [ "$RC" -eq 0 ] && [ "$EVAL_RC" -ne 0 ]; then RC={EXIT_EVAL}; fi',
+    ]
 
 
 def _run_command(
@@ -580,6 +796,8 @@ def _run_command(
         "--model",
         shlex.quote(spec.key),
     ]
+    if options.eval_protocol is not None:
+        argv.extend(["--protocol", shlex.quote(options.eval_protocol)])
     if raw:
         argv.extend(["--raw-root", '"$SCRATCH/raw"'])
     if options.agent_ids:
@@ -612,11 +830,15 @@ def _run_command(
         argv.append("--force")
     if options.perturbation is not None:
         argv.extend(["--perturb", shlex.quote(options.perturbation.canonical())])
+    if options.plugin_python is not None:
+        # Exactly as given: the node sees the path the user checked on the login node.
+        argv.extend(["--plugin-python", shlex.quote(str(options.plugin_python))])
     return argv
 
 
 def write_plan(plan: SlurmPlan, out_root: Path, run_id: str) -> Path:
     """``<out_root>/.slurm/<run_id>.sbatch`` plus the two ``--files-from`` lists."""
+    run_id = validate_run_id(run_id)
     directory = out_root / SLURM_DIR
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{run_id}.scenes.txt").write_text(
@@ -662,5 +884,7 @@ __all__ = [
     "staged_files",
     "submit",
     "time_limit",
+    "validate_logs_dir",
+    "validate_run_id",
     "write_plan",
 ]

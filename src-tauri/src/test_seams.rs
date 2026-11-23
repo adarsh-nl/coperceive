@@ -20,6 +20,45 @@ use std::path::Path;
 /// process-wide fake SSH environment variables (`FAKE_SSH_LOG`, `FAKE_REMOTE_ROOT`).
 pub static FAKE_SSH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Write an executable test script through a temporary name and rename it into place.
+///
+/// Writing the file that is about to be executed can leave it with a write descriptor
+/// open across a concurrent `fork`, so Linux answers `ETXTBSY` ("Text file busy") on
+/// the `exec`. The temporary file is synced and closed first, then renamed: the name
+/// that is executed is a complete, closed file. This is the same pattern as
+/// `remote_static::scp_tests::recording_scp` (the #170 fix).
+#[cfg(all(test, unix))]
+pub(crate) fn write_executable_atomically(
+    path: &Path,
+    contents: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("script");
+    let staging = path.with_file_name(format!(".{name}.tmp-{}", std::process::id()));
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o755)
+            .open(&staging)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
+    }
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::rename(&staging, path)
+}
+
+/// Crate-wide mutex serializing unit tests that allocate or re-bind ephemeral
+/// loopback TCP ports so parallel tests do not claim a port between
+/// `find_free_loopback_port` returning and the caller binding it.
+pub static PORT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// True when the app was launched by the real-app e2e harness.
 pub fn test_env_active() -> bool {
     std::env::var_os("COPERCEIVE_TEST_ENV").is_some()
@@ -311,6 +350,22 @@ pub fn fake_dry_run_result(dataset_id: &str, preset_id: &str) -> serde_json::Val
     })
 }
 
+/// Atomically writes the smoke-test readiness marker file via a temporary
+/// sibling file and rename so readers never see a partially truncated file.
+pub fn write_test_marker_atomic(
+    marker_path: &std::path::Path,
+    origin: &str,
+    token: &str,
+    log_path: &str,
+    ctrl_port: u16,
+    ctrl_secret: &str,
+) -> std::io::Result<()> {
+    let content = format!("{origin}\n{token}\n{log_path}\n{ctrl_port}\n{ctrl_secret}\n");
+    let tmp_path = marker_path.with_extension(format!("tmp.{}", std::process::id()));
+    std::fs::write(&tmp_path, content)?;
+    std::fs::rename(&tmp_path, marker_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,5 +468,33 @@ mod tests {
     #[test]
     fn dataset_flow_probe_request_is_inert_outside_test_mode() {
         assert!(dataset_flow_probe_request().is_none());
+    }
+
+    #[test]
+    fn write_test_marker_atomic_creates_complete_marker_without_temp_leftovers() {
+        let dir = temp_dir("marker-atomic");
+        let marker = dir.join("marker.txt");
+        write_test_marker_atomic(
+            &marker,
+            "http://127.0.0.1:49178",
+            "tok123",
+            "/tmp/serve.log",
+            49177,
+            "ctrl-sec",
+        )
+        .expect("write marker");
+
+        let body = std::fs::read_to_string(&marker).expect("read marker");
+        assert_eq!(
+            body,
+            "http://127.0.0.1:49178\ntok123\n/tmp/serve.log\n49177\nctrl-sec\n"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(leftovers.is_empty(), "temp marker file left behind: {leftovers:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # ruff: noqa: E501
-# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false, reportMissingParameterType=false, reportArgumentType=false, reportPrivateUsage=false, reportIndexIssue=false, reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportGeneralTypeIssues=false, reportUnusedFunction=false
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false, reportMissingParameterType=false, reportArgumentType=false, reportPrivateUsage=false, reportUnknownLambdaType=false, reportIndexIssue=false, reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportGeneralTypeIssues=false, reportUnusedFunction=false
 """Result bundles: round trip and the security refusals."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -340,3 +341,182 @@ def test_host_and_user_markers_are_removed_even_when_not_path_shaped(tmp_path: P
             text = path.read_text(errors="replace")
             for marker in markers:
                 assert marker not in text, (path, marker)
+
+
+def _schema_accepts(manifest: dict[str, object]) -> bool:
+    from jsonschema import Draft202012Validator
+
+    schema = json.loads(
+        (Path(__file__).resolve().parents[1] / "docs/spec/result-bundle.schema.json").read_text()
+    )
+    return Draft202012Validator(schema).is_valid(manifest)
+
+
+def test_hand_validator_and_schema_accept_the_same_samples(
+    bundle: Path, demo_root: Path, tmp_path: Path
+) -> None:
+    from coperceive.bundle.format import validate_manifest
+
+    with zipfile.ZipFile(bundle) as archive:
+        valid = json.loads(archive.read("bundle.json"))
+    included_archive = _export(
+        demo_root,
+        tmp_path / "schema-included.cpbundle",
+        dataset_id="demo",
+        include_sensor_data=True,
+    )
+    with zipfile.ZipFile(included_archive) as archive:
+        included = json.loads(archive.read("bundle.json"))
+    samples = [valid, included]
+    for bad_id in ("../x", "/absolute", "a/b"):
+        sample = json.loads(json.dumps(valid))
+        sample["run_id"] = bad_id
+        samples.append(sample)
+    sample = json.loads(json.dumps(valid))
+    sample["title"] = 4
+    samples.append(sample)
+    sample = json.loads(json.dumps(valid))
+    sample["unknown"] = 1
+    samples.append(sample)
+    sample = json.loads(json.dumps(valid))
+    del sample["title"]
+    samples.append(sample)
+    for links in (
+        ["scenes/demo-junction/raw"],
+        ["scenes/demo-junction/other"],
+        ["scenes/../raw"],
+        ["raw"],
+        "scenes/demo-junction/raw",
+    ):
+        sample = json.loads(json.dumps(valid))
+        sample["omitted_links"] = links
+        samples.append(sample)
+    for reserved in ("open.json", "BUNDLE.JSON"):
+        sample = json.loads(json.dumps(valid))
+        sample["contents"].append(
+            {"path": reserved, "sha256": "a" * 64, "size": 1, "kind": "frame-json"}
+        )
+        samples.append(sample)
+    for mutate in (
+        lambda doc: doc["sensor_data"].__setitem__("dataset_id", "../x"),
+        lambda doc: doc["sensor_data"]["scenes"][0].__setitem__("frames_included", []),
+        lambda doc: doc["sensor_data"].pop("reason"),
+    ):
+        sample = json.loads(json.dumps(included))
+        mutate(sample)
+        samples.append(sample)
+    sample = json.loads(json.dumps(included))
+    sample["sensor_data"]["licence"] = None
+    samples.append(sample)
+
+    for sample in samples:
+        hand = True
+        try:
+            validate_manifest(sample)
+        except BundleError:
+            hand = False
+        schema_ok = _schema_accepts(sample)
+        assert hand == schema_ok, (sample.get("run_id"), sample.get("title"), hand, schema_ok)
+
+
+def test_bundle_run_id_collision_does_not_touch_local_runs(bundle: Path, tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    local = data / "predictions" / "demo" / "local.txt"
+    local.parent.mkdir(parents=True)
+    local.write_text("local", encoding="utf-8")
+    opened = open_bundle(bundle, data_root=data)
+    assert local.read_text(encoding="utf-8") == "local"
+    assert opened.root != data / "predictions"
+
+
+def _export(demo_root: Path, out: Path, **kwargs: object) -> Path:
+    return export_bundle(
+        BundleExportRequest(
+            run_id=RUN,
+            scenes_root=demo_root / "scenes",
+            predictions_root=demo_root / "predictions",
+            out=out,
+            **kwargs,  # type: ignore[arg-type]
+        )
+    )
+
+
+def test_demo_sensor_data_can_be_included_and_open_reports_it(
+    demo_root: Path, tmp_path: Path
+) -> None:
+    bundle = _export(
+        demo_root, tmp_path / "sensor.cpbundle", dataset_id="demo", include_sensor_data=True
+    )
+    opened = open_bundle(bundle, data_root=tmp_path / "data")
+    with zipfile.ZipFile(bundle) as archive:
+        manifest = json.loads(archive.read("bundle.json"))
+    assert manifest["sensor_data"]["status"] == "included"
+    assert manifest["sensor_data"]["licence"] == "Apache-2.0"
+    assert manifest["sensor_data"]["bytes"] > 0
+    assert opened.report["sensor_data"] == "included"
+    assert list((opened.root / "scenes/demo-junction/agents").rglob("*.png"))
+
+
+def test_opv2v_adapter_scene_ticked_still_omits_sensor_data(
+    demo_root: Path, tmp_path: Path
+) -> None:
+    complete = demo_root / "scenes/demo-junction/COMPLETE.json"
+    original = complete.read_text(encoding="utf-8")
+    marker = json.loads(original)
+    marker["adapter"] = "opv2v"
+    marker.pop("generator", None)
+    complete.write_text(json.dumps(marker), encoding="utf-8")
+    try:
+        bundle = _export(
+            demo_root, tmp_path / "opv2v.cpbundle", dataset_id="demo", include_sensor_data=True
+        )
+    finally:
+        complete.write_text(original, encoding="utf-8")
+    with zipfile.ZipFile(bundle) as archive:
+        manifest = json.loads(archive.read("bundle.json"))
+    assert manifest["sensor_data"]["status"] == "omitted"
+    assert "adapter 'opv2v'" in str(manifest["sensor_data"]["reason"])
+    assert not [item for item in manifest["contents"] if item["kind"].startswith("sensor-")]
+
+
+def test_omitted_sensor_data_uses_matching_local_scene(demo_root: Path, tmp_path: Path) -> None:
+    bundle = _export(demo_root, tmp_path / "local.cpbundle", dataset_id="demo")
+    opened = open_bundle(bundle, data_root=tmp_path / "data", library_roots=[demo_root / "scenes"])
+    assert opened.report["sensor_data"] == "local-copy"
+    assert "your local copy" in str(opened.report["scenes"][0]["label"])
+    assert not list((opened.root / "scenes/demo-junction/agents").rglob("*.png"))
+    with zipfile.ZipFile(bundle) as archive:
+        manifest = json.loads(archive.read("bundle.json"))
+    for item in manifest["contents"]:
+        path = opened.root / item["path"]
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"]
+    extracted = {
+        p.relative_to(opened.root).as_posix() for p in opened.root.rglob("*") if p.is_file()
+    }
+    assert extracted == {item["path"] for item in manifest["contents"]} | {
+        "bundle.json",
+        "open.json",
+    }
+
+
+def test_omitted_sensor_data_without_local_scene_shows_note(
+    demo_root: Path, tmp_path: Path
+) -> None:
+    bundle = _export(demo_root, tmp_path / "none.cpbundle", dataset_id="demo")
+    opened = open_bundle(bundle, data_root=tmp_path / "data")
+    assert opened.report["sensor_data"] == "omitted"
+    assert "Frames not included" in str(opened.report["scenes"][0]["note"])
+
+
+def test_sensor_data_cap_is_enforced_before_writing(demo_root: Path, tmp_path: Path) -> None:
+    from coperceive.bundle import BundleExportError
+
+    with pytest.raises(BundleExportError, match="sensor-data cap"):
+        _export(
+            demo_root,
+            tmp_path / "cap.cpbundle",
+            dataset_id="demo",
+            include_sensor_data=True,
+            sensor_max_bytes=1,
+        )
+    assert not (tmp_path / "cap.cpbundle").exists()

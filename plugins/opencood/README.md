@@ -19,6 +19,9 @@ The plugin contract itself is [`docs/spec/model-plugin.md`](../../docs/spec/mode
   formats, and the per-CAV `base_data_dict` OpenCOOD's datasets take.
 - `opencood_checkpoint.py` — archive hashing, safe extraction, discovery of `config.yaml` and the
   weights file inside the archive.
+- `opencood_config.py` — the safe reader for the archive's `config.yaml`: OpenCOOD's float
+  resolver, tuples and numpy values rebuilt as data, `yaml_parser` only as a
+  `load_<name>_params` name; anything that would run code is refused.
 - `opencood_engine.py` — the thin OpenCOOD seam: loads the checkpoint's own config and weights and
   runs OpenCOOD's own dataset/preprocessing model-forward/postprocessing calls. OpenCOOD is
   imported from the user's environment at runtime; no OpenCOOD code is vendored.
@@ -66,12 +69,20 @@ Add `--slurm` (and `--slurm-partition`, `--slurm-scratch-template`, …) to get 
 script; the checkpoint archive is staged into the job's scratch and the inner `--option`
 is rewritten to the staged copy.
 
-Weights are loaded strictly and with torch's safe `weights_only` loader by default; the
-manifest options `allow_partial_weights` and `trust_checkpoint_pickle` are explicit opt-ins
-(the second runs the legacy pickle loader, which executes code embedded in the checkpoint;
-it is logged), and `max_checkpoint_bytes` (default 20 GiB, declared uncompressed size) caps
-the archive before extraction. See `docs/models/opencood.md` → "Weights loading and archive
-limits".
+By default nothing from the archive runs as code. The archive's `config.yaml` is read with
+the plugin's own safe reader (`opencood_config.py`), not OpenCOOD's `load_yaml`. Weights are
+loaded strictly with torch's safe `weights_only` loader, and only on torch 2.6.0 or newer
+(older torch is affected by CVE-2025-32434).
+
+The manifest options `allow_partial_weights` and `trust_checkpoint_pickle` are explicit
+opt-ins. `trust_checkpoint_pickle` trusts the checkpoint to run code, and each use is logged:
+
+- a config the safe reader refuses is read with OpenCOOD's own `load_yaml`;
+- on torch older than 2.6.0 it is required for any weights load;
+- weights that `weights_only` cannot read fall back to the legacy pickle loader.
+
+`max_checkpoint_bytes` (default 20 GiB, declared uncompressed size) caps the archive before
+extraction. See `docs/models/opencood.md` → "Weights loading and archive limits".
 
 ## Unverified from this repository
 

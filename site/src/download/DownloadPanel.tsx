@@ -80,12 +80,23 @@ export function DownloadPanel() {
               {link.label}
             </a>
           ))
+        ) : offer?.intelMacLegacy ? (
+          <a className="lm-btn-ghost" href={offer.intelMacLegacy.href}>
+            {offer.intelMacLegacy.label}
+          </a>
         ) : !offer ? (
           <a className="lm-btn-ghost" href="https://github.com/adarsh-nl/coperceive/releases/latest">
             See the releases
           </a>
         ) : null}
       </div>
+      {offer?.intelMacLegacy && offer.links.length > 0 ? (
+        <p style={{ margin: 0, fontSize: 14, lineHeight: 1.45, color: "#d2d2d7" }}>
+          <a href={offer.intelMacLegacy.href} style={{ color: "#f5f5f7", textDecoration: "underline" }}>
+            {offer.intelMacLegacy.label}
+          </a>
+        </p>
+      ) : null}
       {offer?.coming.map((label) => (
         <p key={label} style={{ margin: 0, fontSize: 15, lineHeight: 1.45, color: "#d2d2d7" }}>
           {label}: {COMING}

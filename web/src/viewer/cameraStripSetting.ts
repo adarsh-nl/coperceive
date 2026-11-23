@@ -6,7 +6,7 @@
  * `camera_strip`, like the other preferences, and applied live.
  */
 import { useEffect, useState } from "react";
-import { getPersistentState } from "../desktop/local";
+import { getViewerPreferences, updatePersistentState } from "../desktop/local";
 
 export type CameraStripMode = "all" | "agent";
 
@@ -19,11 +19,6 @@ export function isCameraStripMode(value: unknown): value is CameraStripMode {
   return value === "all" || value === "agent";
 }
 
-function controller(): { port: number; secret: string } | null {
-  if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) return null;
-  return { port: window.__COPERCEIVE_CTRL_PORT__, secret: window.__COPERCEIVE_CTRL_SECRET__ || "" };
-}
-
 /** What the window was opened with, before any read of state.json answers. */
 export function initialCameraStrip(): CameraStripMode {
   if (typeof window === "undefined") return DEFAULT_CAMERA_STRIP;
@@ -32,32 +27,14 @@ export function initialCameraStrip(): CameraStripMode {
 }
 
 export async function loadCameraStrip(): Promise<CameraStripMode> {
-  const saved = (await getPersistentState().catch(() => null)) as { camera_strip?: unknown } | null;
+  const saved = await getViewerPreferences().catch(() => null);
   if (saved && isCameraStripMode(saved.camera_strip)) return saved.camera_strip;
-  const ctrl = controller();
-  if (ctrl) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${ctrl.port}/state`, {
-        headers: { Authorization: `Bearer ${ctrl.secret}` },
-      });
-      const state = (await response.json()) as { camera_strip?: unknown };
-      if (isCameraStripMode(state.camera_strip)) return state.camera_strip;
-    } catch {
-      // Fall back below.
-    }
-  }
   return initialCameraStrip();
 }
 
 export function saveCameraStrip(mode: CameraStripMode): void {
   window.dispatchEvent(new CustomEvent(CAMERA_STRIP_EVENT, { detail: mode }));
-  const ctrl = controller();
-  if (!ctrl) return;
-  fetch(`http://127.0.0.1:${ctrl.port}/state`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctrl.secret}` },
-    body: JSON.stringify({ camera_strip: mode }),
-  }).catch(() => undefined);
+  void updatePersistentState({ camera_strip: mode }).catch(() => undefined);
 }
 
 /**

@@ -20,7 +20,7 @@ from typing import cast
 
 from coperceive.evaluation.config import threshold_key
 from coperceive.evaluation.evaluate import KIND_GT, KIND_PREDICTION, EvaluationError
-from coperceive.evaluation.metrics import average_precision
+from coperceive.evaluation.metrics import average_precision, mean_ap
 from coperceive.evaluation.outcomes import (
     DEFAULT_DISTANCE_EDGES,
     DEFAULT_VISIBILITY_EDGES,
@@ -30,7 +30,7 @@ from coperceive.evaluation.outcomes import (
     occlusion_bin_names,
     occlusion_bucket,
 )
-from coperceive.evaluation.report import Row, aggregate, ap_column, render_report
+from coperceive.evaluation.report import Row, aggregate, ap_column, labelled, render_report
 
 COMPARE_FORMAT = "coperceive-compare"
 COMPARE_VERSION = 1
@@ -66,8 +66,15 @@ def build_compare(
     distance_edges: Sequence[float] = DEFAULT_DISTANCE_EDGES,
     visibility_edges: Sequence[float] = DEFAULT_VISIBILITY_EDGES,
     distance_source: str,
+    ranking_scope: str = "pooled",
+    protocol: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    """The ``compare.json`` document. ``runs`` is ``(run_id, records)`` in caller order."""
+    """The ``compare.json`` document. ``runs`` is ``(run_id, records)`` in caller order.
+
+    ``ranking_scope`` orders every bin's AP walk as the runs were evaluated
+    (``docs/eval-spec.md`` A.5); the caller reads it from their ``metrics.json``.
+    ``protocol`` is recorded as the document's ``protocol`` object (spec A.12).
+    """
     unknown = [name for name in breakdowns if name not in BREAKDOWNS]
     if unknown:
         raise EvaluationError(
@@ -85,6 +92,7 @@ def build_compare(
         "breakdowns": list(breakdowns),
         "distance_source": distance_source,
         "definitions": dict(DEFINITIONS),
+        "protocol": dict(protocol) if protocol is not None else {"ranking_scope": ranking_scope},
         "outputs": [
             _output_block(
                 agent_id,
@@ -94,6 +102,7 @@ def build_compare(
                 breakdowns=breakdowns,
                 distance_edges=distance_edges,
                 visibility_edges=visibility_edges,
+                ranking_scope=ranking_scope,
             )
             for agent_id, source in outputs
         ],
@@ -107,8 +116,11 @@ def write_compare(path: Path, document: Mapping[str, object]) -> None:
     path.write_text(json.dumps(document, indent=2, allow_nan=False) + "\n", encoding="utf-8")
 
 
-def render_breakdowns(document: Mapping[str, object]) -> str:
-    """Markdown for the breakdowns in ``document``. Empty bins say ``no objects``."""
+def render_breakdowns(document: Mapping[str, object], criterion: object = "iou_bev") -> str:
+    """Markdown for the breakdowns in ``document``. Empty bins say ``no objects``.
+
+    AP columns carry the label of ``docs/eval-spec.md`` A.12 for ``criterion``.
+    """
     thresholds = _floats(document.get("thresholds"))
     names = _strings(document.get("breakdowns"))
     outputs = document.get("outputs")
@@ -130,7 +142,9 @@ def render_breakdowns(document: Mapping[str, object]) -> str:
             if not isinstance(rows, list):
                 continue
             blocks.append(
-                _markdown_section(name, agent, source, cast(list[object], rows), thresholds)
+                _markdown_section(
+                    name, agent, source, cast(list[object], rows), thresholds, criterion
+                )
             )
     return "\n".join(blocks)
 
@@ -171,6 +185,7 @@ def _output_block(
     breakdowns: Sequence[str],
     distance_edges: Sequence[float],
     visibility_edges: Sequence[float],
+    ranking_scope: str = "pooled",
 ) -> dict[str, object]:
     selected = [(run_id, _of_output(records, agent_id, source)) for run_id, records in runs]
     blocks: dict[str, object] = {}
@@ -184,6 +199,7 @@ def _output_block(
                 thresholds=thresholds,
                 distance_edges=distance_edges,
                 visibility_edges=visibility_edges,
+                ranking_scope=ranking_scope,
             )
             for label in bins
         ]
@@ -198,15 +214,22 @@ def _bin_block(
     thresholds: Sequence[float],
     distance_edges: Sequence[float],
     visibility_edges: Sequence[float],
+    ranking_scope: str = "pooled",
 ) -> dict[str, object]:
     per_run: dict[str, object] = {}
     cells: list[dict[str, dict[str, object]]] = []
     for run_id, records in runs:
-        gts, preds = _split(records, dimension, label, distance_edges, visibility_edges)
+        gts = [
+            record
+            for record in records
+            if record.kind == KIND_GT
+            and _bin(record, dimension, distance_edges, visibility_edges) == label
+        ]
         aps: dict[str, object] = {}
         one: dict[str, dict[str, object]] = {}
         for index, threshold in enumerate(thresholds):
-            cell = _ap_cell(gts, preds, index)
+            scored = _scored(records, dimension, label, index, distance_edges, visibility_edges)
+            cell = _ap_cell(gts, scored, ranking_scope)
             key = threshold_key(threshold)
             aps[key] = cell
             one[key] = cell
@@ -218,26 +241,96 @@ def _bin_block(
     return {"bin": label, "runs": per_run, "delta_b_minus_a": delta}
 
 
+def _scored(
+    records: Sequence[OutcomeRecord],
+    dimension: str,
+    label: str,
+    index: int,
+    distance_edges: Sequence[float],
+    visibility_edges: Sequence[float],
+) -> list[tuple[OutcomeRecord, str]]:
+    """The predictions of bin ``label`` at threshold ``index``, with their status in it.
+
+    ``docs/eval-spec.md`` A.11: nothing is matched again. A true positive of the AP
+    pass counts as one in the bin of the ground-truth box it was paired with and is
+    ignored elsewhere; a false positive counts in the bin of its own attribute, or in
+    every bin when it has none (occlusion, agent count). Ignored predictions are left out.
+    """
+    lookup = {
+        (record.scene_id, record.agent_id, record.source, record.row): record
+        for record in records
+        if record.kind == KIND_GT
+    }
+    scored: list[tuple[OutcomeRecord, str]] = []
+    for record in records:
+        if record.kind != KIND_PREDICTION or index >= len(record.status_at):
+            continue
+        status = record.status_at[index]
+        if status == "tp":
+            gt_row = record.gt_row_at[index] if index < len(record.gt_row_at) else None
+            if gt_row is None:
+                raise EvaluationError(
+                    f"{record.scene_id}: the evaluation predates per-bin pairs (no "
+                    "gt_row_at); run `coperceive eval run` again"
+                )
+            paired = lookup.get((record.scene_id, record.agent_id, record.source, gt_row))
+            if (
+                paired is not None
+                and _bin(paired, dimension, distance_edges, visibility_edges) == label
+            ):
+                scored.append((record, "tp"))
+        elif status == "fp":
+            own = _own_bin(record, dimension, distance_edges)
+            if own is None or own == label:
+                scored.append((record, "fp"))
+    return scored
+
+
+def _own_bin(record: OutcomeRecord, dimension: str, distance_edges: Sequence[float]) -> str | None:
+    """A prediction's own bin, or ``None`` for an attribute only ground truth has."""
+    if dimension == "distance":
+        return distance_bin(record.distance_m, distance_edges)
+    if dimension == "class":
+        return record.category
+    if dimension == "scene":
+        return record.scene_id
+    return None
+
+
 def _ap_cell(
-    gts: Sequence[OutcomeRecord], preds: Sequence[OutcomeRecord], threshold_index: int
+    gts: Sequence[OutcomeRecord],
+    scored: Sequence[tuple[OutcomeRecord, str]],
+    ranking_scope: str = "pooled",
 ) -> dict[str, object]:
     kept = [record for record in gts if record.status != "ignored"]
     n_objects = len(kept)
     categories = sorted(
         {record.category for record in kept}
-        | {record.category for record in preds if record.category}
+        | {record.category for record, _status in scored if record.category}
     )
-    ordered = sorted(preds, key=lambda record: (record.scene_id, record.row))
+    per_frame = ranking_scope == "per_frame"
+    if per_frame:
+        ordered = sorted(
+            scored,
+            key=lambda item: (
+                item[0].scene_id,
+                item[0].time_us,
+                -(item[0].score or 0.0),
+                item[0].row,
+            ),
+        )
+    else:
+        ordered = sorted(scored, key=lambda item: (item[0].scene_id, item[0].row))
     by_class: dict[str, object] = {}
     values: list[float] = []
     for category in categories:
         n_gt = sum(1 for record in kept if record.category == category)
-        scored = [
-            (record.score if record.score is not None else 0.0, record.status_at[threshold_index])
-            for record in ordered
-            if record.category == category and threshold_index < len(record.status_at)
+        walk = [
+            (record.score if record.score is not None else 0.0, status)
+            for record, status in ordered
+            if record.category == category
         ]
-        ap = average_precision(scored, n_gt)
+        ap = average_precision(walk, n_gt, presorted=per_frame)
         note = NO_OBJECTS if n_gt == 0 else None
         by_class[category] = {"ap": _num(ap), "n_objects": n_gt, "note": note}
         if ap is not None:
@@ -246,7 +339,7 @@ def _ap_cell(
         mean: float | None = None
         note = NO_OBJECTS
     else:
-        mean = _num(sum(values) / len(values)) if values else None
+        mean = _num(mean_ap(values))
         note = None
     return {"mean": mean, "n_objects": n_objects, "note": note, "by_class": by_class}
 
@@ -288,55 +381,6 @@ def _subtract(left: object, right: object) -> float | None:
     return _num(float(right) - float(left))
 
 
-def _split(
-    records: Sequence[OutcomeRecord],
-    dimension: str,
-    label: str,
-    distance_edges: Sequence[float],
-    visibility_edges: Sequence[float],
-) -> tuple[list[OutcomeRecord], list[OutcomeRecord]]:
-    lookup = _pair_lookup(records)
-    gts = [
-        record
-        for record in records
-        if record.kind == KIND_GT
-        and _bin(record, dimension, distance_edges, visibility_edges) == label
-    ]
-    preds: list[OutcomeRecord] = []
-    for record in records:
-        if record.kind != KIND_PREDICTION:
-            continue
-        assigned = _assigned(record, lookup, dimension, distance_edges, visibility_edges)
-        if assigned == label:
-            preds.append(record)
-    return gts, preds
-
-
-PairKey = tuple[str, str, str, int]
-
-
-def _pair_lookup(records: Sequence[OutcomeRecord]) -> dict[PairKey, OutcomeRecord]:
-    found: dict[PairKey, OutcomeRecord] = {}
-    for record in records:
-        if record.kind == KIND_GT and record.pair_id is not None:
-            found[(record.scene_id, record.agent_id, record.source, record.pair_id)] = record
-    return found
-
-
-def _assigned(
-    record: OutcomeRecord,
-    lookup: Mapping[PairKey, OutcomeRecord],
-    dimension: str,
-    distance_edges: Sequence[float],
-    visibility_edges: Sequence[float],
-) -> str:
-    if record.pair_id is not None:
-        matched = lookup.get((record.scene_id, record.agent_id, record.source, record.pair_id))
-        if matched is not None:
-            return _bin(matched, dimension, distance_edges, visibility_edges)
-    return _bin(record, dimension, distance_edges, visibility_edges)
-
-
 def _bin(
     record: OutcomeRecord,
     dimension: str,
@@ -366,12 +410,14 @@ def _bin_names(
 ) -> tuple[str, ...]:
     seen: list[str] = []
     for _run_id, records in runs:
-        lookup = _pair_lookup(records)
         for record in records:
             if record.kind == KIND_GT:
                 label = _bin(record, dimension, distance_edges, visibility_edges)
             elif record.kind == KIND_PREDICTION:
-                label = _assigned(record, lookup, dimension, distance_edges, visibility_edges)
+                own = _own_bin(record, dimension, distance_edges)
+                if own is None:
+                    continue
+                label = own
             else:
                 continue
             if label not in seen:
@@ -550,8 +596,12 @@ def _markdown_section(
     source: str,
     rows: Sequence[object],
     thresholds: Sequence[float],
+    criterion: object = "iou_bev",
 ) -> str:
-    header = ["bin", "class", "run", "n_objects", *(f"AP@{threshold_key(t)}" for t in thresholds)]
+    header = labelled(
+        ["bin", "class", "run", "n_objects", *(f"AP@{threshold_key(t)}" for t in thresholds)],
+        criterion,
+    )
     lines = [
         f"## {name}",
         "",

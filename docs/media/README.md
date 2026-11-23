@@ -13,7 +13,7 @@ This directory contains media assets for documentation and visual demonstration 
 ## Sources and Attribution
 
 ### Animated Connect Backdrop (1b "Ledger")
-The Connect screen's animated background is a synthetic 2D canvas bird's-eye view visualization ported from the Coperceive UI design specification (`Viewer Directions.dc.html`, section `1b` "Ledger"). The scene illustrates cooperative vehicle-drone perception (a vehicle approaching a parked bus occluding three pedestrians, recovered by the drone's aerial vantage point):
+The Connect screen's animated background is a synthetic 2D canvas bird's-eye view visualization ported from the Coperceive UI design specification (section `1b` "Ledger"). The scene illustrates cooperative vehicle-drone perception (a vehicle approaching a parked bus occluding three pedestrians, recovered by the drone's aerial vantage point):
 - **Visual Design**: Coperceive Design Specifications (2026-10-18)
 - **Data Conventions**: Griffin benchmark sensor and agent taxonomy (vehicle `#F58A1F`, UAV `#3C8DFF`, recovery pulse `#1FA3A3`, blocked sight lines `#8E6CEF`).
 

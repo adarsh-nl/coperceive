@@ -1,15 +1,21 @@
-# coperceive
+# What Coperceive is
 
-Cooperative multi-agent perception data. The project is [coperceive](https://github.com/adarsh-nl/coperceive). The name is recorded in [naming.md](design/naming.md). The licence is Apache-2.0 and the repository stays private.
+Coperceive is a desktop application and a Python library for cooperative multi-agent perception data. It views a scene, scores prediction runs, and opens a dataset on this machine or on a cluster.
 
-Phase 1 is the scene model and the hybrid on-disk layout. The contract is [format.md](spec/format.md). Phase 2 downloads Griffin and converts one release into that layout. Phase 3 is `Scene.at`, camera projection, cross-agent box queries, and `CooperativeDataset` in the torch extra. Phase 4 is `coperceive validate`, which writes a JSON report and a Markdown report. Phase 5 draws a scene with three.js inside the local page and can write a Rerun `.rrd`. A shared HD map is a sidecar keyed by `map_name` ([ADR 0008](adr/0008-hd-map.md)). The page now plays that scene, can sit in orbit, bird's-eye, chase, drone, or a camera frustum, can export a camera or the live view to MP4, GIF, or PNG, and stores layer, color, and theme choices in the browser. The public feature checklist is [viewer-features.md](design/viewer-features.md). There is no second dataset and no desktop shell.
+The library page below is a screenshot of the app with synthetic fixtures. It is not a frame from a real dataset.
 
-- [Positioning](design/positioning.md)
-- [Name](design/naming.md)
-- [Earlier candidates](design/names.md)
-- [Griffin checks](design/griffin-verification.md)
-- [Griffin dataset](datasets/griffin.md)
-- [Validate](validate.md)
-- [Viewer](viewer.md)
-- [Viewer features](design/viewer-features.md)
-- [Decisions](adr/0001-data-model.md)
+![The scene viewer on a Griffin Town03 scene: several agents, LiDAR and camera views](media/viewer-griffin-town03.png)
+
+| | |
+| --- | --- |
+| Install | [macOS, Windows, and Linux builds](get-started/install.md) |
+| First scene | [Quick start](get-started/quick-start.md) with the synthetic demo |
+| Where the files live | [Local folder or a cluster](get-started/local-and-cluster.md) |
+| Data it reads | [Datasets](datasets/index.md) |
+
+The project repository is [adarsh-nl/coperceive](https://github.com/adarsh-nl/coperceive). The licence of this project is Apache-2.0.
+
+## More detail
+
+- [On-disk format](spec/format.md)
+- [Design decisions](notes/decisions.md)
