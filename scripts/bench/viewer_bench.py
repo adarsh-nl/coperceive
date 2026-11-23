@@ -20,13 +20,16 @@ The page opens the scene, waits for the first drawn sample, presses Play at
 - samples drawn per second (applied ``__COPERCEIVE_FRAME_STATS__`` entries)
   against the scene's own rate, and the playhead's pace;
 - per-phase p50/p95 from ``__COPERCEIVE_FRAME_STATS__``: load (frame
-  document), points (waiting for the sweeps), draw and render. Draw and render
-  count applied samples only; dropped ones are counted, not timed;
+  document), points (waiting for the sweeps), draw (the points wait, colour
+  fill and CPU buffer copy) and render (the GPU upload and both composer
+  passes). Points, draw and render count applied samples only; dropped ones
+  are counted, not timed;
 - I/O and decode per request kind, from a bench-only wrapper around the page's
-  ``fetch``, ``Response.json``/``arrayBuffer``/``blob`` and ``createImageBitmap``:
-  the wait for the response, the body read, the JSON parse of frame documents
-  and the decode of camera images. Points need no decode (raw float32 views);
-  their colour fill and GPU upload are inside draw;
+  ``fetch`` and ``Response.json``/``arrayBuffer``/``blob``: the wait for the
+  response, the body read and the JSON parse of frame documents, in the
+  measured window (``io_ms``) and over the whole run (``io_all_ms``). Points
+  need no decode (raw float32 views). Camera images are decoded in a Web
+  Worker, out of the wrapper's reach, so ``image_decode`` is null;
 - buffering after the warm-up: the timeline's "Buffering..." label and the
   stream buffer's stalled flag;
 - JS heap (``performance.memory``), the server's peak resident memory (Linux;
@@ -49,6 +52,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -177,10 +181,11 @@ IO_HOOK_JS = """
 (() => {
   const io = [];
   window.__COPERCEIVE_BENCH_IO__ = io;
+  // The scene routes only: /api/scenes/<id>/<kind>, not prediction frames.
+  const route = new RegExp('/api/scenes/[^/]+/(points|frame|image)$');
   const kindOf = (url) => {
-    const path = String(url || '').split('?')[0];
-    for (const kind of ['points', 'frame', 'image']) if (path.endsWith('/' + kind)) return kind;
-    return 'other';
+    const match = route.exec(String(url || '').split('?')[0]);
+    return match ? match[1] : 'other';
   };
   const push = (row) => { if (io.length < 100000) io.push(row); };
   const fetch0 = window.fetch.bind(window);
@@ -218,6 +223,7 @@ IO_HOOK_JS = """
     push({ kind: kindOf(this.url), op: 'read', at: t1, ms: t1 - t0, bytes: blob.size });
     return blob;
   };
+  // The viewer decodes camera images in a worker today; this sees main-thread decodes only.
   if (typeof window.createImageBitmap === 'function') {
     const decode0 = window.createImageBitmap.bind(window);
     window.createImageBitmap = async (...args) => {
@@ -360,12 +366,13 @@ def _gl_args(mode: str) -> list[str]:
     return []
 
 
-def _url_kind(url: str) -> str:
-    path = url.split("?", 1)[0]
-    for kind in ("points", "frame", "image"):
-        if path.endswith(f"/{kind}"):
-            return kind
-    return "other"
+_SCENE_ROUTE = re.compile(r"/api/scenes/[^/]+/(points|frame|image)$")
+
+
+def url_kind(url: str) -> str:
+    """The scene route a URL is for; prediction frames and the rest are "other"."""
+    match = _SCENE_ROUTE.search(url.split("?", 1)[0])
+    return match.group(1) if match else "other"
 
 
 def drive(server: Server, scene_id: str, args: argparse.Namespace) -> dict[str, object]:
@@ -375,7 +382,7 @@ def drive(server: Server, scene_id: str, args: argparse.Namespace) -> dict[str, 
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
         raise Unavailable(
-            "playwright is not installed: `pip install -e '.[dev]'` then "
+            "playwright is not installed: `pip install -e '.[app,dev]'` then "
             "`python -m playwright install chromium`"
         ) from exc
 
@@ -421,7 +428,7 @@ def drive(server: Server, scene_id: str, args: argparse.Namespace) -> dict[str, 
                 urls[str(event["requestId"])] = str(event["request"]["url"])
 
             def finished(event: dict[str, Any]) -> None:
-                kind = _url_kind(urls.get(str(event["requestId"]), ""))
+                kind = url_kind(urls.get(str(event["requestId"]), ""))
                 size = int(event.get("encodedDataLength", 0))
                 received.append((time.monotonic(), kind, size))
 
@@ -533,13 +540,17 @@ def summarize(raw: dict[str, Any], *, scene_rate_hz: float, samples: int) -> dic
         values = [float(row[key]) for row in rows if row.get(key) is not None]
         return _spread(values)
 
-    io: dict[str, dict[str, list[float]]] = {}
-    for row in raw.get("io", []):
-        if start <= float(row["at"]) <= end:
-            io.setdefault(str(row["kind"]), {}).setdefault(str(row["op"]), []).append(
+    def io_spread(rows: list[dict[str, Any]]) -> dict[str, dict[str, dict[str, float | int]]]:
+        grouped: dict[str, dict[str, list[float]]] = {}
+        for row in rows:
+            grouped.setdefault(str(row["kind"]), {}).setdefault(str(row["op"]), []).append(
                 float(row["ms"])
             )
-    io_ms = {kind: {op: _spread(values) for op, values in ops.items()} for kind, ops in io.items()}
+        return {kind: {op: _spread(v) for op, v in ops.items()} for kind, ops in grouped.items()}
+
+    io_rows = cast(list[dict[str, Any]], raw.get("io", []))
+    io_ms = io_spread([row for row in io_rows if start <= float(row["at"]) <= end])
+    io_all_ms = io_spread(io_rows)
 
     no_webgl = bool(raw["no_webgl"])
     report: dict[str, object] = {
@@ -548,9 +559,10 @@ def summarize(raw: dict[str, Any], *, scene_rate_hz: float, samples: int) -> dic
         "first_draw_s": raw["first_draw_s"],
         "phases_ms": {"load": phase("load_ms", stats), "points": phase("points_ms", applied)},
         "io_ms": io_ms,
+        "io_all_ms": io_all_ms,
         "decode_ms": {
             "frame_json_parse": io_ms.get("frame", {}).get("parse", _spread([])),
-            "image_decode": io_ms.get("image", {}).get("decode", _spread([])),
+            "image_decode": io_ms.get("image", {}).get("decode"),  # None: decoded in a worker
             "points": None,
         },
         "buffering": {

@@ -168,6 +168,17 @@ def test_the_summary_times_applied_samples_and_splits_io_by_kind(
     assert decode["frame_json_parse"]["p50"] == 2.0
     assert decode["image_decode"]["p50"] == 4.0
     assert decode["points"] is None  # raw float32: nothing to decode
+    assert report["io_all_ms"]["image"]["decode"]["count"] == 2  # the whole run, not the window
+
+
+def test_request_kinds_are_the_scene_routes_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    bench = _bench_module(monkeypatch)
+    base = "http://127.0.0.1:9/api/scenes/s1"
+    assert bench.url_kind(f"{base}/points?time_us=1&agent_id=a") == "points"
+    assert bench.url_kind(f"{base}/frame?time_us=1") == "frame"
+    assert bench.url_kind(f"{base}/image?path=x&width=96") == "image"
+    assert bench.url_kind(f"{base}/predictions/run1/frame?time_us=1") == "other"
+    assert bench.url_kind(f"{base}") == "other"
 
 
 def test_the_machine_record_names_the_cpu_and_no_host(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -219,7 +230,7 @@ def test_the_viewer_bench_quick_run_reports_its_numbers(tmp_path: Path) -> None:
         assert key in measured
     assert {"load", "points"} <= set(measured["phases_ms"])
     assert {"frame_json_parse", "image_decode", "points"} <= set(measured["decode_ms"])
-    assert "frame" in measured["io_ms"], measured["io_ms"]
+    assert "frame" in measured["io_all_ms"], measured["io_all_ms"]
     assert {"server_rss_peak_bytes", "server_rss_end_bytes"} & set(measured["memory"])
     assert result["machine"]["cpu_count"]
     assert {"events", "ms", "stalled_events"} <= set(measured["buffering"])
