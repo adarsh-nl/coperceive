@@ -84,14 +84,27 @@ def check_plugin(
     raw_root: Path | None,
     parent_env: Mapping[str, str],
     options: Mapping[str, str] | None = None,
+    plugin_python: Path | None = None,
 ) -> tuple[RuleResult, ...]:
-    """Run the rules over the synthetic scene for ``model`` or every model of the manifest."""
+    """Run the rules over the synthetic scene for ``model`` or every model of the manifest.
+
+    ``plugin_python`` (``--plugin-python``) replaces the interpreter the manifest names.
+    """
     rules = _Rules()
     work_root.mkdir(parents=True, exist_ok=True)
     models = [manifest.models[model]] if model is not None else list(manifest.models.values())
     try:
         for spec in models:
-            _check_model(manifest, spec, rules, work_root, raw_root, parent_env, options or {})
+            _check_model(
+                manifest,
+                spec,
+                rules,
+                work_root,
+                raw_root,
+                parent_env,
+                options or {},
+                plugin_python,
+            )
     finally:
         if not keep:
             shutil.rmtree(work_root, ignore_errors=True)
@@ -115,6 +128,7 @@ def _check_model(
     raw_root: Path | None,
     parent_env: Mapping[str, str],
     options: Mapping[str, str],
+    plugin_python: Path | None = None,
 ) -> None:
     assert manifest.source is not None
     effective = check_options(spec, options)
@@ -144,6 +158,7 @@ def _check_model(
                 parent_env=parent_env,
                 hello_timeout_s=timeout,
                 options=effective,
+                python_override=plugin_python,
             )
         except RunnerTimeout as exc:
             rules.set(1, "fail", f"no hello within {timeout:g} s: {exc}")

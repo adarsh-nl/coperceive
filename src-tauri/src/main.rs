@@ -1181,6 +1181,17 @@ fn run_updater_check(
                 };
                 Ok(serde_json::to_value(&outcome).unwrap_or_default())
             }
+            tauri_plugin_updater::Error::TargetNotFound(_)
+            | tauri_plugin_updater::Error::TargetsNotFound(_) => {
+                let outcome = coperceive_desktop::updater::missing_target_check_outcome(
+                    cfg!(all(target_os = "macos", target_arch = "x86_64")),
+                )
+                .unwrap_or_else(|| coperceive_desktop::updater::UpdateCheckOutcome::Error {
+                    error: err.to_string(),
+                    is_network: false,
+                });
+                Ok(serde_json::to_value(&outcome).unwrap_or_default())
+            }
             _ => {
                 let is_network = matches!(
                     err,
@@ -3446,9 +3457,12 @@ async fn dataset_prepare(
     let images = images
         .filter(|mode| !mode.trim().is_empty())
         .unwrap_or_else(|| state::load_state().camera_images(Some(&profile_id)).effective);
+    // "all": every indexed scene. "remaining": resolved below from the cache's
+    // status, at preview time. A list: exactly those scenes.
+    let remaining = matches!(&scenes, Some(serde_json::Value::String(text)) if text == "remaining");
     let scenes: Option<Vec<String>> = match scenes {
         None => None,
-        Some(serde_json::Value::String(text)) if text == "all" => None,
+        Some(serde_json::Value::String(text)) if text == "all" || text == "remaining" => None,
         Some(serde_json::Value::Array(items)) => Some(
             items
                 .iter()
@@ -3456,7 +3470,9 @@ async fn dataset_prepare(
                 .map(str::to_string)
                 .collect(),
         ),
-        Some(_) => return Err("scenes must be a list of scene ids or \"all\".".to_string()),
+        Some(_) => {
+            return Err("scenes must be a list of scene ids, \"all\" or \"remaining\".".to_string())
+        }
     };
     let (preview, pending) = tauri::async_runtime::spawn_blocking(move || {
         let entry = find_server_entry(&profile_id)?;
@@ -3483,6 +3499,31 @@ async fn dataset_prepare(
             .get("estimated_cache_bytes")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
+        // "Prepare remaining": the scenes not prepared, failed or stale, minus the
+        // ones a running job still holds, read from the cache now.
+        let scenes = if remaining {
+            let ids = coperceive_desktop::cluster_datasets::remaining_scenes(
+                &runner,
+                &entry.profile,
+                &cache_relative,
+                &index,
+            )
+            .map_err(|error| {
+                coperceive_desktop::cluster_datasets::explain_failure(
+                    &runner,
+                    &entry.profile,
+                    format!("Could not read which scenes are already prepared: {error}"),
+                )
+            })?;
+            if ids.is_empty() {
+                return Err(
+                    "Every scene is prepared or being prepared. Nothing to submit.".to_string()
+                );
+            }
+            Some(ids)
+        } else {
+            scenes
+        };
         // One array task per selected scene; "all" is every scene the index lists.
         let scene_ids: Vec<String> = scenes.clone().unwrap_or_else(|| {
             index
@@ -3600,52 +3641,28 @@ async fn dataset_status(
     adapter: String,
     raw_root: String,
     split: Option<String>,
+    cache_relative: String,
 ) -> Result<serde_json::Value, String> {
+    // The cache split is the one the index named (`cache.relative_path`), as the
+    // prepare job writes it; `raw_root` no longer decides the path.
+    let _ = raw_root;
     tauri::async_runtime::spawn_blocking(move || {
         let entry = find_server_entry(&profile_id)?;
         let runner = plan_runner(&entry)?;
-        let cache = coperceive_desktop::dataset_jobs::cache_absolute(
+        let cache = coperceive_desktop::dataset_jobs::cache_dir(
             &entry.profile,
             &adapter,
-            &raw_root,
             split.as_deref(),
+            &cache_relative,
         )?;
-        let command = coperceive_desktop::ssh::quote_remote_argv(
-            &coperceive_desktop::hpc::coperceive_argv(
-                &entry.profile,
-                &[
-                    "dataset".to_string(),
-                    "status".to_string(),
-                    "--cache".to_string(),
-                    cache,
-                ],
-            ),
-        );
-        let result = coperceive_desktop::slurm_adapter::RemoteRunner::run(
-            &runner,
-            &command,
-            std::time::Duration::from_secs(45),
-            None,
-        )?;
-        let text = result.stdout.trim();
-        let failure = match serde_json::from_str::<serde_json::Value>(text) {
-            // An error document also carries the status schema: check the error first.
-            Ok(document) => match document.get("error").and_then(serde_json::Value::as_str) {
-                Some(error) => error.to_string(),
-                None if document.get("schema").and_then(serde_json::Value::as_str)
-                    == Some("coperceive-cluster-scene-status-1") =>
-                {
-                    return Ok(document);
-                }
-                None => "The cluster returned an unexpected dataset status document.".to_string(),
-            },
-            Err(_) => "The cluster returned an unexpected dataset status document.".to_string(),
-        };
-        Err(coperceive_desktop::cluster_datasets::explain_failure(
-            &runner,
-            &entry.profile,
-            failure,
-        ))
+        coperceive_desktop::cluster_datasets::status_once(&runner, &entry.profile, &cache, false)
+            .map_err(|failure| {
+                coperceive_desktop::cluster_datasets::explain_failure(
+                    &runner,
+                    &entry.profile,
+                    failure,
+                )
+            })
     })
     .await
     .map_err(|error| format!("Dataset status could not finish: {error}"))?
@@ -3696,6 +3713,23 @@ fn last_cluster_dataset() -> serde_json::Value {
                 .map(|dataset| serde_json::json!({ "profile_id": id, "dataset": dataset }))
         })
         .unwrap_or(serde_json::Value::Null)
+}
+
+/// Settings → Model runs → "Plugin interpreter": the server's default for New
+/// evaluation's field (null when the manifest's environment decides).
+#[tauri::command]
+fn get_plugin_python_setting(profile_id: String) -> Option<String> {
+    state::load_state().plugin_python(&profile_id)
+}
+
+/// Sets (or, with `path: null` or an empty path, clears) a server's default plugin
+/// interpreter. Plans already saved keep the interpreter they record.
+#[tauri::command]
+fn set_plugin_python_setting(profile_id: String, path: Option<String>) -> Result<Option<String>, String> {
+    let mut persistent = state::load_state();
+    persistent.set_plugin_python(&profile_id, path.as_deref())?;
+    state::save_state(&persistent).map_err(|error| format!("Could not save the setting: {error}"))?;
+    Ok(persistent.plugin_python(&profile_id))
 }
 
 /// Settings → Cluster datasets → "Camera images when preparing".
@@ -3794,14 +3828,16 @@ async fn dataset_open(
     adapter: String,
     raw_root: String,
     split: Option<String>,
+    cache_relative: String,
     scene_id: Option<String>,
 ) -> Result<SessionPayload, String> {
     let entry = find_server_entry(&profile_id)?;
-    let cache = coperceive_desktop::dataset_jobs::cache_absolute(
+    // The cache split the index named, as for `dataset_status`.
+    let cache = coperceive_desktop::dataset_jobs::cache_dir(
         &entry.profile,
         &adapter,
-        &raw_root,
         split.as_deref(),
+        &cache_relative,
     )?;
     let target = entry.ssh_target()?;
     let key = format!("stream|{profile_id}|{cache}|{raw_root}");
@@ -4024,7 +4060,17 @@ fn run_dataset_flow_probe(
                     arg_text(&args, "adapter")?,
                     arg_text(&args, "rawRoot")?,
                     optional_text(&args, "split"),
+                    arg_text(&args, "cacheRelative")?,
                 )),
+                "get_plugin_python_setting" => serde_json::to_value(get_plugin_python_setting(
+                    arg_text(&args, "profileId")?,
+                ))
+                .map_err(|error| error.to_string()),
+                "set_plugin_python_setting" => set_plugin_python_setting(
+                    arg_text(&args, "profileId")?,
+                    optional_text(&args, "path"),
+                )
+                .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string())),
                 "get_camera_images_setting" => serde_json::to_value(get_camera_images_setting(
                     optional_text(&args, "profileId"),
                 ))
@@ -4061,6 +4107,7 @@ fn run_dataset_flow_probe(
                     arg_text(&args, "adapter")?,
                     arg_text(&args, "rawRoot")?,
                     optional_text(&args, "split"),
+                    arg_text(&args, "cacheRelative")?,
                     optional_text(&args, "sceneId"),
                 ))
                 .and_then(|payload| {
@@ -4484,6 +4531,8 @@ fn main() {
             dataset_open,
             get_camera_images_setting,
             set_camera_images_setting,
+            get_plugin_python_setting,
+            set_plugin_python_setting,
             set_viewer_dataset_scenes,
             remember_cluster_dataset,
             last_cluster_dataset,

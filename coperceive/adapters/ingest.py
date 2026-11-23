@@ -18,7 +18,6 @@ import time
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
-from importlib import metadata
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -292,10 +291,10 @@ def manifest_sha256(adapter: Adapter) -> str | None:
 
 
 def coperceive_version() -> str:
-    try:
-        return metadata.version("coperceive")
-    except metadata.PackageNotFoundError:
-        return "unknown"
+    """Coperceive's version (``coperceive/_version.py``)."""
+    from coperceive._version import version
+
+    return version()
 
 
 def _provenance(adapter: Adapter) -> tuple[tuple[str, str], ...]:

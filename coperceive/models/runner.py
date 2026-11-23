@@ -141,6 +141,34 @@ def resolve_interpreter(
     raise ModelSpecError(f"environment.conda: no interpreter for {env.value!r}; tried {tried}")
 
 
+# The command-line flag that overrides the manifest's environment (docs/models.md).
+PLUGIN_PYTHON_FLAG = "--plugin-python"
+
+
+def check_plugin_python(path: Path) -> Path:
+    """``path`` as given, when it is an absolute executable file; else a ``ModelSpecError``.
+
+    The path is not resolved or rewritten: a Slurm job receives exactly what was given, so
+    a relative path is refused (the compute node would resolve it against another cwd).
+    """
+    if not path.is_absolute():
+        raise ModelSpecError(f"{PLUGIN_PYTHON_FLAG}: give a full path (got {path})")
+    if not path.is_file():
+        raise ModelSpecError(f"{PLUGIN_PYTHON_FLAG}: no interpreter at {path}")
+    if not os.access(path, os.X_OK):
+        raise ModelSpecError(f"{PLUGIN_PYTHON_FLAG}: {path} is not executable")
+    return path
+
+
+def plugin_interpreter(
+    env: Environment, *, plugin_dir: Path, override: Path | None = None
+) -> tuple[Path, str]:
+    """The plugin's interpreter and where it came from: ``--plugin-python`` or the manifest."""
+    if override is not None:
+        return check_plugin_python(override), PLUGIN_PYTHON_FLAG
+    return resolve_interpreter(env, plugin_dir=plugin_dir), f"manifest environment.{env.kind}"
+
+
 class PluginProcess:
     """One child process speaking protocol version 1. Use as a context manager or ``close``."""
 
@@ -185,13 +213,17 @@ class PluginProcess:
         parent_env: Mapping[str, str],
         hello_timeout_s: float,
         options: Mapping[str, object] | None = None,
+        python_override: Path | None = None,
     ) -> PluginProcess:
         """Start the child, read ``hello`` and check §Ordering 1.
 
         ``options`` are the model's validated effective options; a ``{option:NAME}``
-        placeholder in ``commands.batch`` is rendered from them.
+        placeholder in ``commands.batch`` is rendered from them. ``python_override``
+        (``--plugin-python``) replaces the interpreter the manifest's environment names.
         """
-        python = resolve_interpreter(manifest.environment, plugin_dir=plugin_dir)
+        python, _source = plugin_interpreter(
+            manifest.environment, plugin_dir=plugin_dir, override=python_override
+        )
         argv = render_argv(
             manifest,
             "batch",
@@ -412,5 +444,8 @@ __all__ = [
     "child_environment",
     "redact",
     "resolve_interpreter",
+    "plugin_interpreter",
+    "check_plugin_python",
+    "PLUGIN_PYTHON_FLAG",
     "secret_values",
 ]
