@@ -20,8 +20,9 @@ Writes one schema-1 scene through the store's own writer into ``OUT/<scene id>``
 
 Everything is deterministic from ``--seed``: the same arguments write the same
 bytes. The output is never committed; a target inside this repository is
-refused. At the defaults (4 x 160 000 x 16 x 100 at 10 Hz) the scene is about
-1 GB of points plus the images, and generation holds the points in memory once.
+refused. At the defaults (4 x 160 000 x 16 x 100 at 10 Hz) the points alone are
+4 x 160 000 x 12 B x 100 = 768 MB, plus the images; generation holds the points
+in memory once.
 
 The last line on stdout is a JSON summary (scene directory, counts, bytes
 written); a one-line note goes to stderr.

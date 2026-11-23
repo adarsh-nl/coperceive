@@ -20,12 +20,20 @@ The page opens the scene, waits for the first drawn sample, presses Play at
 - samples drawn per second (applied ``__COPERCEIVE_FRAME_STATS__`` entries)
   against the scene's own rate, and the playhead's pace;
 - per-phase p50/p95 from ``__COPERCEIVE_FRAME_STATS__``: load (frame
-  document), points (sweep fetch and decode), draw and render;
+  document), points (waiting for the sweeps), draw and render. Draw and render
+  count applied samples only; dropped ones are counted, not timed;
+- I/O and decode per request kind, from a bench-only wrapper around the page's
+  ``fetch``, ``Response.json``/``arrayBuffer``/``blob`` and ``createImageBitmap``:
+  the wait for the response, the body read, the JSON parse of frame documents
+  and the decode of camera images. Points need no decode (raw float32 views);
+  their colour fill and GPU upload are inside draw;
 - buffering after the warm-up: the timeline's "Buffering..." label and the
   stream buffer's stalled flag;
-- JS heap (``performance.memory``), an estimate of GPU bytes from the visible
-  point count x 24 (float32 position and colour), and the bytes the page
-  received over the network.
+- JS heap (``performance.memory``), the server's peak resident memory (Linux;
+  the resident size at the end elsewhere), an estimate of GPU bytes from the
+  visible point count x 24 (float32 position and colour), and the bytes the
+  page received over the network;
+- the machine: CPU model, logical CPUs, RAM, OS, and the WebGL renderer.
 
 When the page could not start WebGL (the viewer shows its ``.webgl-missing``
 notice) the bench prints "rendering skipped: no WebGL" and reports the fetch
@@ -41,7 +49,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import platform
 import secrets
 import shutil
 import socket
@@ -53,6 +60,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, cast
+
+from bench_machine import machine_info, machine_line
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE = Path(__file__).with_name("scale_fixture.py")
@@ -135,6 +144,7 @@ COLLECT_JS = """
     raf: bench.raf,
     polls: bench.polls,
     frame_stats: window.__COPERCEIVE_FRAME_STATS__ || [],
+    io: window.__COPERCEIVE_BENCH_IO__ || [],
     playback_perf: perf,
     cache: window.__COPERCEIVE_CACHE_STATS__ || null,
     buffer: window.__COPERCEIVE_BUFFER_STATS__ || null,
@@ -158,6 +168,67 @@ RENDERER_JS = """
   if (lose) lose.loseContext();
   return out;
 }
+"""
+
+
+# Installed before the app's scripts: times the page's own requests without
+# changing what they return. Bench-only; the app has no such hook.
+IO_HOOK_JS = """
+(() => {
+  const io = [];
+  window.__COPERCEIVE_BENCH_IO__ = io;
+  const kindOf = (url) => {
+    const path = String(url || '').split('?')[0];
+    for (const kind of ['points', 'frame', 'image']) if (path.endsWith('/' + kind)) return kind;
+    return 'other';
+  };
+  const push = (row) => { if (io.length < 100000) io.push(row); };
+  const fetch0 = window.fetch.bind(window);
+  window.fetch = async (input, init) => {
+    const t0 = performance.now();
+    const response = await fetch0(input, init);
+    const t1 = performance.now();
+    push({ kind: kindOf(response.url), op: 'wait', at: t1, ms: t1 - t0 });
+    return response;
+  };
+  const proto = Response.prototype;
+  const text0 = proto.text, buffer0 = proto.arrayBuffer, blob0 = proto.blob;
+  proto.json = async function () {
+    const t0 = performance.now();
+    const text = await text0.call(this);
+    const t1 = performance.now();
+    const value = JSON.parse(text);
+    const t2 = performance.now();
+    const kind = kindOf(this.url);
+    push({ kind, op: 'read', at: t1, ms: t1 - t0 });
+    push({ kind, op: 'parse', at: t2, ms: t2 - t1 });
+    return value;
+  };
+  proto.arrayBuffer = async function () {
+    const t0 = performance.now();
+    const buffer = await buffer0.call(this);
+    const t1 = performance.now();
+    push({ kind: kindOf(this.url), op: 'read', at: t1, ms: t1 - t0, bytes: buffer.byteLength });
+    return buffer;
+  };
+  proto.blob = async function () {
+    const t0 = performance.now();
+    const blob = await blob0.call(this);
+    const t1 = performance.now();
+    push({ kind: kindOf(this.url), op: 'read', at: t1, ms: t1 - t0, bytes: blob.size });
+    return blob;
+  };
+  if (typeof window.createImageBitmap === 'function') {
+    const decode0 = window.createImageBitmap.bind(window);
+    window.createImageBitmap = async (...args) => {
+      const t0 = performance.now();
+      const bitmap = await decode0(...args);
+      const t1 = performance.now();
+      push({ kind: 'image', op: 'decode', at: t1, ms: t1 - t0 });
+      return bitmap;
+    };
+  }
+})();
 """
 
 
@@ -213,6 +284,8 @@ def make_fixture(root: Path, args: argparse.Namespace) -> dict[str, object]:
     argv += ["--agents", str(args.agents), "--points", str(args.points)]
     argv += ["--cameras", str(args.cameras), "--samples", str(args.samples)]
     argv += ["--rate-hz", str(args.rate_hz), "--seed", str(args.seed)]
+    if args.image_size:
+        argv += ["--image-size", args.image_size]
     completed = subprocess.run(argv, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
         raise RuntimeError(f"scale_fixture.py failed:\n{completed.stderr[-4000:]}")
@@ -246,6 +319,26 @@ class Server:
                 time.sleep(0.1)
         self.close()
         raise RuntimeError(f"coperceive serve did not answer in 60 s:\n{self.tail()}")
+
+    def memory(self) -> dict[str, int | None]:
+        """The server's resident memory: the peak on Linux, the current size elsewhere."""
+        pid = self.process.pid
+        status = Path(f"/proc/{pid}/status")
+        if status.is_file():
+            for line in status.read_text(encoding="utf-8").splitlines():
+                if line.startswith("VmHWM:"):
+                    return {"server_rss_peak_bytes": int(line.split()[1]) * 1024}
+        try:
+            rss = subprocess.run(
+                ["ps", "-o", "rss=", "-p", str(pid)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            rss = ""
+        return {"server_rss_end_bytes": int(rss) * 1024 if rss.isdigit() else None}
 
     def tail(self) -> str:
         self._log_handle.flush()
@@ -306,6 +399,7 @@ def drive(server: Server, scene_id: str, args: argparse.Namespace) -> dict[str, 
             initial: dict[str, object] = {}
             if args.frustum_images:
                 initial["layer_toggles"] = {"frustums": True, "frustum_images": True}
+            page.add_init_script(IO_HOOK_JS)
             page.add_init_script(
                 "try { sessionStorage.setItem('coperceive-token', "
                 + json.dumps(server.token)
@@ -435,16 +529,30 @@ def summarize(raw: dict[str, Any], *, scene_rate_hz: float, samples: int) -> dic
         by_kind[kind] = by_kind.get(kind, 0) + int(size)
     network_bytes = sum(by_kind.values())
 
-    def phase(key: str) -> dict[str, float | int]:
-        values = [float(row[key]) for row in stats if row.get(key) is not None]
+    def phase(key: str, rows: list[dict[str, Any]]) -> dict[str, float | int]:
+        values = [float(row[key]) for row in rows if row.get(key) is not None]
         return _spread(values)
+
+    io: dict[str, dict[str, list[float]]] = {}
+    for row in raw.get("io", []):
+        if start <= float(row["at"]) <= end:
+            io.setdefault(str(row["kind"]), {}).setdefault(str(row["op"]), []).append(
+                float(row["ms"])
+            )
+    io_ms = {kind: {op: _spread(values) for op, values in ops.items()} for kind, ops in io.items()}
 
     no_webgl = bool(raw["no_webgl"])
     report: dict[str, object] = {
         "window_s": round(window_s, 2),
         "rendering_skipped": no_webgl,
         "first_draw_s": raw["first_draw_s"],
-        "phases_ms": {"load": phase("load_ms"), "points": phase("points_ms")},
+        "phases_ms": {"load": phase("load_ms", stats), "points": phase("points_ms", applied)},
+        "io_ms": io_ms,
+        "decode_ms": {
+            "frame_json_parse": io_ms.get("frame", {}).get("parse", _spread([])),
+            "image_decode": io_ms.get("image", {}).get("decode", _spread([])),
+            "points": None,
+        },
         "buffering": {
             "events": rising("buffering"),
             "ms": round(buffering_ms, 1),
@@ -480,8 +588,8 @@ def summarize(raw: dict[str, Any], *, scene_rate_hz: float, samples: int) -> dic
     }
     if not no_webgl:
         phases = cast(dict[str, object], report["phases_ms"])
-        phases["draw"] = phase("draw_ms")
-        phases["render"] = phase("render_ms")
+        phases["draw"] = phase("draw_ms", applied)
+        phases["render"] = phase("render_ms", applied)
         report["frame_time_ms"] = _spread(frame_ms)
         report["samples"] = {
             "drawn": len(applied),
@@ -496,33 +604,6 @@ def summarize(raw: dict[str, Any], *, scene_rate_hz: float, samples: int) -> dic
     return report
 
 
-def _machine() -> dict[str, object]:
-    info: dict[str, object] = {
-        "platform": platform.platform(),
-        "machine": platform.machine(),
-        "cpu_count": os.cpu_count(),
-        "python": platform.python_version(),
-    }
-    if sys.platform == "darwin":
-        try:
-            brand = subprocess.run(
-                ["sysctl", "-n", "machdep.cpu.brand_string"],
-                capture_output=True,
-                text=True,
-                check=False,
-            ).stdout.strip()
-            memory = subprocess.run(
-                ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, check=False
-            ).stdout.strip()
-            info["cpu"] = brand or None
-            info["memory_bytes"] = int(memory) if memory.isdigit() else None
-        except OSError:
-            pass
-    else:
-        info["cpu"] = platform.processor() or None
-    return info
-
-
 def _mb(value: object) -> str:
     return f"{value / 1024**2:.0f} MB" if isinstance(value, int) else "n/a"
 
@@ -531,10 +612,13 @@ def table(result: dict[str, Any]) -> str:
     fixture = result["fixture"]
     m = result["measured"]
     browser = result["browser"]
+    size = cast(list[int] | None, fixture.get("image_size"))
+    images = f", images {size[0]}x{size[1]}" if size and len(size) == 2 else ""
     lines = [
         f"viewer_bench{' (quick)' if result['quick'] else ''}: {fixture['agents']} agents x "
         f"{fixture['points']} points x {fixture['cameras']} cameras x {fixture['samples']} "
-        f"samples at {fixture['rate_hz']} Hz ({_mb(fixture.get('bytes'))} on disk)",
+        f"samples at {fixture['rate_hz']} Hz{images} ({_mb(fixture.get('bytes'))} on disk)",
+        f"  machine    {machine_line(result['machine'])}",
         f"  browser    {browser['name']} {browser['version']}, WebGL renderer: "
         f"{browser['renderer'] or 'none'}",
         f"  server     open scene {result['server']['open_scene_ms']} ms; "
@@ -558,6 +642,14 @@ def table(result: dict[str, Any]) -> str:
         lines.append(
             f"  {name:<10} p50 {spread['p50']} ms, p95 {spread['p95']} ms ({spread['count']})"
         )
+    for kind, ops in sorted(m["io_ms"].items()):
+        if kind == "other":
+            continue
+        parts = [
+            f"{op} p50 {spread['p50']} / p95 {spread['p95']} ms ({spread['count']})"
+            for op, spread in ops.items()
+        ]
+        lines.append(f"  io {kind:<7} " + "; ".join(parts))
     b = m["buffering"]
     p = m["playhead"]
     lines.append(
@@ -572,7 +664,12 @@ def table(result: dict[str, Any]) -> str:
         if "gpu_points_estimate_bytes" in mem
         else ""
     )
-    lines.append(f"  memory     JS heap max {_mb(mem['js_heap_used_max_bytes'])}{gpu}")
+    server_rss = (
+        f", server RSS peak {_mb(mem['server_rss_peak_bytes'])}"
+        if "server_rss_peak_bytes" in mem
+        else f", server RSS at end {_mb(mem.get('server_rss_end_bytes'))}"
+    )
+    lines.append(f"  memory     JS heap max {_mb(mem['js_heap_used_max_bytes'])}{server_rss}{gpu}")
     n = m["network"]
     lines.append(f"  network    {n['mb_per_s']} MB/s received ({_mb(n['bytes'])} in the window)")
     if m["page_errors"]:
@@ -628,6 +725,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 )
             rate = _scene_rate(times_us)
             raw = drive(server, scene_id, args)
+            server_memory = server.memory()
         except BaseException:
             if args.verbose:
                 sys.stderr.write(server.tail())
@@ -635,12 +733,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         finally:
             server.close()
         measured = summarize(raw, scene_rate_hz=rate, samples=len(times_us))
+        cast(dict[str, object], measured["memory"]).update(server_memory)
         renderer = cast(dict[str, Any], raw["renderer"])
         return {
             "schema": SCHEMA,
             "quick": bool(args.quick),
             "label": "synthetic scale fixture, local coperceive serve, headless Chromium",
-            "machine": _machine(),
+            "machine": machine_info(),
             "browser": {
                 "name": "chromium",
                 "version": raw["browser_version"],
@@ -683,6 +782,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--samples", type=int)
     parser.add_argument("--rate-hz", type=float, default=10.0)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--image-size", metavar="WxH", help="camera image size for a generated fixture"
+    )
     parser.add_argument("--warmup-s", type=float, help="play this long before measuring")
     parser.add_argument("--measure-s", type=float, help="the measured window")
     parser.add_argument(

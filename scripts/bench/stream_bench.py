@@ -49,6 +49,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from bench_machine import machine_info, machine_line
 from coperceive.app.server import create_app
 from coperceive.model import (
     SCHEMA_VERSION,
@@ -544,8 +545,10 @@ def main() -> None:
         cameras=args.cameras,
     )
     result["smoke"] = bool(args.smoke)
+    result["machine"] = machine_info()
     print(json.dumps(result), flush=True)
     print(_table(result), file=sys.stderr, flush=True)
+    print(f"  machine    {machine_line(result['machine'])}", file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":

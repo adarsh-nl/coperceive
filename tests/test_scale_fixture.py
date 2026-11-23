@@ -11,11 +11,13 @@ assertion: the numbers depend on the machine.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any, NoReturn, cast
 
 import pytest
@@ -27,6 +29,15 @@ FIXTURE = REPO / "scripts" / "bench" / "scale_fixture.py"
 BENCH = REPO / "scripts" / "bench" / "viewer_bench.py"
 SMALL = ["--agents", "2", "--points", "2000", "--cameras", "2", "--samples", "3"]
 REQUIRED = os.environ.get("COPERCEIVE_E2E_REQUIRED", "") not in {"", "0"}
+
+
+def _bench_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    monkeypatch.setattr(sys, "path", [str(BENCH.parent), *sys.path])  # for bench_machine
+    spec = importlib.util.spec_from_file_location("viewer_bench_under_test", BENCH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _write(out: Path, *extra: str) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
@@ -104,6 +115,68 @@ def test_a_target_inside_the_repository_is_refused() -> None:
     assert not target.exists()
 
 
+def _stat(at: float, result: str, draw: float) -> dict[str, Any]:
+    return {
+        "at": at,
+        "index": 0,
+        "load_ms": 5.0,
+        "points_ms": 20.0 if result == "applied" else None,
+        "draw_ms": draw,
+        "render_ms": draw / 10,
+        "result": result,
+    }
+
+
+def test_the_summary_times_applied_samples_and_splits_io_by_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bench = _bench_module(monkeypatch)
+    raw: dict[str, Any] = {
+        "measure_from": 1000.0,
+        "measure_to": 2000.0,
+        "raf": [1000.0 + 16.0 * i for i in range(60)],
+        "frame_stats": [
+            _stat(1100.0, "applied", 40.0),
+            _stat(1200.0, "dropped", 0.0),
+            _stat(1300.0, "applied", 60.0),
+            _stat(500.0, "applied", 999.0),  # before the window
+        ],
+        "io": [
+            {"kind": "frame", "op": "wait", "at": 1100.0, "ms": 3.0},
+            {"kind": "frame", "op": "read", "at": 1101.0, "ms": 1.0},
+            {"kind": "frame", "op": "parse", "at": 1102.0, "ms": 2.0},
+            {"kind": "points", "op": "read", "at": 1150.0, "ms": 8.0, "bytes": 1920000},
+            {"kind": "image", "op": "decode", "at": 1160.0, "ms": 4.0},
+            {"kind": "image", "op": "decode", "at": 2500.0, "ms": 400.0},  # after it
+        ],
+        "polls": [],
+        "network": [],
+        "no_webgl": False,
+        "first_draw_s": 1.0,
+    }
+    report = bench.summarize(raw, scene_rate_hz=10.0, samples=30)
+    phases = report["phases_ms"]
+    assert phases["draw"]["count"] == 2 and phases["draw"]["max"] == 60.0  # the drop is not timed
+    assert phases["points"]["count"] == 2
+    assert phases["load"]["count"] == 3  # dropped samples still loaded their frame document
+    assert report["samples"]["drawn"] == 2 and report["samples"]["dropped"] == 1
+    io = report["io_ms"]
+    assert set(io) == {"frame", "points", "image"}
+    assert set(io["frame"]) == {"wait", "read", "parse"}
+    assert io["image"]["decode"]["count"] == 1 and io["image"]["decode"]["max"] == 4.0
+    decode = report["decode_ms"]
+    assert decode["frame_json_parse"]["p50"] == 2.0
+    assert decode["image_decode"]["p50"] == 4.0
+    assert decode["points"] is None  # raw float32: nothing to decode
+
+
+def test_the_machine_record_names_the_cpu_and_no_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    bench = _bench_module(monkeypatch)
+    info = cast(dict[str, object], bench.machine_info())
+    assert {"platform", "machine", "cpu", "cpu_count", "memory_bytes", "python"} <= set(info)
+    assert os.uname().nodename not in json.dumps(info)
+
+
 def _unavailable(reason: str) -> NoReturn:
     if REQUIRED:
         pytest.fail(reason)
@@ -145,6 +218,10 @@ def test_the_viewer_bench_quick_run_reports_its_numbers(tmp_path: Path) -> None:
     for key in ("window_s", "rendering_skipped", "phases_ms", "buffering", "playhead", "memory"):
         assert key in measured
     assert {"load", "points"} <= set(measured["phases_ms"])
+    assert {"frame_json_parse", "image_decode", "points"} <= set(measured["decode_ms"])
+    assert "frame" in measured["io_ms"], measured["io_ms"]
+    assert {"server_rss_peak_bytes", "server_rss_end_bytes"} & set(measured["memory"])
+    assert result["machine"]["cpu_count"]
     assert {"events", "ms", "stalled_events"} <= set(measured["buffering"])
     assert {"bytes", "mb_per_s", "by_kind_bytes"} <= set(measured["network"])
     if measured["rendering_skipped"]:
