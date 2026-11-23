@@ -107,7 +107,8 @@ streams:
     missing: skip
     # The official box_utils.py project_world_objects() docs call the input
     # objects world-coordinate objects and convert object_pose to lidar with
-    # x1_to_x2(object_pose, lidar_pose), lines 456-519 of the source.
+    # x1_to_x2(object_pose, lidar_pose).
+    # https://github.com/ucla-mobility/V2X-Real/blob/2b8acd5c15b22fdb47326e30b8805e172d9b1259/opencood/utils/box_utils.py#L490-L554
     frame: world
     records: {path: vehicles, mapping_key: track_id}
     # angle is [roll, yaw, pitch] in degrees; obj_type carries the fine-grained class

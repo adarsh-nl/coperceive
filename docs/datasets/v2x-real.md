@@ -107,7 +107,10 @@ Verified from the authors' loader (`ucla-mobility/V2X-Real` and
 - **Box coordinate frame:** the official `box_utils.py` loader documents the
   `vehicles` objects as world-coordinate objects, builds `object_pose` from
   `location + center`, and transforms it to the target LiDAR frame with
-  `x1_to_x2(object_pose, lidar_pose)` ([official source lines 456-519](https://github.com/ucla-mobility/V2X-Real/blob/main/opencood/utils/box_utils.py#L456-L519)).
+  `x1_to_x2(object_pose, lidar_pose)`
+  ([pinned implementation](https://github.com/ucla-mobility/V2X-Real/blob/2b8acd5c15b22fdb47326e30b8805e172d9b1259/opencood/utils/box_utils.py#L490-L554)).
+  The [pinned caller](https://github.com/ucla-mobility/V2X-Real/blob/2b8acd5c15b22fdb47326e30b8805e172d9b1259/opencood/data_utils/post_processor/base_postprocessor.py#L131-L144)
+  passes the frame's `vehicles` mapping into that function.
 
 **Unverified against a real extracted V2X-Real release** (no real V2X-Real
 files were inspected when authoring this manifest):
