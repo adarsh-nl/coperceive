@@ -1027,21 +1027,135 @@ pub fn detect_server(entry: &ServerEntry, opts: &DetectOptions) -> DetectionRepo
     report
 }
 
-/// Accept `0.0.0`, `coperceive 0.0.0`, and lines with trailing punctuation.
+/// Accept `0.0.0`, `coperceive 0.0.0`, a PEP 440 public or local version
+/// (`0.1.2rc1`, `0.1.2.dev0`, `0+unknown`), and the same with trailing punctuation.
+/// The returned text is the version as printed. The desktop "versions differ" hint
+/// compares it with this app's version, so a pre-release or local part is kept.
 fn parse_coperceive_version(stdout: &str) -> Option<String> {
     for line in stdout.lines() {
         for raw in line.split_whitespace() {
-            let token = raw.trim_matches(|ch: char| !ch.is_ascii_digit() && ch != '.');
-            if token.contains('.')
-                && !token.starts_with('.')
-                && !token.ends_with('.')
-                && token.chars().all(|ch| ch.is_ascii_digit() || ch == '.')
-            {
+            if let Some(token) = pep440_token(raw) {
                 return Some(token.to_string());
             }
         }
     }
     None
+}
+
+/// One whitespace token, with wrapping punctuation removed, when it is a PEP 440 version.
+/// A bare integer is refused: a warning's `0` or `1` is not an installed version.
+fn pep440_token(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim_matches(|ch: char| {
+        matches!(ch, ',' | ';' | ':' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\'')
+    });
+    if is_pep440_version(trimmed) {
+        return Some(trimmed);
+    }
+    // A sentence period after the version (`0.1.2.`).
+    let without_period = trimmed.strip_suffix('.').unwrap_or(trimmed);
+    if without_period != trimmed && is_pep440_version(without_period) {
+        return Some(without_period);
+    }
+    None
+}
+
+fn is_pep440_version(input: &str) -> bool {
+    let s = input
+        .strip_prefix('v')
+        .or_else(|| input.strip_prefix('V'))
+        .unwrap_or(input);
+    if s.is_empty() || s.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    if let Some(bang) = bytes.iter().position(|byte| *byte == b'!') {
+        if bang > 0 && bytes[..bang].iter().all(|byte| byte.is_ascii_digit()) {
+            i = bang + 1;
+        }
+    }
+    if !consume_digits(bytes, &mut i) {
+        return false;
+    }
+    while i < bytes.len() && bytes[i] == b'.' {
+        let dot = i;
+        i += 1;
+        if !consume_digits(bytes, &mut i) {
+            i = dot;
+            break;
+        }
+    }
+    let _ = consume_tagged(bytes, &mut i, &["preview", "alpha", "beta", "rc", "pre", "a", "b", "c"]);
+    let _ = consume_tagged(bytes, &mut i, &["post", "rev", "r"]);
+    let _ = consume_tagged(bytes, &mut i, &["dev"]);
+    if i < bytes.len() && bytes[i] == b'+' {
+        i += 1;
+        if !consume_local(bytes, &mut i) {
+            return false;
+        }
+    }
+    i == bytes.len()
+}
+
+fn consume_digits(bytes: &[u8], i: &mut usize) -> bool {
+    let start = *i;
+    while *i < bytes.len() && bytes[*i].is_ascii_digit() {
+        *i += 1;
+    }
+    *i > start
+}
+
+fn consume_sep(bytes: &[u8], i: &mut usize) {
+    if *i < bytes.len() && matches!(bytes[*i], b'.' | b'_' | b'-') {
+        *i += 1;
+    }
+}
+
+/// Optional separator, a label, an optional separator, and a number. Labels are
+/// tried longest first so `rc` is not read as post-release `r`.
+fn consume_tagged(bytes: &[u8], i: &mut usize, labels: &[&str]) -> bool {
+    let start = *i;
+    consume_sep(bytes, i);
+    for label in labels {
+        let label_bytes = label.as_bytes();
+        let end = *i + label_bytes.len();
+        let matched = bytes
+            .get(*i..end)
+            .is_some_and(|window| window.eq_ignore_ascii_case(label_bytes));
+        if matched {
+            let mut next = end;
+            consume_sep(bytes, &mut next);
+            if consume_digits(bytes, &mut next) {
+                *i = next;
+                return true;
+            }
+        }
+    }
+    *i = start;
+    false
+}
+
+fn consume_local(bytes: &[u8], i: &mut usize) -> bool {
+    if !consume_alnum(bytes, i) {
+        return false;
+    }
+    while *i < bytes.len() && matches!(bytes[*i], b'.' | b'_' | b'-') {
+        let sep = *i;
+        *i += 1;
+        if !consume_alnum(bytes, i) {
+            *i = sep;
+            return false;
+        }
+    }
+    true
+}
+
+fn consume_alnum(bytes: &[u8], i: &mut usize) -> bool {
+    let start = *i;
+    while *i < bytes.len() && bytes[*i].is_ascii_alphanumeric() {
+        *i += 1;
+    }
+    *i > start
 }
 
 fn now_unix() -> u64 {
@@ -1111,6 +1225,50 @@ mod tests {
             Some("0.4.1".to_string())
         );
         assert_eq!(parse_coperceive_version("not a version"), None);
+    }
+
+    #[test]
+    fn version_parser_accepts_pep440_public_and_local_versions() {
+        // importlib.metadata and `coperceive --version` print PEP 440, including
+        // a pre-release, a dev release, and a local version. Each must stay the
+        // whole version: the "versions differ" hint compares that text with the
+        // desktop app's version, so trimming to digits and dots would hide it.
+        assert_eq!(
+            parse_coperceive_version("coperceive 0.1.2rc1\n"),
+            Some("0.1.2rc1".to_string())
+        );
+        assert_eq!(
+            parse_coperceive_version("0.1.2.dev0\n"),
+            Some("0.1.2.dev0".to_string())
+        );
+        assert_eq!(
+            parse_coperceive_version("0+unknown\n"),
+            Some("0+unknown".to_string())
+        );
+        assert_eq!(
+            parse_coperceive_version("1!2.0a1.post2.dev3+ubuntu.1\n"),
+            Some("1!2.0a1.post2.dev3+ubuntu.1".to_string())
+        );
+        let release = "0.1.2";
+        for form in ["0.1.2rc1", "0.1.2.dev0", "0+unknown"] {
+            let parsed = parse_coperceive_version(form).expect(form);
+            assert_ne!(
+                parsed, release,
+                "{form} must stay different from {release} so the differ hint still shows"
+            );
+        }
+        assert_eq!(parse_coperceive_version("0.1.2").as_deref(), Some("0.1.2"));
+    }
+
+    #[test]
+    fn version_parser_does_not_panic_on_non_ascii() {
+        assert_eq!(parse_coperceive_version("0.1é\n"), None);
+        assert_eq!(parse_coperceive_version("coperceive 0.1.2é"), None);
+        assert_eq!(
+            parse_coperceive_version("版本 0.1.2"),
+            Some("0.1.2".to_string())
+        );
+        assert_eq!(parse_coperceive_version("只是警告\n"), None);
     }
 
     #[test]
