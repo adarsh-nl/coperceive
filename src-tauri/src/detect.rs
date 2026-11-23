@@ -1069,7 +1069,7 @@ fn is_pep440_version(input: &str) -> bool {
     }
     let bytes = s.as_bytes();
     let mut i = 0;
-    if let Some(bang) = s.find('!') {
+    if let Some(bang) = bytes.iter().position(|byte| *byte == b'!') {
         if bang > 0 && bytes[..bang].iter().all(|byte| byte.is_ascii_digit()) {
             i = bang + 1;
         }
@@ -1085,9 +1085,9 @@ fn is_pep440_version(input: &str) -> bool {
             break;
         }
     }
-    let _ = consume_tagged(s, &mut i, &["preview", "alpha", "beta", "rc", "pre", "a", "b", "c"]);
-    let _ = consume_tagged(s, &mut i, &["post", "rev", "r"]);
-    let _ = consume_tagged(s, &mut i, &["dev"]);
+    let _ = consume_tagged(bytes, &mut i, &["preview", "alpha", "beta", "rc", "pre", "a", "b", "c"]);
+    let _ = consume_tagged(bytes, &mut i, &["post", "rev", "r"]);
+    let _ = consume_tagged(bytes, &mut i, &["dev"]);
     if i < bytes.len() && bytes[i] == b'+' {
         i += 1;
         if !consume_local(bytes, &mut i) {
@@ -1113,14 +1113,17 @@ fn consume_sep(bytes: &[u8], i: &mut usize) {
 
 /// Optional separator, a label, an optional separator, and a number. Labels are
 /// tried longest first so `rc` is not read as post-release `r`.
-fn consume_tagged(s: &str, i: &mut usize, labels: &[&str]) -> bool {
+fn consume_tagged(bytes: &[u8], i: &mut usize, labels: &[&str]) -> bool {
     let start = *i;
-    let bytes = s.as_bytes();
     consume_sep(bytes, i);
     for label in labels {
-        if s[*i..].len() >= label.len() && s[*i..*i + label.len()].eq_ignore_ascii_case(label) {
-            let after_label = *i + label.len();
-            let mut next = after_label;
+        let label_bytes = label.as_bytes();
+        let end = *i + label_bytes.len();
+        let matched = bytes
+            .get(*i..end)
+            .is_some_and(|window| window.eq_ignore_ascii_case(label_bytes));
+        if matched {
+            let mut next = end;
             consume_sep(bytes, &mut next);
             if consume_digits(bytes, &mut next) {
                 *i = next;
@@ -1255,6 +1258,17 @@ mod tests {
             );
         }
         assert_eq!(parse_coperceive_version("0.1.2").as_deref(), Some("0.1.2"));
+    }
+
+    #[test]
+    fn version_parser_does_not_panic_on_non_ascii() {
+        assert_eq!(parse_coperceive_version("0.1é\n"), None);
+        assert_eq!(parse_coperceive_version("coperceive 0.1.2é"), None);
+        assert_eq!(
+            parse_coperceive_version("版本 0.1.2"),
+            Some("0.1.2".to_string())
+        );
+        assert_eq!(parse_coperceive_version("只是警告\n"), None);
     }
 
     #[test]
