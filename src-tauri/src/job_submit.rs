@@ -1384,20 +1384,22 @@ mod tests {
         plan
     }
 
+    /// Interpreter paths a job script must carry as one inert word: a space, quotes,
+    /// and command substitution.
+    const AWKWARD_PLUGIN_PYTHONS: [&str; 4] = [
+        "/opt/envs/opencood-official/bin/python",
+        "/opt/envs/opencood official/bin/python",
+        "/opt/envs/it's \"x\"/bin/python",
+        "/opt/envs/$(touch pwned)/`touch pwned2`/$HOME/bin/python",
+    ];
+
     #[test]
-    fn the_plugin_interpreter_reaches_the_run_line_quoted_and_inert() {
+    fn the_plugin_interpreter_reaches_the_run_line_last_and_quoted() {
         let profile = profile("ps");
         let plain = render_run_script(&profile, &builtin_plan(&profile), &SubmitOptions::default())
             .expect("no override");
         assert!(!plain.script.contains("--plugin-python"), "{}", plain.script);
-        let dir = std::env::temp_dir().join(format!("coperceive-plugin-python-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        for path in [
-            "/opt/envs/opencood-official/bin/python",
-            "/opt/envs/opencood official/bin/python",
-            "/opt/envs/it's \"x\"/bin/python",
-            "/opt/envs/$(touch pwned)/`touch pwned2`/$HOME/bin/python",
-        ] {
+        for path in AWKWARD_PLUGIN_PYTHONS {
             let plan = with_plugin_python(builtin_plan(&profile), path);
             let script = render_run_script(&profile, &plan, &SubmitOptions::default())
                 .expect(path)
@@ -1407,12 +1409,24 @@ mod tests {
                 .find(|line| line.contains(" model run --manifest "))
                 .expect("run line");
             // Last on the line, quoted by the job script's one quoting helper.
-            let quoted = shell_quote(path);
-            assert!(run_line.ends_with(&format!(" --plugin-python {quoted}")), "{run_line}");
-            // The shell reads the word back as exactly the path, expanding nothing.
+            assert!(
+                run_line.ends_with(&format!(" --plugin-python {}", shell_quote(path))),
+                "{run_line}"
+            );
+        }
+    }
+
+    /// Bash reads each quoted word back as exactly the path and expands nothing (the
+    /// job script runs under bash on the cluster; Windows CI has no /bin/bash).
+    #[cfg(unix)]
+    #[test]
+    fn bash_reads_the_quoted_plugin_interpreter_back_unchanged() {
+        let dir = std::env::temp_dir().join(format!("coperceive-plugin-python-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        for path in AWKWARD_PLUGIN_PYTHONS {
             let echoed = std::process::Command::new("/bin/bash")
                 .arg("-c")
-                .arg(format!("printf '%s' {quoted}"))
+                .arg(format!("printf '%s' {}", shell_quote(path)))
                 .current_dir(&dir)
                 .output()
                 .expect("bash");
