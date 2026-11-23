@@ -2,6 +2,7 @@
 import { SettingRow } from "../desktop/components/SettingRow";
 import { StylePreview } from "./StylePreview";
 import {
+  DEFAULT_VIEWER_STYLE,
   effectiveCinemaDrift,
   useViewerStyle,
   VIEWER_STYLES,
@@ -15,7 +16,12 @@ export function ViewerStyleSettings() {
   const driftOn = effectiveCinemaDrift(drift, reducedMotion);
   return (
     <div className="viewer-style-setting" style={{ borderTop: "1px solid var(--line-subtle)", padding: "8px 0 4px" }}>
-      <div style={{ padding: "0 0 6px", fontSize: "13px", fontWeight: 500, color: "var(--text)" }}>Style</div>
+      <div style={{ padding: "0 0 6px", display: "flex", flexDirection: "column", gap: "2px" }}>
+        <span style={{ fontSize: "13px", fontWeight: 500, color: "var(--text)" }}>Style</span>
+        <span style={{ fontSize: "12px", color: "var(--text-tertiary)", lineHeight: 1.4 }}>
+          The viewer's layout and look; display only. Default: {VIEWER_STYLE_TOKENS[DEFAULT_VIEWER_STYLE].label}.
+        </span>
+      </div>
       <div role="radiogroup" aria-label="Style" className="viewer-style-grid">
         {VIEWER_STYLES.map((value) => {
           const tokens = VIEWER_STYLE_TOKENS[value];
@@ -46,7 +52,7 @@ export function ViewerStyleSettings() {
           description={
             reducedMotion
               ? "Off while the system asks for reduced motion."
-              : "The camera turns slowly while the scene is playing."
+              : "The camera turns slowly while the scene is playing. Default: on."
           }
           onChange={(checked) => setDrift(checked)}
         />

@@ -88,6 +88,10 @@ export interface AppPersistentState {
   last_theme?: string;
   recent_roots: string[];
   welcome_card_dismissed?: boolean;
+  /** Settings → Viewer → Point size: 1–4 px a view starts with (default 2). */
+  viewer_point_size?: number;
+  /** Settings → Viewer → Camera view; absent = the last used view. */
+  default_viewpoint?: string | null;
 }
 
 export interface ViewerPreferences {
@@ -101,6 +105,9 @@ export interface ViewerPreferences {
   buffer_target_seconds?: number;
   client_memory_limit_bytes?: number;
   show_stream_stats?: boolean;
+  /** Settings → Viewer display defaults; Settings in the viewer window may write them. */
+  viewer_point_size?: number;
+  default_viewpoint?: string | null;
 }
 
 export function hasDesktopController(): boolean {

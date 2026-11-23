@@ -10,6 +10,11 @@ export type Appearance = {
   axes: boolean;
   colorBy: ColorBy;
   pointSize: number;
+  /**
+   * The point size was chosen with this view's toolbar slider. When false the
+   * view follows Settings → Viewer → Point size (`viewer_point_size`).
+   */
+  pointSizeChosen: boolean;
   boxStyle: BoxStyle;
   hiddenClasses: string[];
   theme: ThemeName;
@@ -47,6 +52,45 @@ const FALLBACK = [0xb06a9a, 0x5aa0c4, 0xc4a15a, 0x7dcea0];
 
 export const THEME_OVERRIDE_KEY = "coperceive-theme-override";
 
+/** Point sizes in CSS pixels: the toolbar slider's range and Settings' choices. */
+export const POINT_SIZES = [1, 2, 3, 4] as const;
+
+/** Settings → Viewer → Point size when nothing is saved (inventory L87). */
+export const DEFAULT_POINT_SIZE = 2;
+
+export function isPointSize(value: unknown): value is number {
+  return typeof value === "number" && (POINT_SIZES as readonly number[]).includes(value);
+}
+
+/** The Settings point size the window was opened with (state.json `viewer_point_size`). */
+export function initialDefaultPointSize(): number {
+  if (typeof window === "undefined") return DEFAULT_POINT_SIZE;
+  const init = (window as unknown as { __COPERCEIVE_INITIAL_STATE__?: { viewer_point_size?: unknown } })
+    .__COPERCEIVE_INITIAL_STATE__;
+  return isPointSize(init?.viewer_point_size) ? init.viewer_point_size : DEFAULT_POINT_SIZE;
+}
+
+/**
+ * A stored view's point size against the Settings default. A view whose size
+ * was chosen in its toolbar keeps it; otherwise the default applies. A view
+ * saved before the `pointSizeChosen` marker existed counts as chosen when its
+ * size differs from the old fixed 2 (so an existing choice survives), and as
+ * following the default when it is 2.
+ */
+export function resolvePointSize(
+  row: { pointSize?: unknown; pointSizeChosen?: unknown },
+  defaultSize: number,
+): { pointSize: number; pointSizeChosen: boolean } {
+  const fallback = isPointSize(defaultSize) ? defaultSize : DEFAULT_POINT_SIZE;
+  const stored = isPointSize(row.pointSize) ? row.pointSize : null;
+  const chosen =
+    stored !== null &&
+    (typeof row.pointSizeChosen === "boolean" ? row.pointSizeChosen : stored !== DEFAULT_POINT_SIZE);
+  return chosen && stored !== null
+    ? { pointSize: stored, pointSizeChosen: true }
+    : { pointSize: fallback, pointSizeChosen: false };
+}
+
 export function getThemeOverride(): ThemeName | null {
   if (typeof window === "undefined") return null;
   const initTheme = (window as unknown as { __COPERCEIVE_INITIAL_STATE__?: { theme_override?: string } }).__COPERCEIVE_INITIAL_STATE__?.theme_override;
@@ -69,6 +113,20 @@ export function setThemeOverride(theme: ThemeName): void {
   } catch {}
 }
 
+/**
+ * Follow the system again ("System" in Settings): forget this page's stored
+ * override and the one the window was opened with.
+ */
+export function clearThemeOverride(): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(THEME_OVERRIDE_KEY);
+  } catch {}
+  const init = (window as unknown as { __COPERCEIVE_INITIAL_STATE__?: { theme_override?: string } })
+    .__COPERCEIVE_INITIAL_STATE__;
+  if (init) delete init.theme_override;
+}
+
 export function systemTheme(): ThemeName {
   const override = getThemeOverride();
   if (override) return override;
@@ -78,7 +136,7 @@ export function systemTheme(): ThemeName {
   return "light";
 }
 
-export function defaultAppearance(): Appearance {
+export function defaultAppearance(pointSizeDefault: number = initialDefaultPointSize()): Appearance {
   return {
     points: true,
     boxes: true,
@@ -86,7 +144,8 @@ export function defaultAppearance(): Appearance {
     map: true,
     axes: true,
     colorBy: "agent",
-    pointSize: 2,
+    pointSize: isPointSize(pointSizeDefault) ? pointSizeDefault : DEFAULT_POINT_SIZE,
+    pointSizeChosen: false,
     boxStyle: "wire",
     hiddenClasses: [],
     theme: systemTheme(),
@@ -158,8 +217,8 @@ export function classColor(category: string): number {
   return FALLBACK[hash] ?? FALLBACK[0];
 }
 
-export function loadAppearance(): Appearance {
-  const base = defaultAppearance();
+export function loadAppearance(pointSizeDefault: number = initialDefaultPointSize()): Appearance {
+  const base = defaultAppearance(pointSizeDefault);
   try {
     const raw = localStorage.getItem(VIEW_KEY);
     if (!raw) {
@@ -177,7 +236,7 @@ export function loadAppearance(): Appearance {
       map: bool(row.map, base.map),
       axes: bool(row.axes, base.axes),
       colorBy: row.colorBy === "class" || row.colorBy === "seen" ? row.colorBy : "agent",
-      pointSize: pointSize(row.pointSize),
+      ...resolvePointSize(row, base.pointSize),
       boxStyle: row.boxStyle === "solid" ? "solid" : "wire",
       hiddenClasses: classes(row.hiddenClasses),
       theme: getThemeOverride() ?? base.theme,
@@ -212,6 +271,7 @@ function writeAppearance(value: Appearance): void {
     axes: value.axes,
     colorBy: value.colorBy,
     pointSize: value.pointSize,
+    pointSizeChosen: value.pointSizeChosen,
     boxStyle: value.boxStyle,
     hiddenClasses: value.hiddenClasses,
     theme: value.theme,
@@ -229,13 +289,6 @@ function writeAppearance(value: Appearance): void {
 
 function bool(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
-}
-
-function pointSize(value: unknown): number {
-  if (value === 1 || value === 2 || value === 3 || value === 4) {
-    return value;
-  }
-  return 2;
 }
 
 function opacity(value: unknown, fallback: number): number {
