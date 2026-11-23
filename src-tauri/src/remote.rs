@@ -1251,27 +1251,26 @@ mod tests {
         drop(mgr);
     }
 
-    #[test]
-    fn disconnect_with_timeout_kills_hanging_ssh_child() {
+    fn fake_ssh_session(
+        stem: &str,
+        script: impl FnOnce(&std::path::Path) -> String,
+    ) -> (PathBuf, RemoteSessionManager, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
-            "coperceive-remote-timeout-{}",
+            "coperceive-remote-timeout-{stem}-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp test dir");
         let pid_file = dir.join("fake_ssh.pid");
         let fake_ssh = dir.join("fake_ssh.sh");
-        let script = format!(
-            "#!/bin/sh\necho $$ > \"{}\"\nexec sleep 30\n",
-            pid_file.display()
-        );
+        let script = script(&pid_file);
         // A complete, closed file is renamed into place before it is executed: writing the
         // name that is about to be exec'd can fail with ETXTBSY on Linux (task #209).
         crate::test_seams::write_executable_atomically(&fake_ssh, &script)
             .expect("write fake ssh script");
 
         let client = RemoteClient::with_ssh_bin("hpc-alias", fake_ssh.to_str().unwrap());
-        let mut session = RemoteSessionManager {
+        let session = RemoteSessionManager {
             client,
             tunnel: None,
             uuid: "hang-uuid".to_string(),
@@ -1282,10 +1281,13 @@ mod tests {
             data_root: String::new(),
             job_id: None,
         };
+        (dir, session, pid_file)
+    }
 
+    fn disconnect_times_out(session: &mut RemoteSessionManager) -> (Duration, String) {
         let started = std::time::Instant::now();
         let err = session
-            .disconnect_with_timeout(Duration::from_secs(2))
+            .disconnect_with_timeout(Duration::from_secs(1))
             .expect_err("hanging ssh must time out");
         let elapsed = started.elapsed();
         assert!(
@@ -1296,17 +1298,65 @@ mod tests {
             err.to_string().contains("did not answer"),
             "unexpected timeout error: {err}"
         );
+        (elapsed, err.to_string())
+    }
 
-        let pid_text = fs::read_to_string(&pid_file).expect("fake ssh pid recorded");
-        let pid = pid_text.trim();
-        let alive = std::process::Command::new("kill")
-            .args(["-0", pid])
+    fn assert_no_process_with(pattern: &str) {
+        let status = std::process::Command::new("pgrep")
+            .args(["-f", pattern])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .expect("probe fake ssh pid")
-            .success();
-        assert!(!alive, "timed out ssh child (pid {pid}) was not killed");
+            .expect("probe for a surviving fake ssh process");
+        assert_eq!(
+            status.code(),
+            Some(1),
+            "a process with the test directory {pattern} survived"
+        );
+    }
+
+    #[test]
+    fn disconnect_with_timeout_kills_hanging_ssh_child() {
+        let (dir, mut session, pid_file) = fake_ssh_session("pid", |pid_file| {
+            format!(
+                "#!/bin/sh\necho $$ > \"{}\"\nexec sleep 30\n",
+                pid_file.display()
+            )
+        });
+        let (_elapsed, _err) = disconnect_times_out(&mut session);
+
+        match fs::read_to_string(&pid_file) {
+            Ok(pid_text) => {
+                let pid = pid_text.trim();
+                let alive = std::process::Command::new("kill")
+                    .args(["-0", pid])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .expect("probe fake ssh pid")
+                    .success();
+                assert!(!alive, "timed out ssh child (pid {pid}) was not killed");
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // The timeout killed the shell before its first line wrote the pid file, so
+                // there is no pid to probe. What must still be true is that nothing carrying
+                // this test's unique directory in its argv survived.
+                assert_no_process_with(dir.to_str().expect("temp dir is UTF-8"));
+            }
+            Err(error) => panic!("read fake ssh pid: {error}"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disconnect_with_timeout_leaves_no_process_when_the_script_never_wrote_a_pid() {
+        // Deliberately no pid-file line: this is the branch where the child was killed before
+        // its first line ran, so only the directory-scoped process check can say it is gone.
+        let (dir, mut session, pid_file) =
+            fake_ssh_session("no-pid", |_| "#!/bin/sh\nwhile :; do :; done\n".to_string());
+        let (_elapsed, _err) = disconnect_times_out(&mut session);
+        assert!(!pid_file.exists(), "the no-pid script must not write a pid file");
+        assert_no_process_with(dir.to_str().expect("temp dir is UTF-8"));
         let _ = fs::remove_dir_all(&dir);
     }
 }
