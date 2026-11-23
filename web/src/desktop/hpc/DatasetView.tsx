@@ -22,9 +22,11 @@ import {
   formatStorageEstimate,
   prepareEstimateLine,
   recoverFromRefusedPrepareSubmit,
+  wholeDatasetScenes,
   type ClusterDetectDocument,
   type ClusterIndexDocument,
   type ClusterIndexScene,
+  type ClusterRawCheck,
   type ClusterSceneStatusEntry,
   type DatasetPreparePreview,
   type CameraImagesMode,
@@ -53,6 +55,7 @@ import {
   STATE_LABEL,
   groupScenes,
   recordingTime,
+  rawCheckNotice,
   staleExplanation,
   type DatasetGrouping,
   type RecordingTime,
@@ -240,6 +243,8 @@ export default function DatasetView({
   // A cached index is shown at once while the same command checks for changes.
   const [checkingIndex, setCheckingIndex] = useState(false);
   const [indexNotice, setIndexNotice] = useState<string | null>(null);
+  // The latest status's raw check; "incomplete" shows a note (a partial check marks nothing stale).
+  const [rawCheck, setRawCheck] = useState<ClusterRawCheck | null>(null);
   // Retry re-runs the same index effect after forgetting a stale cache.
   const [indexAttempt, setIndexAttempt] = useState(0);
 
@@ -418,6 +423,7 @@ export default function DatasetView({
       if (statusDoc.cache_root) {
         setServerCacheRoot(statusDoc.cache_root);
       }
+      setRawCheck(statusDoc.raw_check ?? null);
       const nextMap = new Map<string, ClusterSceneStatusEntry>();
       for (const entry of statusDoc.scenes) {
         nextMap.set(entry.scene_id, entry);
@@ -729,7 +735,7 @@ export default function DatasetView({
           adapter: dataset.adapter || "opv2v",
           rawRoot: dataset.raw_root || dataset.path,
           split: dataset.split,
-          scenes: "all",
+          scenes: wholeDatasetScenes(statuses.size),
           images: preparePreview.images,
           workers: value,
         }),
@@ -752,7 +758,7 @@ export default function DatasetView({
           adapter: dataset.adapter || "opv2v",
           rawRoot: dataset.raw_root || dataset.path,
           split: dataset.split,
-          scenes: "all",
+          scenes: wholeDatasetScenes(statuses.size),
           images,
           workers: preparePreview.throttle,
         }),
@@ -775,7 +781,7 @@ export default function DatasetView({
         adapter: dataset.adapter || "opv2v",
         rawRoot: dataset.raw_root || dataset.path,
         split: dataset.split,
-        scenes: "all",
+        scenes: wholeDatasetScenes(statuses.size),
       });
       if (preview.cache_root) {
         setServerCacheRoot(preview.cache_root);
@@ -812,7 +818,7 @@ export default function DatasetView({
           adapter: dataset.adapter || "opv2v",
           rawRoot: dataset.raw_root || dataset.path,
           split: dataset.split,
-          scenes: "all",
+          scenes: wholeDatasetScenes(statuses.size),
           images: preparePreview.images,
           workers: preparePreview.throttle,
         },
@@ -1094,6 +1100,11 @@ export default function DatasetView({
             <button type="button" className="c-link" onClick={() => setIndexNotice(null)}>
               Dismiss
             </button>
+          </p>
+        ) : null}
+        {rawCheckNotice(rawCheck) ? (
+          <p role="status" className="c-page-note dv-raw-check">
+            {rawCheckNotice(rawCheck)}
           </p>
         ) : null}
         {indexError && indexDoc ? (

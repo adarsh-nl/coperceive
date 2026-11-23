@@ -491,6 +491,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status_parser.add_argument("--cache", required=True)
     status_parser.add_argument(
+        "--live-claims",
+        action="store_true",
+        help="Also list the preparing scenes a queued or running job still holds (one squeue).",
+    )
+    status_parser.add_argument(
         "--verbose", action="store_true", help="Print the full traceback on failure."
     )
     status_parser.set_defaults(func=_dataset_status)
@@ -1029,7 +1034,7 @@ def _dataset_status(args: argparse.Namespace) -> None:
     from coperceive.cluster_datasets import DatasetError, dataset_status_document
 
     try:
-        status = dataset_status_document(args.cache)
+        status = dataset_status_document(args.cache, with_live_claims=args.live_claims)
     except Exception as exc:  # noqa: BLE001 - one line for the user, the rest behind --verbose
         error = _dataset_failure(args, exc, known=DatasetError)
         print(json.dumps({"schema": "coperceive-cluster-scene-status-1", "error": error}, indent=2))
@@ -1115,22 +1120,20 @@ def _schema(_args: argparse.Namespace) -> None:
 # cluster-datasets-3: index/prepare --split.
 # cluster-datasets-4: prepare --images originals|previews, dataset previews.
 # cluster-datasets-5: dataset stream (viewing over SSH, no Slurm job).
+# cluster-datasets-6: dataset status --live-claims ("Prepare remaining").
 CAPABILITIES = (
     "cluster-datasets-2",
     "cluster-datasets-3",
     "cluster-datasets-4",
     "cluster-datasets-5",
+    "cluster-datasets-6",
 )
 
 
 def _capabilities(_args: argparse.Namespace) -> None:
-    import importlib.metadata
     import json
 
-    try:
-        version = importlib.metadata.version("coperceive")
-    except importlib.metadata.PackageNotFoundError:
-        version = __version__
+    version = __version__
     document = {
         "schema": "coperceive-capabilities-1",
         "version": version,

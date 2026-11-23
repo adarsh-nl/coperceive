@@ -12,7 +12,7 @@ Two CARLA-based cooperative perception datasets with the same on-disk layout, re
 
 **Citation.** Use the canonical arXiv entry on the [OPV2V page](opv2v.md#citation).
 
-**Download.** [Authors UCLA Box data host](https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V).
+**Download.** [Authors' UCLA Box data host](https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V) (linked from <https://mobility-lab.seas.ucla.edu/opv2v/>, the authors' page, which links the UCLA Box folder).
 
 ### V2XSet
 
@@ -20,7 +20,7 @@ Two CARLA-based cooperative perception datasets with the same on-disk layout, re
 
 **Citation.** Use the canonical arXiv entry on the [V2XSet page](v2xset.md#citation).
 
-**Download.** [Authors UCLA Box data host](https://ucla.app.box.com/v/UCLA-MobilityLab-V2XVIT).
+**Download.** [Authors' UCLA Box data host](https://ucla.app.box.com/v/UCLA-MobilityLab-V2XVIT) (linked from <https://github.com/DerrickXuNu/v2x-vit>, whose README links the UCLA Box V2X-ViT data).
 
 Upstream asset terms have not been checked.
 

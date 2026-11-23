@@ -14,7 +14,7 @@ coperceive model cache prune --out /path/predictions --plugin fake
 ## Commands
 
 - `coperceive model list` enumerates installed plugins registered under the `coperceive.models` entry-point group (`name  source  location`).
-- `coperceive model inspect <plugin> [--manifest FILE]` validates the manifest, prints it as canonical YAML, and reports the resolved interpreter path (or why it cannot be resolved).
+- `coperceive model inspect <plugin> [--manifest FILE] [--plugin-python PATH]` validates the manifest, prints it as canonical YAML, and reports the resolved interpreter path (or why it cannot be resolved) with where it came from: `interpreter_source: manifest environment.<kind>` or `interpreter_source: --plugin-python`.
 - `coperceive model check <plugin> [--manifest FILE] [--model NAME] [--keep] [--work DIR] [--raw-root DIR] [--option k=v ...]` builds a synthetic cooperative scene (vehicle and UAV, four pose times, camera PNGs and lidar sweeps as requested by the model's modalities) and verifies the ten conformance rules of [the spec](spec/model-plugin.md#conformance-coperceive-model-check):
   1. `hello` arrives first with `protocol: 1`, matching plugin name and version, every manifest model, and a 32-hex `environment.checkpoint_md5`.
   2. `configure` is answered with `configured` (or `error` code `unsupported`, which marks the model `skipped`).
@@ -93,6 +93,21 @@ Every manifest has `spec_version: 1`, `name`, `version`, `licence` (`notice` req
   - `modules: [...]` lists HPC environment modules for the Slurm emitter (`module load ...`).
   - `secrets: [VAR_NAME, ...]` names environment variables to pass through from the parent process; values are never stored in manifests, `run.json`, cache entries, logs or sbatch files, and any secret value of 4 or more characters is redacted to `[redacted]` in `parent.log`, `plugin.log` and error strings.
   - `inherit_ld_library_path: true` forwards `LD_LIBRARY_PATH` when required by CUDA modules.
+
+#### Plugin interpreter (`--plugin-python`)
+
+The manifest's `environment` is the default. When your environment has another name or lives elsewhere (a conda env called something else, a venv, a module-provided Python), pass its interpreter instead of editing the manifest:
+
+```bash
+coperceive model run <plugin> --plugin-python /path/to/envs/<your-env>/bin/python ...
+```
+
+- `model run` (with or without `--slurm`), `model check` and `model inspect` take it.
+- It is one full path to an interpreter, for conda and venv alike (a conda env's is `<prefix>/bin/python`; `conda run -n <your-env> which python` prints it). Nothing is activated, as for the manifest's `conda:`.
+- It is checked before anything runs or is submitted: the path must be an executable file, or the command stops with `--plugin-python: no interpreter at <path>` (or `... is not executable`).
+- `--slurm` writes it into the job's `model run` line exactly as given, so the compute node uses the same path; the job checks it again when it starts.
+- `run.json` records it as `provenance.plugin_python`. A run without it has no such key.
+- A dependency the run starts (`depends_on`) is the same plugin and uses the same interpreter.
 - **`inputs`** declares `modalities` (`camera`, `lidar`, `radar`), `agents` (agent types or `any`), `sensors` (glob patterns), `frames` (`single` or stateful `sequence`), and optional `raw` path templates (with `{scene}`, `{agent}`, `{agent_root}`, `{sensor}`, `{time_us}`, `{frame}` plus `raw_agent_roots` and `raw_clock`). Every path sent to the child is resolved through `confine` against `--scenes`, `--raw-root` or `--media-root`.
 - **`outputs`** sets `categories`, `score_note`, `sources`, `agent` (`request` or a fixed agent type such as `vehicle` for fused outputs), `artifacts`, `transient_artifacts`, and `deterministic`.
 - **`resources`** sets `gpu`, `cpus`, `memory_gb`, `seconds_per_sample`, `staging_seconds`, `conversion_seconds`, `frame_timeout_s`, `run_timeout_s`, `grace_s`, `slurm_constraint` and `max_inflight`.
