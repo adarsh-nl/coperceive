@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Bundle reproducible python-build-standalone runtime for Coperceive Desktop.
 
-Supports four targets:
+Supports three targets:
   - aarch64-apple-darwin (macOS Apple Silicon)
-  - x86_64-apple-darwin (macOS Intel)
   - x86_64-pc-windows-msvc (Windows x86_64)
   - x86_64-unknown-linux-gnu (Linux x86_64)
 
@@ -41,16 +40,6 @@ TARGETS: dict[str, dict[str, str | bool]] = {
         "bin_rel": "bin/python3",
         "site_packages_rel": "lib/python3.13/site-packages",
     },
-    "x86_64-apple-darwin": {
-        "tarball": (
-            f"{PYTHON_VERSION_CPYTHON}+{PYTHON_RELEASE}-x86_64-apple-darwin-install_only.tar.gz"
-        ),
-        "sha256": "994c233cf86487b61283db63363ee969cf69dc551fba389c6d6d4e8534d4735f",
-        "lockfile": "requirements-darwin-x86_64.lock",
-        "is_windows": False,
-        "bin_rel": "bin/python3",
-        "site_packages_rel": "lib/python3.13/site-packages",
-    },
     "x86_64-pc-windows-msvc": {
         "tarball": (
             f"{PYTHON_VERSION_CPYTHON}+{PYTHON_RELEASE}-x86_64-pc-windows-msvc-install_only.tar.gz"
@@ -79,7 +68,10 @@ def detect_host_target() -> str:
         machine = platform.machine().lower()
         if "arm" in machine or "aarch64" in machine:
             return "aarch64-apple-darwin"
-        return "x86_64-apple-darwin"
+        raise RuntimeError(
+            "macOS Intel (x86_64) is no longer supported from v0.1.3; "
+            "v0.1.2 is the last Intel release."
+        )
     if sys.platform.startswith("win"):
         return "x86_64-pc-windows-msvc"
     if sys.platform.startswith("linux"):
@@ -342,7 +334,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: Python binary not found at {python_bin}", file=sys.stderr)
         return 2
 
-    # Verify binary can execute (under Rosetta if x86_64 on macOS Apple Silicon)
+    # Verify binary can execute
     version_proc = subprocess.run(
         [str(python_bin), "--version"],
         capture_output=True,

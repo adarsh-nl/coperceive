@@ -83,8 +83,6 @@ def test_a_release_tag_becomes_the_bundle_version_and_names_latest_json(tmp_path
     assets.mkdir()
     (assets / "Coperceive_aarch64.app.tar.gz").write_bytes(b"archive-arm64")
     (assets / "Coperceive_aarch64.app.tar.gz.sig").write_text("c2lnLWFybTY0\n")
-    (assets / "Coperceive_x64.app.tar.gz").write_bytes(b"archive-intel")
-    (assets / "Coperceive_x64.app.tar.gz.sig").write_text("c2lnLWludGVs\n")
     (assets / "Coperceive_0.1.1_x64-setup.exe").write_bytes(b"archive-win")
     (assets / "Coperceive_0.1.1_x64-setup.exe.sig").write_text("c2lnLXdpbg==\n")
     (assets / "Coperceive_0.1.1_amd64.AppImage").write_bytes(b"archive-linux")
@@ -106,9 +104,9 @@ def test_a_release_tag_becomes_the_bundle_version_and_names_latest_json(tmp_path
     assert wlj.main(argv) == 0
     manifest = json.loads(out.read_text())
     assert manifest["version"] == "0.1.1"
+    assert "darwin-x86_64" not in manifest["platforms"]
     assert set(manifest["platforms"].keys()) == {
         "darwin-aarch64",
-        "darwin-x86_64",
         "windows-x86_64",
         "linux-x86_64",
     }
@@ -116,10 +114,6 @@ def test_a_release_tag_becomes_the_bundle_version_and_names_latest_json(tmp_path
         f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive_aarch64.app.tar.gz"
     )
     assert manifest["platforms"]["darwin-aarch64"]["signature"] == "c2lnLWFybTY0"
-    assert manifest["platforms"]["darwin-x86_64"]["url"] == (
-        f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive_x64.app.tar.gz"
-    )
-    assert manifest["platforms"]["darwin-x86_64"]["signature"] == "c2lnLWludGVs"
     assert manifest["platforms"]["windows-x86_64"]["url"] == (
         f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive_0.1.1_x64-setup.exe"
     )

@@ -49,7 +49,7 @@ The in-app banner can still be exercised in CI against a mock `latest.json` (`CO
 
 ## Platform update behavior
 
-- **macOS (Apple Silicon & Intel)**: Checks `latest.json` for `darwin-aarch64` or `darwin-x86_64`, downloads the architecture-specific update archive (`Coperceive_aarch64.app.tar.gz` or `Coperceive_x64.app.tar.gz`), and prompts to restart into the new version.
+- **macOS (Apple Silicon only from v0.1.3 on)**: Checks `latest.json` for `darwin-aarch64`, downloads `Coperceive_aarch64.app.tar.gz`, and prompts to restart into the new version. Intel Mac builds end after [v0.1.2](https://github.com/adarsh-nl/coperceive/releases/tag/v0.1.2); Intel Mac users stay on v0.1.2.
 - **Windows (x86_64)**: Checks `latest.json` for `windows-x86_64`, downloads the NSIS installer executable (`Coperceive_<version>_x64-setup.exe`), and applies the update.
 - **Linux (AppImage)**: In-app updates replace the running `.AppImage` executable in-place.
 - **Linux (Debian / Ubuntu `.deb`)**: In-app updates do not apply to `.deb` package installs. The background updater suppresses the sidebar update card so an un-installable update is never offered; a manual check via **Help → Check for Updates…** informs the user to update with `apt` or download the new `.deb` from GitHub Releases.

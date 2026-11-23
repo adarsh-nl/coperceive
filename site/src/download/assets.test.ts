@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { clientFromSignals, otherPlatforms, primaryOffer, slotFor, type ReleaseJson } from "./assets.ts";
+import {
+  INTEL_MAC_LEGACY_LABEL,
+  INTEL_MAC_LEGACY_URL,
+  clientFromSignals,
+  otherPlatforms,
+  primaryOffer,
+  slotFor,
+  type ReleaseJson,
+} from "./assets.ts";
 
 const MAC_CHROME =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -41,9 +49,15 @@ test("each operating system and architecture is offered its own file", () => {
   const arm = primaryOffer(MATRIX, clientFromSignals(MAC_CHROME, "arm"));
   assert.deepEqual(arm.links.map((link) => link.asset.name), ["Coperceive_0.1.1_aarch64.dmg"]);
   assert.equal(arm.coming.length, 0);
+  assert.equal(arm.intelMacLegacy, null);
 
   const intel = primaryOffer(MATRIX, clientFromSignals(MAC_CHROME, "x86"));
-  assert.deepEqual(intel.links.map((link) => link.asset.name), ["Coperceive_0.1.1_x64.dmg"]);
+  assert.deepEqual(intel.links, []);
+  assert.deepEqual(intel.coming, []);
+  assert.deepEqual(intel.intelMacLegacy, {
+    label: INTEL_MAC_LEGACY_LABEL,
+    href: INTEL_MAC_LEGACY_URL,
+  });
 
   const windows = primaryOffer(MATRIX, clientFromSignals(WINDOWS, "x86"));
   assert.deepEqual(windows.links.map((link) => link.asset.name), ["Coperceive_0.1.1_x64-setup.exe"]);
@@ -61,12 +75,17 @@ test("each operating system and architecture is offered its own file", () => {
   assert.equal(linuxArm.coming.length, 1);
 });
 
-test("Safari on a Mac is offered both disk images", () => {
+test("Safari on a Mac is offered Apple Silicon DMG plus the v0.1.2 Intel note", () => {
   const safari = primaryOffer(MATRIX, clientFromSignals(MAC_SAFARI, null));
   assert.deepEqual(
     safari.links.map((link) => link.asset.name),
-    ["Coperceive_0.1.1_aarch64.dmg", "Coperceive_0.1.1_x64.dmg"],
+    ["Coperceive_0.1.1_aarch64.dmg"],
   );
+  assert.deepEqual(safari.coming, []);
+  assert.deepEqual(safari.intelMacLegacy, {
+    label: INTEL_MAC_LEGACY_LABEL,
+    href: INTEL_MAC_LEGACY_URL,
+  });
 });
 
 test("a release without an NSIS updater archive does not list that slot", () => {
@@ -74,7 +93,7 @@ test("a release without an NSIS updater archive does not list that slot", () => 
   assert.equal(names.some((name) => name.endsWith(".nsis.zip")), false);
 });
 
-test("a Mac-only release says Windows and Linux are coming, and never links them", () => {
+test("a Mac arm64 release directs Intel Mac visitors to v0.1.2 and marks Windows and Linux as coming", () => {
   const windows = primaryOffer(V010, clientFromSignals(WINDOWS, null));
   assert.deepEqual(windows.links, []);
   assert.equal(windows.coming.length, 1);
@@ -86,7 +105,11 @@ test("a Mac-only release says Windows and Linux are coming, and never links them
 
   const intel = primaryOffer(V010, clientFromSignals(MAC_CHROME, "x86"));
   assert.deepEqual(intel.links, []);
-  assert.equal(intel.coming.length, 1);
+  assert.deepEqual(intel.coming, []);
+  assert.deepEqual(intel.intelMacLegacy, {
+    label: INTEL_MAC_LEGACY_LABEL,
+    href: INTEL_MAC_LEGACY_URL,
+  });
 });
 
 test("the release-workflow names map every platform, including proofs", () => {

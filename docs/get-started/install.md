@@ -8,14 +8,13 @@ The release README lists these files from [GitHub Releases](https://github.com/a
 
 | Platform | File |
 | --- | --- |
-| macOS Apple Silicon | `Coperceive_0.1.1_aarch64.dmg` |
-| macOS Intel | `Coperceive_0.1.1_x64.dmg` |
+| macOS Apple Silicon | `Coperceive_<version>_aarch64.dmg` |
 | Windows x86_64 | `Coperceive_0.1.1_x64-setup.exe` |
 | Linux x86_64 | `Coperceive_0.1.1_amd64.AppImage` and `Coperceive_0.1.1_amd64.deb` |
 
 The same README records three limits:
 
-- The Intel Mac image is verified under Rosetta 2 in CI, and is not yet tested on physical Intel Mac hardware.
+- From v0.1.3 on, macOS builds are Apple Silicon only; Intel Mac users stay on [v0.1.2](https://github.com/adarsh-nl/coperceive/releases/tag/v0.1.2) (the last Intel release).
 - Linux in-app updates apply to the `.AppImage`. A `.deb` install is updated with the package manager or by installing a newer `.deb`.
 - Unsigned Windows builds show SmartScreen on first run. The README says to use **More info**, then **Run anyway**.
 
