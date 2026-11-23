@@ -115,6 +115,34 @@ def test_a_bad_override_is_refused_naming_the_flag(tmp_path: Path) -> None:
         plugin_interpreter(current, plugin_dir=tmp_path, override=plain)
 
 
+def test_a_relative_override_is_refused_even_when_it_exists(
+    scenes: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A Slurm job carries the path exactly as given, and the compute node would resolve a
+    # relative one against another working directory, so it is refused everywhere.
+    _executable(tmp_path / "env" / "bin" / "python")
+    monkeypatch.chdir(tmp_path)
+    current = Environment("current", None, (), (), False)
+    relative = Path("env") / "bin" / "python"
+    assert relative.is_file()
+    with pytest.raises(ModelSpecError, match="^--plugin-python: give a full path"):
+        plugin_interpreter(current, plugin_dir=tmp_path, override=relative)
+
+    def no_submit(_path: Path) -> str:
+        raise AssertionError("submitted")
+
+    monkeypatch.setattr(slurm, "submit", no_submit)
+    out = tmp_path / "predictions"
+    with pytest.raises(SystemExit) as caught:
+        main(_run(scenes, out, "--plugin-python", str(relative), *_slurm(tmp_path), "--submit"))
+    assert caught.value.code != 0
+    assert "--plugin-python: give a full path" in capsys.readouterr().err
+    assert not out.exists()
+
+
 def test_inspect_shows_the_interpreter_and_where_it_came_from(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

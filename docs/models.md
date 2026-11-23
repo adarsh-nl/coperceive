@@ -105,7 +105,7 @@ coperceive model run <plugin> --plugin-python /path/to/envs/<your-env>/bin/pytho
 
 - `model run` (with or without `--slurm`), `model check` and `model inspect` take it.
 - It is one full path to an interpreter, for conda and venv alike (a conda env's is `<prefix>/bin/python`; `conda run -n <your-env> which python` prints it). Nothing is activated, as for the manifest's `conda:`.
-- It is checked before anything runs or is submitted: the path must be an executable file, or the command stops with `--plugin-python: no interpreter at <path>` (or `... is not executable`).
+- It is checked before anything runs or is submitted: the path must be an absolute path to an executable file, or the command stops with `--plugin-python: give a full path`, `--plugin-python: no interpreter at <path>` or `... is not executable`.
 - `--slurm` writes it into the job's `model run` line exactly as given, so the compute node uses the same path; the job checks it again when it starts.
 - `run.json` records it as `provenance.plugin_python`. A run without it has no such key.
 - A dependency the run starts (`depends_on`) is the same plugin and uses the same interpreter.
