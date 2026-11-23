@@ -261,6 +261,8 @@ fn render(cases: &Value, case: &Value, entry: &ServerEntry) -> Result<String, St
         // Griffin declares ckpt_root without a default: every case gives one, and the
         // ckpt_root_custom case gives a folder of its own rather than the default.
         ckpt_root: case["ckpt_root"].as_str().map(str::to_string).unwrap_or_else(|| format!("{root}/ckpts")),
+        // The AP protocol the plan records; a legacy case also puts it in the run line.
+        eval_protocol: case["eval_protocol"].as_str().unwrap_or("default").to_string(),
         environment_override: None,
     };
     let plan = build_run_plan(&cluster, entry, &request).map_err(|e| format!("build_run_plan: {e}"))?;

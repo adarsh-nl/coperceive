@@ -500,6 +500,10 @@ def plan_sbatch(
     """The sbatch of ADR 0011 decision 5 for ``coperceive model run`` over ``scenes``."""
     run_id = validate_run_id(run_id)
     scratch_template = validate_scratch_template(scratch_template)
+    if options.eval_protocol not in (None, "default", "legacy"):
+        raise SlurmError(
+            f"model run --protocol must be default or legacy, got {options.eval_protocol!r}"
+        )
     # Validate every option before anything is written: an unknown option, a bad value or a
     # required option with no value (a manifest option with no default) is refused here,
     # naming the option, instead of on the compute node after the job was submitted.
@@ -739,6 +743,8 @@ def _run_command(
         "--model",
         shlex.quote(spec.key),
     ]
+    if options.eval_protocol is not None:
+        argv.extend(["--protocol", shlex.quote(options.eval_protocol)])
     if raw:
         argv.extend(["--raw-root", '"$SCRATCH/raw"'])
     if options.agent_ids:

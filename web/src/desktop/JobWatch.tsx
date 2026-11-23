@@ -10,6 +10,7 @@ import {
   failureNextAction,
   isJobActive,
   jobWatchLabel,
+  evalProtocolLabel,
   metricsRows,
   progressLabel,
   type JobLogTail,
@@ -62,10 +63,13 @@ export default function JobWatch({
   profileId,
   planId,
   initialOutcome,
+  evalProtocol,
 }: {
   profileId: string;
   planId: string;
   initialOutcome: JobSubmitOutcome;
+  /** The protocol the saved plan records; shown with the job's result. */
+  evalProtocol?: string;
 }) {
   const [status, setStatus] = useState<JobWatchStatus | null>(null);
   const [error, setError] = useState("");
@@ -255,6 +259,9 @@ export default function JobWatch({
         <button type="button" style={button} disabled={busy !== null} onClick={() => void refreshNow()}>
           {busy === "refresh" ? "Refreshing…" : "Refresh now"}
         </button>
+      </div>
+      <div style={{ marginTop: "0.35rem", opacity: 0.85 }}>
+        AP protocol: {evalProtocolLabel(evalProtocol)}
       </div>
       <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.5rem", flexWrap: "wrap" }}>
         <button type="button" style={button} disabled={busy !== null} onClick={() => void tail("stdout")}>

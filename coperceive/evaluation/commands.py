@@ -351,7 +351,22 @@ def _run(args: argparse.Namespace) -> None:
     predictions = _existing_predictions_root(args)
     config_path = args.config
     protocol = args.protocol if isinstance(args.protocol, str) else None
-    config = load_config(Path(config_path) if isinstance(config_path, str) else None, protocol)
+    # A model run can record the evaluation protocol it was made for. Use it only when
+    # neither --protocol nor the config file chose one; an explicit choice always wins.
+    recorded = None
+    try:
+        provenance = read_run_meta(predictions, args.run_id).provenance or {}
+        value = provenance.get("eval_protocol")
+        if isinstance(value, str):
+            recorded = value
+    except PredictionError:
+        # A missing or malformed run.json gets evaluate_run's own message below.
+        pass
+    config = load_config(
+        Path(config_path) if isinstance(config_path, str) else None,
+        protocol,
+        recorded=recorded,
+    )
     report = evaluate_run(
         root,
         predictions,

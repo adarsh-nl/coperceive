@@ -80,21 +80,37 @@ DEFAULT_CONFIG = EvalConfig(
 )
 
 
-def load_config(path: Path | None, protocol: str | None = None) -> EvalConfig:
+def load_config(
+    path: Path | None,
+    protocol: str | None = None,
+    *,
+    recorded: str | None = None,
+) -> EvalConfig:
     """Read a YAML config; ``None`` is the default config. An empty file is too.
 
     ``protocol`` is the command line's ``--protocol``; it sets the config's ``protocol``
-    key, and a file that names another protocol is an error.
+    key, and a file that names another protocol is an error. ``recorded`` is the
+    ``eval_protocol`` a ``coperceive model run`` wrote into ``run.json``: it applies only
+    when neither the command line nor the config file chose a protocol, so an explicit
+    choice still wins over the run's default.
     """
     if path is None:
-        return DEFAULT_CONFIG if protocol is None else parse_config({}, protocol=protocol)
+        chosen = protocol if protocol is not None else recorded
+        return DEFAULT_CONFIG if chosen is None else parse_config({}, protocol=chosen)
     import yaml
 
     try:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        payload: object = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise ConfigError(f"{path}: {exc}") from None
-    return parse_config(payload, protocol=protocol)
+    if protocol is None and isinstance(payload, dict):
+        mapping = cast(dict[str, object], payload)
+        if mapping.get("protocol") is not None:
+            # The file names its own protocol: it wins over the run's recorded default.
+            return parse_config(mapping)
+    return parse_config(
+        cast(object, payload), protocol=protocol if protocol is not None else recorded
+    )
 
 
 def parse_config(payload: object, protocol: str | None = None) -> EvalConfig:

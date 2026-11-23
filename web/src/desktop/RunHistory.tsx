@@ -17,6 +17,7 @@ import type { ServerEntry } from "./hpc";
 import {
   historyCanRerun,
   historyStateLabel,
+  evalProtocolLabel,
   reproPreviewLines,
   slurmSeconds,
   type JobSubmitOutcome,
@@ -332,6 +333,17 @@ export default function RunHistory() {
         </span>
       ),
     },
+    {
+      key: "protocol",
+      header: "AP protocol",
+      min: 104,
+      max: 140,
+      render: (entry) => (
+        <span style={{ fontSize: "12px" }}>
+          {entry.eval_protocol === "legacy" ? "Legacy (v0.1.1)" : "Default"}
+        </span>
+      ),
+    },
     { key: "state", header: "State", min: 104, max: 130, render: (entry) => <StateLabel entry={entry} /> },
     { key: "time", header: "Time used / limit", min: 176, max: 260, render: (entry) => <TimeUsed entry={entry} /> },
     {
@@ -356,6 +368,7 @@ export default function RunHistory() {
           items={[
             ["Time used", selected.elapsed ?? "—"],
             ["Limit", selected.time_limit ?? "—"],
+            ["AP protocol", evalProtocolLabel(selected.eval_protocol)],
             selected.partition ? ["Partition", selected.partition] : null,
             ["Started", selected.started ?? "—"],
             selected.ended ? ["Ended", selected.ended] : null,
