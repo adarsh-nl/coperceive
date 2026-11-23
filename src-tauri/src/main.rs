@@ -1181,6 +1181,17 @@ fn run_updater_check(
                 };
                 Ok(serde_json::to_value(&outcome).unwrap_or_default())
             }
+            tauri_plugin_updater::Error::TargetNotFound(_)
+            | tauri_plugin_updater::Error::TargetsNotFound(_) => {
+                let outcome = coperceive_desktop::updater::missing_target_check_outcome(
+                    cfg!(all(target_os = "macos", target_arch = "x86_64")),
+                )
+                .unwrap_or_else(|| coperceive_desktop::updater::UpdateCheckOutcome::Error {
+                    error: err.to_string(),
+                    is_network: false,
+                });
+                Ok(serde_json::to_value(&outcome).unwrap_or_default())
+            }
             _ => {
                 let is_network = matches!(
                     err,
