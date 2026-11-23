@@ -102,6 +102,12 @@ HEARTBEAT_TIMEOUT="${COPERCEIVE_HEARTBEAT_TIMEOUT:-600}"
 HEARTBEAT_FILE="${SESSIONS_DIR}/${UUID}.heartbeat"
 touch "${HEARTBEAT_FILE}"
 chmod 0600 "${HEARTBEAT_FILE}"
+# The served viewer renews the lease while it answers requests (serve
+# --heartbeat-file); idle, nothing renews it and the watchdog below ends the job.
+HEARTBEAT_ARGS=()
+if [ "${HEARTBEAT_TIMEOUT}" -gt 0 ] 2>/dev/null; then
+    HEARTBEAT_ARGS=(--heartbeat-file "${HEARTBEAT_FILE}")
+fi
 
 cleanup() {
     trap - SIGTERM SIGINT EXIT
@@ -164,6 +170,7 @@ fi
     --root "${DATA_ROOT}" \
     ${STATIC_ARGS[@]+"${STATIC_ARGS[@]}"} \
     ${MEDIA_ARGS[@]+"${MEDIA_ARGS[@]}"} \
+    ${HEARTBEAT_ARGS[@]+"${HEARTBEAT_ARGS[@]}"} \
     ${COPERCEIVE_EXTRA_ARGS:-} &
 SERVE_PID=$!
 
