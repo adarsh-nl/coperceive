@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 from coperceive.app.lease import RENEW_EVERY_S, ViewerLease, renews
@@ -86,10 +87,22 @@ def test_which_requests_count_as_use(path: str, counts: bool) -> None:
     assert renews(path) is counts
 
 
-def _client(tmp_path: Path, lease: ViewerLease) -> TestClient:
+class _Response(Protocol):
+    status_code: int
+
+
+class _Client(Protocol):
+    """The part of TestClient these tests use, typed (its own methods are untyped)."""
+
+    def get(self, url: str, *, headers: dict[str, str] | None = None) -> _Response: ...
+
+    def options(self, url: str) -> _Response: ...
+
+
+def _client(tmp_path: Path, lease: ViewerLease) -> _Client:
     root = tmp_path / "root"
     root.mkdir()
-    return TestClient(create_app(root=root, token=TOKEN, lease=lease))
+    return cast(_Client, TestClient(create_app(root=root, token=TOKEN, lease=lease)))
 
 
 def test_the_served_viewer_renews_on_authenticated_api_requests_only(tmp_path: Path) -> None:
