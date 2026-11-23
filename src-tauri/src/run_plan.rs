@@ -4622,7 +4622,6 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn the_model_list_check_runs_a_coperceive_command_with_quoted_words_under_sh() {
-        use std::os::unix::fs::PermissionsExt;
         // A venv under a folder whose name has a space, a quote and a `;`: shell_quote
         // single-quotes it, so it must reach `sh -c` as a positional parameter, never
         // inside the single-quoted script body.
@@ -4639,17 +4638,16 @@ mod tests {
             } else {
                 format!("cat <<'EOF'\n{MODEL_LIST_JSON}\nEOF\nexit 0\n")
             };
-            std::fs::write(
+            crate::test_seams::write_executable_atomically(
                 &python,
-                format!(
+                &format!(
                     "#!/bin/sh\n\
                      [ \"$1 $2 $3 $4\" = \"-m coperceive model list\" ] || {{ echo \"bad argv: $*\" >&2; exit 9; }}\n\
                      if [ \"${{5:-}}\" = --json ]; then\n{json}fi\n\
                      echo \"griffin  entry-point  coperceive_griffin_model:MANIFEST\"\n"
                 ),
             )
-            .unwrap();
-            std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+            .expect("write fake coperceive");
             python.to_string_lossy().to_string()
         };
         let runner = LocalShell { cwd: root.clone() };

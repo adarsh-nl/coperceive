@@ -2124,7 +2124,6 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn a_good_builtin_run_exits_zero_and_one_without_output_does_not() {
-        use std::os::unix::fs::PermissionsExt;
         if !std::path::Path::new("/bin/bash").exists() {
             return;
         }
@@ -2134,7 +2133,7 @@ mod tests {
         let python = root.join("venv/bin/python");
         std::fs::create_dir_all(python.parent().unwrap()).unwrap();
         std::fs::create_dir_all(root.join("results")).unwrap();
-        std::fs::write(
+        crate::test_seams::write_executable_atomically(
             &python,
             r#"#!/bin/bash
 if [ "$1" = "-" ]; then cat >/dev/null; printf '{}\n' > "$2"; exit 0; fi
@@ -2160,8 +2159,7 @@ printf '{\n  "provenance": {\n    "boxes_written": %s\n  }\n}\n' "$N" > "$OUT/$R
 exit "${FAKE_EXIT:-0}"
 "#,
         )
-        .unwrap();
-        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+        .expect("write fake python");
         let mut profile = profile("ps");
         profile.data_roots = vec![root.join("data").to_string_lossy().to_string()];
         profile.code_roots = Vec::new();
@@ -2182,7 +2180,8 @@ exit "${FAKE_EXIT:-0}"
             .expect("render")
             .script;
         let path = root.join("job.sbatch");
-        std::fs::write(&path, &script).unwrap();
+        crate::test_seams::write_executable_atomically(&path, &script)
+            .expect("write job script");
         let run_full = |no_boxes: bool, zero_boxes: bool, exit: &str| {
             let mut command = std::process::Command::new("/bin/bash");
             command.arg(&path).env("SLURM_JOB_ID", "7").env("USER", "tester").env("FAKE_EXIT", exit);
@@ -2234,7 +2233,8 @@ exit "${FAKE_EXIT:-0}"
             r#"printf '{\n  "provenance": {\n    "seed": 0\n  }\n}\n'"#,
         );
         assert_ne!(older, fake, "the fake's run.json line moved");
-        std::fs::write(&python, &older).unwrap();
+        crate::test_seams::write_executable_atomically(&python, &older)
+            .expect("write fake python");
         let unknown = run(true);
         assert!(
             unknown.status.success(),
@@ -2243,14 +2243,20 @@ exit "${FAKE_EXIT:-0}"
         );
         assert!(run_dir.join("run.json").is_file());
         assert!(!run_dir.join("val00/boxes.parquet").exists());
-        std::fs::write(&python, &fake).unwrap();
+        crate::test_seams::write_executable_atomically(&python, &fake)
+            .expect("write fake python");
         // No run.json at all: a failed run.
         std::fs::remove_dir_all(&plan.output_dir).unwrap();
-        std::fs::write(&python, fake.replace("> \"$OUT/$RID/run.json\"", "> /dev/null")).unwrap();
+        crate::test_seams::write_executable_atomically(
+            &python,
+            &fake.replace("> \"$OUT/$RID/run.json\"", "> /dev/null"),
+        )
+        .expect("write fake python");
         let missing = run(false);
         assert_eq!(missing.status.code(), Some(1), "{}", String::from_utf8_lossy(&missing.stderr));
         assert!(String::from_utf8_lossy(&missing.stderr).contains("run.json"));
-        std::fs::write(&python, fake).unwrap();
+        crate::test_seams::write_executable_atomically(&python, &fake)
+            .expect("write fake python");
         // A partial run (exit 3) still records environment.json and brings its logs home,
         // then the job exits with the run's status.
         std::fs::remove_dir_all(&plan.output_dir).unwrap();
