@@ -21,11 +21,11 @@ The script writes one schema-1 scene through the store's own writer into `OUT/<s
 - **Agents:** vehicles driving a loop with real rotating poses, so the server's sensor-to-world transform does real work.
 - **Points:** P points per sweep in the sensor frame, on a ground plane, static buildings and the moving boxes.
 - **Boxes:** six annotated boxes per agent per sample, with track ids shared between agents.
-- **Cameras:** C cameras in all, round-robin over the agents. Each has one 160×120 PNG per sample, stamped with its frame number.
+- **Cameras:** C cameras in all, round-robin over the agents. Each has one PNG per sample, stamped with its frame number: 160×120 unless `--image-size WxH` says otherwise. Real camera resolutions are larger; pass one to measure image cost.
 
 The same arguments and `--seed` write the same bytes. A target inside this repository is refused. The script prints the bytes written to stderr, and a JSON summary as the last line on stdout.
 
-At the defaults the scene is about 1 GB: 981 MiB on disk, 14 s to write and 1.1 GB peak memory on an Apple M3 with 16 GB.
+At the defaults the points alone are 4 × 160,000 × 12 B × 100 = 768 MB (arithmetic). The script's JSON summary reports the bytes it wrote and its run time on your machine.
 
 ## Browser benchmark: `scripts/bench/viewer_bench.py`
 
@@ -34,6 +34,7 @@ python scripts/bench/viewer_bench.py                       # generate the defaul
 python scripts/bench/viewer_bench.py --quick               # CI shape: 4 x 160k x 16 x 30 samples, short window
 python scripts/bench/viewer_bench.py --fixture /tmp/coperceive-scale --measure-s 7
 python scripts/bench/viewer_bench.py --json-out /tmp/viewer-bench.json
+python scripts/bench/viewer_bench.py --quick --gl default   # on a Mac: hardware WebGL
 ```
 
 The bench runs these steps:
@@ -52,12 +53,17 @@ The JSON report goes to stdout (last line) and a table to stderr.
 | --- | --- | --- |
 | `measured.frame_time_ms` | p50/p95/max between animation frames | a `requestAnimationFrame` loop injected by the bench |
 | `measured.samples` | samples drawn per second against the scene rate, and dropped samples | applied entries in `__COPERCEIVE_FRAME_STATS__` |
-| `measured.phases_ms` | `load` (frame document), `points` (sweep fetch and decode), `draw`, `render`: p50/p95 | `__COPERCEIVE_FRAME_STATS__` |
+| `measured.phases_ms` | `load` (frame document, all samples), `points` (wait for the sweeps), `draw`, `render`: p50/p95 over applied samples | `__COPERCEIVE_FRAME_STATS__` |
+| `measured.io_ms` | per kind (`frame`, `points`, `image`): `wait` (request to response), `read` (body), `parse` (frame JSON), `decode` (camera images) | the bench's init-script wrapper around `fetch`, `Response.json`/`arrayBuffer`/`blob`, `createImageBitmap` |
+| `measured.decode_ms` | `frame_json_parse`, `image_decode`; `points` is null: sweeps are raw float32, and their colour fill and GPU upload are inside `draw` | from `io_ms` |
 | `measured.buffering` | "Buffering…" events and time after warm-up; stream-buffer stalls | `.clock .buffering`, `__COPERCEIVE_BUFFER_STATS__` |
 | `measured.playhead` | samples the playhead advanced per second; whether it looped | `__COPERCEIVE_PLAYBACK_STATE__` |
-| `measured.memory` | JS heap; GPU estimate: visible points × 24 B | `performance.memory`, `__COPERCEIVE_SCENE_COUNTS__` |
+| `measured.memory` | JS heap; server peak RSS (`server_rss_peak_bytes`, Linux) or RSS at the end (`server_rss_end_bytes`, elsewhere); GPU **estimate**: visible points × 24 B | `performance.memory`, `/proc/<pid>/status` VmHWM or `ps`, `__COPERCEIVE_SCENE_COUNTS__` |
 | `measured.network` | bytes received in the window, by points, frame and image | DevTools `Network.loadingFinished` |
 | `browser.renderer` | the WebGL renderer string | `WEBGL_debug_renderer_info`, `UNMASKED_RENDERER_WEBGL` |
+| `machine` | CPU model, logical CPUs, RAM, OS, Python; whether it ran on GitHub Actions. No host or user name. | `scripts/bench/bench_machine.py` |
+
+The wrapper is the bench's own: the app has no I/O hook, and the wrapper returns what the original calls return.
 
 The app has no per-frame timing metric yet; ADR 0020 phase 2 adds one. Until then, the injected rAF loop is the frame-time source.
 
@@ -80,7 +86,7 @@ Read the renderer string before comparing runs: SwiftShader numbers measure the 
 
 ## Streaming benchmark: `scripts/bench/stream_bench.py`
 
-`--agents`, `--points` and `--cameras` set the scene's shape. The default is 2 × 56 000 points with no cameras, and `--smoke` keeps that shape for `tests/test_stream_bench.py`. With cameras, the player also fetches every camera's image at the strip's thumbnail width each frame.
+`--agents`, `--points` and `--cameras` set the scene's shape. Its report carries the same `machine` record. The default is 2 × 56 000 points with no cameras, and `--smoke` keeps that shape for `tests/test_stream_bench.py`. With cameras, the player also fetches every camera's image at the strip's thumbnail width each frame.
 
 ```bash
 python scripts/bench/stream_bench.py --agents 4 --points 160000 --cameras 16 --frames 20
@@ -88,4 +94,4 @@ python scripts/bench/stream_bench.py --agents 4 --points 160000 --cameras 16 --f
 
 ## Tests
 
-`tests/test_scale_fixture.py` checks the fixture: it reads back with the right counts, writes the same bytes for a seed and refuses a target in the repository. It also runs the bench `--quick` at a tiny size when Playwright, Chromium and a bundle are present. Otherwise that test is skipped, or fails when `COPERCEIVE_E2E_REQUIRED` is set, as with the browser tests.
+`tests/test_scale_fixture.py` checks the fixture: it reads back with the right counts, writes the same bytes for a seed and refuses a target in the repository. It checks the bench's summary on a synthetic log without a browser (applied-only draw times, I/O by kind) and its machine record. It also runs the bench `--quick` at a tiny size when Playwright, Chromium and a bundle are present. Otherwise that test is skipped, or fails when `COPERCEIVE_E2E_REQUIRED` is set, as with the browser tests.
