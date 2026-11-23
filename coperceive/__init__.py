@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Cooperative multi-agent perception data library."""
 
+from coperceive._version import version as _package_version
 from coperceive.assoc import (
     Association,
     AssociationKind,
@@ -48,7 +49,9 @@ from coperceive.transform import (
     world_frame,
 )
 
-__version__ = "0.0.0"
+# The installed distribution's version (pyproject.toml's, through package metadata);
+# see coperceive/_version.py for an uninstalled checkout.
+__version__ = _package_version()
 
 __all__ = [
     "SCHEMA_VERSION",
