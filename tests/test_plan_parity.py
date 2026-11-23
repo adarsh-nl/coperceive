@@ -182,6 +182,7 @@ def _cli_script(case: dict[str, Any], tmp_path: Path, *, with_ckpt_root: bool = 
         *(ckpt if with_ckpt_root else []),
         *checkpoint_args,
         *options,
+        *(["--evaluate"] if case.get("evaluate") else []),
         *override,
         "--out",
         str(out),
@@ -613,6 +614,40 @@ def test_the_cli_takes_each_input_the_app_refuses(name: str, tmp_path: Path) -> 
     if shutil.which("bash") is not None:
         done = subprocess.run(["bash", "-n", "-c", cli], capture_output=True, text=True)
         assert done.returncode == 0, (name, done.stderr)
+
+
+def _pending_evaluate_names() -> list[str]:
+    return [case["name"] for case in CASES.get("pending_app", []) if case.get("evaluate")]
+
+
+@pytest.mark.parametrize("name", _pending_evaluate_names())
+def test_the_cli_scores_after_the_run_the_app_does_not_yet(name: str, tmp_path: Path) -> None:
+    """A CLI-only case: the app half is pending (allowed_differences.json
+    ``pending_app_cases``, with the follow-up named). The CLI's script is the base case's
+    with one block added after the run's copy home: the ``eval run`` scoring step on the
+    staged scenes, the second copy home and the combined exit code. The run line is the
+    base case's, word for word."""
+    (case,) = [case for case in CASES["pending_app"] if case["name"] == name]
+    assert name not in _case_names(), name
+    assert not (PARITY / "app" / f"{name}.sbatch").exists(), name
+    (pending,) = [e for e in LEDGER["pending_app_cases"] if e["case"] == name]
+    for key in ("follow_up", "why", "cite"):
+        assert pending[key].strip() and case.get("follow_up", "").strip(), (name, key)
+    cli = _cli_script(case, tmp_path / "evaluate")
+    base = _cli_script(_case("base"), tmp_path / "base")
+    assert _run_line(cli) == _run_line(base)
+    a, b = _lines(cli), _lines(base)
+    opcodes = difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes()
+    changed = [op for op in opcodes if op[0] != "equal"]
+    assert [op[0] for op in changed] == ["delete"], changed  # lines only the CLI script has
+    (_, i1, i2, _, _) = changed[0]
+    block = a[i1:i2]
+    assert (
+        block[0] == "" and block[-1] == 'if [ "$RC" -eq 0 ] && [ "$EVAL_RC" -ne 0 ]; then RC=5; fi'
+    )
+    (score,) = [line for line in block if " -m coperceive eval run " in line]
+    assert '"$RUN_ID" --root "$SCRATCH/scenes" --predictions "$SCRATCH/out"' in score
+    assert a[i2].startswith('echo "done:"'), a[i2]
 
 
 def _pending_plugin_python_names() -> list[str]:

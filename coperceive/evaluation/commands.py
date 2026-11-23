@@ -25,8 +25,8 @@ from coperceive.evaluation.breakdown import (
     render_multi,
     write_compare,
 )
-from coperceive.evaluation.config import ConfigError, load_config
-from coperceive.evaluation.evaluate import EvaluationError, evaluate_run
+from coperceive.evaluation.config import ConfigError
+from coperceive.evaluation.evaluate import EvaluationError, RunReport
 from coperceive.evaluation.failures import (
     FailureWeights,
     declares_latency,
@@ -66,10 +66,11 @@ from coperceive.evaluation.report import (
     render_compare,
     render_report,
 )
+from coperceive.evaluation.scoring import score_run
 from coperceive.model import Scene
 from coperceive.store import read_scene
 
-_USER_ERRORS = (
+EVAL_USER_ERRORS = (
     PredictionError,
     ConfigError,
     EvaluationError,
@@ -209,7 +210,7 @@ def _root_arguments(parser: argparse.ArgumentParser) -> None:
 def _guarded(action: Callable[[argparse.Namespace], None], args: argparse.Namespace) -> None:
     try:
         action(args)
-    except _USER_ERRORS as exc:
+    except EVAL_USER_ERRORS as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(1) from None
 
@@ -351,30 +352,25 @@ def _run(args: argparse.Namespace) -> None:
     predictions = _existing_predictions_root(args)
     config_path = args.config
     protocol = args.protocol if isinstance(args.protocol, str) else None
-    # A model run can record the evaluation protocol it was made for. Use it only when
-    # neither --protocol nor the config file chose one; an explicit choice always wins.
-    recorded = None
-    try:
-        provenance = read_run_meta(predictions, args.run_id).provenance or {}
-        value = provenance.get("eval_protocol")
-        if isinstance(value, str):
-            recorded = value
-    except PredictionError:
-        # A missing or malformed run.json gets evaluate_run's own message below.
-        pass
-    config = load_config(
-        Path(config_path) if isinstance(config_path, str) else None,
-        protocol,
-        recorded=recorded,
-    )
-    report = evaluate_run(
+    # A model run can record the evaluation protocol it was made for: score_run uses it
+    # only when neither --protocol nor the config file chose one (an explicit choice wins).
+    scoring = score_run(
         root,
         predictions,
         args.run_id,
-        config,
+        config_path=Path(config_path) if isinstance(config_path, str) else None,
+        protocol=protocol,
         scene_ids=_split(args.scenes),
         created_utc=_now_utc(),
+        command="eval run",
     )
+    print_scoring(scoring.report)
+    if scoring.report.errors:
+        raise SystemExit(1)
+
+
+def print_scoring(report: RunReport) -> None:
+    """The lines ``eval run`` prints (``model run --evaluate`` prints the same)."""
     print(
         f"evaluated {len(report.evaluated)} skipped {len(report.skipped)} "
         f"errors {len(report.errors)}"
@@ -382,8 +378,6 @@ def _run(args: argparse.Namespace) -> None:
     for error in report.errors:
         print(f"error\t{error}")
     print("".join(f"warning\t{warning}\n" for warning in report.warnings), end="")
-    if report.errors:
-        raise SystemExit(1)
 
 
 def report_command(args: argparse.Namespace) -> None:

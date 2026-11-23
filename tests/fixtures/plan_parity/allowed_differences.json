@@ -725,6 +725,14 @@
       "follow_up": "The app's job script does not pass the plugin interpreter override yet; the laptop agent adds it after PR #213 (see cases.json pending_app).",
       "why": "The override is new in the CLI. Until the app passes it, an app-planned run uses the manifest's environment.",
       "cite": "docs/models.md, 'Plugin interpreter'; tests/test_plan_parity.py test_the_cli_carries_the_plugin_python_override_the_app_does_not_yet"
+    },
+    {
+      "case": "evaluate_after_run",
+      "side": "app",
+      "line": "the scoring step after the run's copy home (`eval run \"$RUN_ID\" --root \"$SCRATCH/scenes\" --predictions \"$SCRATCH/out\"`, the second copy home, `RC=5`)",
+      "follow_up": "The app's job script does not score yet; Cursor adds the same step after PR agent/claude-model-run-evaluate (see cases.json pending_app).",
+      "why": "--evaluate is new in the CLI. Until the app passes it, an app-planned run ends without metrics.json.",
+      "cite": "docs/models.md, 'Scoring in the job (--evaluate)'; tests/test_plan_parity.py test_the_cli_scores_after_the_run_the_app_does_not_yet"
     }
   ]
 }
