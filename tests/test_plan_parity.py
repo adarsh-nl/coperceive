@@ -144,6 +144,14 @@ def _cli_script(case: dict[str, Any], tmp_path: Path, *, with_ckpt_root: bool = 
     ckpt = ["--option", f"ckpt_root={ckpt_root}"]
     options = [word for extra in case.get("extras", []) for word in ("--option", extra)]
     protocol = case.get("eval_protocol")
+    override: list[str] = []
+    if "plugin_python" in case:
+        # The override must exist and be executable where the job is planned.
+        interpreter = _under(tmp_path, case["plugin_python"])
+        interpreter.parent.mkdir(parents=True, exist_ok=True)
+        interpreter.write_text("", encoding="utf-8")
+        interpreter.chmod(0o755)
+        override = ["--plugin-python", str(interpreter)]
     args = [
         "model",
         "run",
@@ -159,6 +167,7 @@ def _cli_script(case: dict[str, Any], tmp_path: Path, *, with_ckpt_root: bool = 
         *media,
         *(ckpt if with_ckpt_root else []),
         *options,
+        *override,
         "--out",
         str(out),
         "--run-id",
@@ -550,3 +559,33 @@ def test_the_cli_takes_each_input_the_app_refuses(name: str, tmp_path: Path) -> 
     if shutil.which("bash") is not None:
         done = subprocess.run(["bash", "-n", "-c", cli], capture_output=True, text=True)
         assert done.returncode == 0, (name, done.stderr)
+
+
+def _pending_plugin_python_names() -> list[str]:
+    # Only the --plugin-python cases: another pending case checks its own difference.
+    return [case["name"] for case in CASES.get("pending_app", []) if "plugin_python" in case]
+
+
+@pytest.mark.parametrize("name", _pending_plugin_python_names())
+def test_the_cli_carries_the_plugin_python_override_the_app_does_not_yet(
+    name: str, tmp_path: Path
+) -> None:
+    """A CLI-only case: the app half is pending (allowed_differences.json
+    ``pending_app_cases``, with the follow-up named). The CLI's script differs from the
+    base case's only by ``--plugin-python <path>`` on the run line, the path as given."""
+    (case,) = [case for case in CASES["pending_app"] if case["name"] == name]
+    assert name not in _case_names(), name
+    assert not (PARITY / "app" / f"{name}.sbatch").exists(), name
+    (pending,) = [e for e in LEDGER["pending_app_cases"] if e["case"] == name]
+    for key in ("follow_up", "why", "cite"):
+        assert pending[key].strip() and case.get("follow_up", "").strip(), (name, key)
+    cli = _cli_script(case, tmp_path / "override")
+    base = _cli_script(_case("base"), tmp_path / "base")
+    _, _, ns = _parse(_run_line(cli), {"$STAGING": "0"})
+    assert ns.plugin_python == case["plugin_python"]
+    _, _, base_ns = _parse(_run_line(base), {"$STAGING": "0"})
+    assert base_ns.plugin_python is None
+    differing = [(a, b) for a, b in zip(_lines(cli), _lines(base), strict=True) if a != b]
+    assert len(differing) == 1, differing
+    ((line, base_line),) = differing
+    assert line == f"{base_line} --plugin-python {case['plugin_python']}", line

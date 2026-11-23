@@ -30,7 +30,7 @@ from coperceive.models.registry import (
     manifest_path,
     resolve_manifest,
 )
-from coperceive.models.runner import resolve_interpreter
+from coperceive.models.runner import PLUGIN_PYTHON_FLAG, check_plugin_python, plugin_interpreter
 from coperceive.models.slurm import (
     SlurmError,
     plan_sbatch,
@@ -67,6 +67,17 @@ _USER_ERRORS = (
 )
 
 
+def _add_plugin_python(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        PLUGIN_PYTHON_FLAG,
+        dest="plugin_python",
+        default=None,
+        metavar="PATH",
+        help="The plugin's interpreter (full path to its python) instead of the manifest's "
+        "environment; checked before anything runs, passed to a Slurm job as given.",
+    )
+
+
 def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:  # type: ignore[type-arg]
     model = sub.add_parser("model", help="Model plugins: list, inspect, check, run (ADR 0011).")
     commands = model.add_subparsers(dest="model_command", required=True)
@@ -83,6 +94,7 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     listing.set_defaults(func=list_command)
 
     inspect = commands.add_parser("inspect", help="Print the validated manifest and interpreter.")
+    _add_plugin_python(inspect)
     _plugin_arguments(inspect)
     inspect.set_defaults(func=inspect_command)
 
@@ -93,6 +105,7 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     check.add_argument("--work", default=None, help="Work root; default a temporary directory.")
     check.add_argument("--raw-root", default=None, help="Raw release for models with raw inputs.")
     check.add_argument("--option", action="append", default=[], metavar="K=V")
+    _add_plugin_python(check)
     check.set_defaults(func=check_command)
 
     run = commands.add_parser("run", help="Run a model over scenes; write a predictions run.")
@@ -119,6 +132,7 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
             "ranking, connected-union ground truth (70 m). legacy: the v0.1.1 rules."
         ),
     )
+    _add_plugin_python(run)
     run.add_argument("--frame-timeout", type=float, default=None)
     run.add_argument("--run-timeout", type=float, default=None)
     run.add_argument("--no-cache", action="store_true")
@@ -332,11 +346,17 @@ def _inspect(args: argparse.Namespace) -> None:
     payload = _as_plain(manifest)
     print(yaml.safe_dump(payload, sort_keys=False), end="")
     assert manifest.source is not None
+    override = Path(args.plugin_python) if args.plugin_python else None
     try:
-        interpreter = resolve_interpreter(manifest.environment, plugin_dir=manifest.source.parent)
+        interpreter, source = plugin_interpreter(
+            manifest.environment, plugin_dir=manifest.source.parent, override=override
+        )
+        print(f"interpreter_source: {source}")
         print(f"interpreter: {interpreter}")
     except ModelSpecError as exc:
         print(f"interpreter: unresolved ({exc})")
+        if override is not None:
+            raise SystemExit(1) from None
 
 
 def _as_plain(value: object) -> object:
@@ -377,6 +397,7 @@ def _check(args: argparse.Namespace) -> None:
         raw_root=Path(args.raw_root) if args.raw_root else None,
         parent_env=dict(os.environ),
         options=_options(list(args.option)) or None,
+        plugin_python=_plugin_python(args),
     )
     print(render_check(manifest.name, results), end="")
     if args.keep:
@@ -392,6 +413,7 @@ def run_command(args: argparse.Namespace) -> None:
 def _run(args: argparse.Namespace) -> None:
     args.run_id = _check_run_id(str(args.run_id))
     manifest = _manifest(args)
+    _plugin_python(args)
     options = _run_options(args)
     out = Path(args.out)
     if args.slurm:
@@ -496,7 +518,18 @@ def _run_options(args: argparse.Namespace) -> RunOptions:
         staging_seconds=args.staging_seconds,
         perturbation=load_perturbation(args.perturb) if isinstance(args.perturb, str) else None,
         eval_protocol=args.protocol if isinstance(args.protocol, str) else None,
+        plugin_python=Path(args.plugin_python) if args.plugin_python else None,
     )
+
+
+def _plugin_python(args: argparse.Namespace) -> Path | None:
+    """``--plugin-python`` checked now: a bad path fails before anything runs or is submitted."""
+    if not args.plugin_python:
+        return None
+    try:
+        return check_plugin_python(Path(args.plugin_python))
+    except ModelSpecError as exc:
+        raise BatchError(str(exc)) from None
 
 
 def _print_report(report: BatchReport, out: Path, run_id: str) -> None:

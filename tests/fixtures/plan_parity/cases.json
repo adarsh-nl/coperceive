@@ -360,5 +360,38 @@
       "why": "#170: the app writes the results folder into #SBATCH --output/--error, which Slurm splits at spaces and cuts at '#', so a shared profile could add Slurm options to every job. The CLI writes no results folder into an #SBATCH line (its log folder, --slurm-logs, is refused with a space for the same reason: test_model_slurm.py), so it takes this results root.",
       "cite": "CHANGELOG.md Unreleased/Security (results folder); src-tauri/src/hpc.rs validate_sbatch_path; coperceive/models/slurm.py validate_logs_dir"
     }
+  ],
+  "pending_app": [
+    {
+      "name": "plugin_python_override",
+      "about": "The base case with the plugin's interpreter overridden (`--plugin-python`, docs/models.md): the CLI's run line carries the flag with the path exactly as given, and nothing else in the script changes. CLI half only: the app does not pass the override yet (pending_app).",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "profile": {
+        "partition": "gpu-a40",
+        "discovered_gpu_types": [
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [
+          "nvidia/cuda-11.8",
+          "nvidia/cuda-11.x_cudnn-8.6"
+        ],
+        "coperceive_command": [
+          "/opt/venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules"
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/opt/venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490,
+      "plugin_python": "/opt/envs/opencood-official/bin/python",
+      "follow_up": "App side, laptop agent after PR #213: the app's model-run plan takes the override and its job script passes --plugin-python; then this case moves to `cases` with an app render from src-tauri/tests/plan_parity.rs."
+    }
   ]
 }

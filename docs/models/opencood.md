@@ -143,9 +143,12 @@ from:
    [Weights loading and archive limits](#weights-loading-and-archive-limits)); prefer an
    environment with torch 2.6.0 or newer if its CUDA build allows it.
 2. The manifest resolves the environment by conda name: `environment: {conda: opencood}`.
-   A different name is a one-line change in `model.yaml`, or pass a prefix. Nothing is
-   activated; the parent starts `<prefix>/bin/python` directly, so the same command works
-   inside a Slurm job.
+   If your environment has another name, pass its interpreter with `--plugin-python` on
+   `model run`, `model check` and `model inspect` instead of editing `model.yaml`, for
+   example `--plugin-python /path/to/envs/opencood-official/bin/python`
+   ([Plugin interpreter](../models.md#plugin-interpreter-plugin-python)). Nothing is
+   activated; the parent starts that interpreter directly, so the same command works
+   inside a Slurm job, which receives the path as given.
 3. Install the plugin wheel into the Coperceive `.venv` from a local wheelhouse, as the
    [model plugin spec](../spec/model-plugin.md#installation) describes:
 
@@ -325,6 +328,19 @@ coperceive model run opencood \
   --out /path/to/predictions \
   --run-id opencood-cobevt \
   --option checkpoint=/path/to/cobevt_lidar.zip \
+  --slurm --submit
+```
+
+With an OpenCOOD environment that is not named `opencood`, add its interpreter to either
+command, for example:
+
+```bash
+coperceive model run opencood \
+  --scenes /path/to/staged-scenes \
+  --out /path/to/predictions \
+  --run-id opencood-cobevt \
+  --option checkpoint=/path/to/cobevt_lidar.zip \
+  --plugin-python /path/to/envs/opencood-official/bin/python \
   --slurm --submit
 ```
 
