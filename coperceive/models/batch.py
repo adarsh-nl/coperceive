@@ -48,7 +48,12 @@ from coperceive.models.protocol import (
     Result,
     to_prediction_box,
 )
-from coperceive.models.runner import PluginProcess, RunnerError, RunnerTimeout
+from coperceive.models.runner import (
+    PluginProcess,
+    RunnerError,
+    RunnerTimeout,
+    check_plugin_python,
+)
 from coperceive.models.spec import (
     Manifest,
     ModelSpec,
@@ -66,6 +71,9 @@ EXIT_OK = 0
 EXIT_USER = 1
 EXIT_PROTOCOL = 3
 EXIT_TIMEOUT = 4
+# ``--evaluate``: every selected scene complete, but scoring the run failed. A model
+# failure (1, 3, 4) is never replaced by it (docs/spec/model-plugin.md, §Exit codes).
+EXIT_EVAL = 5
 
 TimedResult = tuple[int, Result]  # (time_us, the child's result for that frame)
 
@@ -93,6 +101,16 @@ class RunOptions:
     force: bool = False
     staging_seconds: float | None = None  # the rsync wall time, measured by the Slurm job
     perturbation: PerturbationSpec | None = None
+    # The evaluation protocol to record for this run, so a later eval run uses it
+    # by default (docs/guides/evaluate.md). None means "do not record one".
+    eval_protocol: str | None = None
+    # ``--evaluate``: score the run after it (``eval run``'s scoring), and the
+    # ``--eval-config`` file for it. run_batch ignores both; the command and the Slurm
+    # job act on them.
+    evaluate: bool = False
+    eval_config: Path | None = None
+    # ``--plugin-python``: the plugin's interpreter, replacing the manifest's environment.
+    plugin_python: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -227,8 +245,10 @@ def provenance_json(
     checkpoint: CheckpointInfo | None = None,
     gpu: str | None = None,
     perturbation: Mapping[str, object] | None = None,
+    eval_protocol: str | None = None,
+    plugin_python: Path | None = None,
 ) -> dict[str, object]:
-    """Every key of spec §Provenance."""
+    """Every key of spec §Provenance (``plugin_python`` only when it was given)."""
     body: dict[str, object] = {
         "checkpoint": checkpoint.as_json() if checkpoint is not None else None,
         "plugin": manifest.name,
@@ -257,6 +277,10 @@ def provenance_json(
     }
     if perturbation is not None:
         body["perturbation"] = dict(perturbation)
+    if eval_protocol is not None:
+        body["eval_protocol"] = eval_protocol
+    if plugin_python is not None:
+        body["plugin_python"] = str(plugin_python)
     return body
 
 
@@ -380,6 +404,10 @@ def run_batch(
     """Run ``manifest``'s model over the scenes and write ``<out_root>/<run_id>``."""
     env: dict[str, str] = dict(os.environ if parent_env is None else parent_env)
     check_run_id(run_id)
+    if options.eval_protocol not in (None, "default", "legacy"):
+        raise BatchError(
+            f"model run --protocol must be default or legacy, got {options.eval_protocol!r}"
+        )
     spec = select_model(manifest, options.model)
     effective = check_options(spec, options.options)
     declared_checkpoint = require_checkpoint(spec, effective)
@@ -390,6 +418,11 @@ def run_batch(
         raise BatchError(f"model {spec.key} needs --raw-root for its raw inputs")
     if manifest.source is None:
         raise BatchError("the manifest must come from a file")
+    if options.plugin_python is not None:
+        try:
+            check_plugin_python(options.plugin_python)
+        except ModelSpecError as exc:
+            raise BatchError(str(exc)) from None
     digest = manifest_sha256(manifest)
     plugin_dir = manifest.source.parent
     work_dir = options.work_dir or (out_root / ".work" / run_id)
@@ -456,6 +489,8 @@ def run_batch(
             timings=_timings(wall, frames, reported, options.staging_seconds),
             parent_env=env,
             perturbation=None if options.perturbation is None else options.perturbation.to_json(),
+            eval_protocol=options.eval_protocol,
+            plugin_python=options.plugin_python,
         )
         return run_meta_for(
             manifest, spec, run_id=run_id, created_utc=created_utc, provenance=provenance
@@ -511,6 +546,7 @@ def run_batch(
                     parent_env=env,
                     hello_timeout_s=frame_timeout,
                     options=effective,
+                    python_override=options.plugin_python,
                 )
                 environment = child.hello.environment
                 git_commit = child.hello.git_commit
@@ -721,6 +757,8 @@ def _run_dependency(
         cache=options.cache and not fresh,
         work_dir=work_dir,
         force=options.force or fresh,
+        # The same plugin, so the same interpreter.
+        plugin_python=options.plugin_python,
     )
     report = run_batch(
         manifest,
@@ -968,6 +1006,7 @@ def _await_result(
 
 
 __all__ = [
+    "EXIT_EVAL",
     "EXIT_OK",
     "EXIT_PROTOCOL",
     "EXIT_TIMEOUT",

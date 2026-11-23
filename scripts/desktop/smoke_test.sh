@@ -775,9 +775,8 @@ if ! echo "${CLICK_RESP}" | grep -q '"clicked"'; then
 fi
 
 echo "Polling until demo scene is generated, opened in viewer, and renders LiDAR points, camera strip, and boxes..."
-VIEWER_CHECK_SCRIPT=$(python3 - "${COPERCEIVE_INTEL_VM_NO_WEBGL:-0}" <<'PY'
-import json, sys
-expect_no_webgl = sys.argv[1] == "1"
+VIEWER_CHECK_SCRIPT=$(python3 - <<'PY'
+import json
 js = """(() => {
   document.querySelector("section.cam-strip[data-open='true'] .cam-thumb")?.scrollIntoView?.();
   const title = (document.querySelector(".dataset-badge .dataset-name")?.textContent || "").trim();
@@ -791,9 +790,9 @@ js = """(() => {
     notice.includes("3D view unavailable")
     && notice.includes("Copy diagnostics");
   const baseReady = title === "Demo (synthetic)" && points > 0 && cameras >= 1 && boxes > 0;
-  const ready = EXPECT_NO_WEBGL ? (baseReady && hasWebglUnavailable) : (baseReady && !hasWebglUnavailable);
+  const ready = baseReady && !hasWebglUnavailable;
   return { ready, title, points, cameras, boxes, hasWebglUnavailable };
-})()""".replace("EXPECT_NO_WEBGL", "true" if expect_no_webgl else "false")
+})()"""
 print(json.dumps({"window": "viewer", "script": js}))
 PY
 )
@@ -836,12 +835,6 @@ if [ "${DEMO_LOADED}" -ne 1 ]; then
     exit 23
 fi
 echo "Verified viewer loaded demo scene (/eval HTTP ${LAST_VIEWER_HTTP_CODE}): ${LAST_VIEWER_STATE}"
-if [ "${COPERCEIVE_INTEL_VM_NO_WEBGL:-0}" = "1" ]; then
-    screencapture -x "${SCREENSHOT_DIR}/demo-webgl-unavailable.png" 2>/dev/null || true
-    if [ -f "${SCREENSHOT_DIR}/demo-webgl-unavailable.png" ]; then
-        echo "Verified: captured WebGL-unavailable screenshot at ${SCREENSHOT_DIR}/demo-webgl-unavailable.png ($(stat -f %z "${SCREENSHOT_DIR}/demo-webgl-unavailable.png" 2>/dev/null || wc -c < "${SCREENSHOT_DIR}/demo-webgl-unavailable.png") bytes)"
-    fi
-fi
 
 echo "Opening #prediction-output menu, selecting 'cav-b · noisy', and verifying 'synthetic predictions' evaluation view..."
 COMPARE_CHECK_SCRIPT='{"window":"viewer","script":"(() => { const runBtn = document.querySelector(\"#prediction-run\"); const outBtn = document.querySelector(\"#prediction-output\"); const list = document.querySelector(\"ul.menu-list[aria-labelledby=\\\"prediction-output\\\"]\"); const curOut = (outBtn?.textContent || \"\").trim(); if (!curOut.includes(\"cav-b\")) { if (!list && outBtn) { outBtn.click(); } else if (list) { const opt = [...list.querySelectorAll(\"button[role=\\\"option\\\"]\")].find(b => (b.textContent || \"\").includes(\"cav-b\")); if (opt) opt.click(); } } const predRun = (runBtn?.textContent || \"\").trim(); const evalHead = (document.querySelector(\".eval-head\")?.textContent || \"\").trim(); const ok = predRun.includes(\"synthetic predictions\") && evalHead.includes(\"cav-b\") && evalHead.includes(\"synthetic predictions\"); return { ok, predRun, output: (outBtn?.textContent || \"\").trim(), evalHead }; })()"}'
@@ -913,29 +906,19 @@ case "${DEMO_SIDECAR_PY}" in
         ;;
 esac
 
-if [ "${COPERCEIVE_INTEL_VM_NO_WEBGL:-0}" = "1" ]; then
-    # Approved native-Intel CI exception: on macos-15-intel, the headless VM's WKWebView
-    # returns null for WebGL vendor/renderer/shader precision ("webgl":{"renderer":null,
-    # "unmaskedRenderer":null,"vendor":null,"webgl":true,"webgl2":true}, console error:
-    # "THREE.WebGLRenderer: null is not an object (evaluating 'e.getShaderPrecisionFormat(e.VERTEX_SHADER,e.HIGH_FLOAT).precision')").
-    # Skip 3D rendering and 1x playback assertions here; non-WebGL panels, APIs, and the
-    # "3D view unavailable" notice remain blocking above.
-    echo "Skipping 3D playback ratio assertion on COPERCEIVE_INTEL_VM_NO_WEBGL=1 (headless VM WebGL vendor/renderer/precision=null)."
-else
-    echo "Verifying demo 1x playback advances frames smoothly without 'Buffering'..."
-    PLAYBACK_START_RESP=$(curl -s -f -X POST \
-        -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
-        -H "Content-Type: application/json" \
-        -d '{"window":"viewer","script":"(() => { const s0 = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (s0 && !s0.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? null; })()"}' \
-        "http://127.0.0.1:${DEMO_CTRL_PORT}/eval")
-    echo "Playback started: ${PLAYBACK_START_RESP}"
+echo "Verifying demo 1x playback advances frames smoothly without 'Buffering'..."
+PLAYBACK_START_RESP=$(curl -s -f -X POST \
+    -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d '{"window":"viewer","script":"(() => { const s0 = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (s0 && !s0.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? null; })()"}' \
+    "http://127.0.0.1:${DEMO_CTRL_PORT}/eval")
+echo "Playback started: ${PLAYBACK_START_RESP}"
 
-    python3 "${SCRIPT_DIR}/playback_metrics.py" poll \
-        --port "${DEMO_CTRL_PORT}" \
-        --secret "${DEMO_CTRL_SECRET}" \
-        --polls 25 \
-        --interval 0.2 || exit 26
-fi
+python3 "${SCRIPT_DIR}/playback_metrics.py" poll \
+    --port "${DEMO_CTRL_PORT}" \
+    --secret "${DEMO_CTRL_SECRET}" \
+    --polls 25 \
+    --interval 0.2 || exit 26
 
 DEMO_OUTCOME_LINE=$(grep "COPERCEIVE_DEMO_OUTCOME:" "${DEMO_STDOUT}" | tail -n 1 || echo "")
 if [ -z "${DEMO_OUTCOME_LINE}" ]; then

@@ -126,7 +126,15 @@ jobs:
       # virtualenv, so strict mode treated TestClient.get as unknown. The app
       # extra is required because tests/test_hdmap.py imports FastAPI.
       - run: python -m venv .venv
-      - run: .venv/bin/pip install -e ".[app,dev,viewer]"
+      # Lint against the versions uv.lock pins, not whatever PyPI published last
+      # night: unpinned type stubs (types-pyyaml/types-shapely 2026-11-22) once
+      # turned every PR's pyright red with no code change.
+      - name: Constraints from uv.lock
+        run: |
+          .venv/bin/pip install uv
+          .venv/bin/uv export --frozen --all-extras --no-hashes --no-emit-project \
+            --format requirements-txt -o "$RUNNER_TEMP/constraints.txt" > /dev/null
+      - run: .venv/bin/pip install -c "$RUNNER_TEMP/constraints.txt" -e ".[app,dev,viewer]"
       - run: .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: .venv/bin/ruff check .
       - run: .venv/bin/ruff format --check .
@@ -165,7 +173,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: pip install -e ".[app,griffin,dev,viewer]"
+      - name: Constraints from uv.lock
+        run: |
+          pip install uv
+          uv export --frozen --all-extras --no-hashes --no-emit-project \
+            --format requirements-txt -o "$RUNNER_TEMP/constraints.txt" > /dev/null
+      - run: pip install -c "$RUNNER_TEMP/constraints.txt" -e ".[app,griffin,dev,viewer]"
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Run pytest
         run: |
@@ -192,7 +205,12 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: pip install -e ".[app]"
+      - name: Constraints from uv.lock
+        run: |
+          pip install uv
+          uv export --frozen --all-extras --no-hashes --no-emit-project \
+            --format requirements-txt -o "$RUNNER_TEMP/constraints.txt" > /dev/null
+      - run: pip install -c "$RUNNER_TEMP/constraints.txt" -e ".[app]"
       - name: openapi.json matches the app
         run: |
           python -c "import json,tempfile; from coperceive.app.server import create_app; print(json.dumps(create_app(root=tempfile.mkdtemp(), token=None).openapi(), indent=2))" > /tmp/openapi.json
@@ -218,7 +236,7 @@ jobs:
         run: python3 scripts/check_bundle_assets.py --static coperceive/app/static
       - name: Wheel ships the viewer bundle
         run: |
-          python3 -m pip install --quiet build
+          python3 -m pip install --quiet -c "$RUNNER_TEMP/constraints.txt" build
           python3 -m build --wheel --outdir /tmp/coperceive-wheel
           python3 scripts/check_bundle_assets.py --wheel /tmp/coperceive-wheel/*.whl
 
@@ -234,7 +252,12 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: pip install -e ".[app,dev]"
+      - name: Constraints from uv.lock
+        run: |
+          pip install uv
+          uv export --frozen --all-extras --no-hashes --no-emit-project \
+            --format requirements-txt -o "$RUNNER_TEMP/constraints.txt" > /dev/null
+      - run: pip install -c "$RUNNER_TEMP/constraints.txt" -e ".[app,dev]"
       - run: playwright install --with-deps chromium
       - uses: actions/setup-node@v4
         with:
@@ -273,7 +296,12 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: pip install -e ".[app,dev]"
+      - name: Constraints from uv.lock
+        run: |
+          pip install uv
+          uv export --frozen --all-extras --no-hashes --no-emit-project \
+            --format requirements-txt -o "$RUNNER_TEMP/constraints.txt" > /dev/null
+      - run: pip install -c "$RUNNER_TEMP/constraints.txt" -e ".[app,dev]"
       - run: playwright install --with-deps chromium
       - uses: actions/setup-node@v7
         with:
@@ -323,7 +351,12 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-docs.txt
-      - run: pip install -r requirements-docs.txt
+      - name: Constraints from uv.lock
+        run: |
+          pip install uv
+          uv export --frozen --all-extras --no-hashes --no-emit-project \
+            --format requirements-txt -o "$RUNNER_TEMP/constraints.txt" > /dev/null
+      - run: pip install -c "$RUNNER_TEMP/constraints.txt" -r requirements-docs.txt
       - run: mkdocs build --strict
       - name: Built docs site has search index and no root /assets/ links
         run: |
@@ -368,7 +401,12 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: pip install -e ".[app]"
+      - name: Constraints from uv.lock
+        run: |
+          pip install uv
+          uv export --frozen --all-extras --no-hashes --no-emit-project \
+            --format requirements-txt -o "$RUNNER_TEMP/constraints.txt" > /dev/null
+      - run: pip install -c "$RUNNER_TEMP/constraints.txt" -e ".[app]"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -474,7 +512,14 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: pip install -e ".[app]"
+      - name: Constraints from uv.lock
+        shell: bash
+        run: |
+          pip install uv
+          uv export --frozen --all-extras --no-hashes --no-emit-project \
+            --format requirements-txt -o "$RUNNER_TEMP/constraints.txt" > /dev/null
+      - shell: bash
+        run: pip install -c "$RUNNER_TEMP/constraints.txt" -e ".[app]"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -611,7 +656,7 @@ jobs:
       - run: bash scripts/build_web_static.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
+          targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -787,134 +832,9 @@ jobs:
           name: coperceive-desktop-macos-arm64
           path: ${{ env.DMG_PATH }}
           if-no-files-found: error
-      - name: Bundle Python Standalone Runtime for Intel Mac
-        run: python3 scripts/desktop/bundle_python.py --target x86_64-apple-darwin --skip-web-build
-      - name: Build Tauri Desktop Intel DMG
-        run: bash scripts/desktop/build_dmg.sh x86_64-apple-darwin
-      - name: Locate and Measure Intel DMG
-        run: |
-          DMG_INTEL=$(find src-tauri/target -iname "*x64*.dmg" -o -iname "*x86_64*.dmg" 2>/dev/null | head -n 1)
-          if [ -z "${DMG_INTEL}" ]; then
-            DMG_INTEL=$(find src-tauri/target/x86_64-apple-darwin -iname "*.dmg" -type f 2>/dev/null | head -n 1)
-          fi
-          if [ -z "${DMG_INTEL}" ] || [ ! -f "${DMG_INTEL}" ]; then
-            echo "Error: Could not locate built Intel .dmg file!" >&2
-            exit 1
-          fi
-          DMG_INTEL_ABS="$(cd "$(dirname "${DMG_INTEL}")" && pwd)/$(basename "${DMG_INTEL}")"
-          DMG_INTEL_BYTES=$(stat -f %z "${DMG_INTEL_ABS}" 2>/dev/null || wc -c < "${DMG_INTEL_ABS}")
-          DMG_INTEL_HUMAN=$(ls -lh "${DMG_INTEL_ABS}" | awk '{print $5}')
-          echo "DMG_INTEL_PATH=${DMG_INTEL_ABS}" >> $GITHUB_ENV
-          echo "Located Intel DMG at: ${DMG_INTEL_ABS} (${DMG_INTEL_HUMAN}, ${DMG_INTEL_BYTES} bytes)"
-          echo "::notice title=DMG-Intel::$(basename "${DMG_INTEL_ABS}") ${DMG_INTEL_BYTES} bytes"
-          echo "### Desktop macOS (Intel x86_64) DMG Artifact" >> $GITHUB_STEP_SUMMARY
-          echo "- **File**: \`$(basename "${DMG_INTEL_ABS}")\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Size**: ${DMG_INTEL_HUMAN} (${DMG_INTEL_BYTES} bytes)" >> $GITHUB_STEP_SUMMARY
-      - name: Verify Intel Mac App Bundle Under Rosetta
-        run: |
-          if arch -x86_64 /usr/bin/true 2>/dev/null; then
-            echo "Rosetta 2 is available on arm64 runner: executing Intel x86_64 verification"
-            APP_INTEL="$(find src-tauri/target/x86_64-apple-darwin -type d -name Coperceive.app | head -n 1)"
-            if [ -z "${APP_INTEL}" ]; then
-              APP_INTEL="$(find src-tauri/target -type d -name Coperceive.app | head -n 1)"
-            fi
-            echo "Intel App path: ${APP_INTEL}"
-            PY_INTEL="${APP_INTEL}/Contents/Resources/resources/python/bin/python3"
-            if [ ! -x "${PY_INTEL}" ]; then
-              echo "Error: Bundled Intel python3 not found or not executable at ${PY_INTEL}" >&2
-              exit 1
-            fi
-            echo "Testing bundled Intel python3 under Rosetta:"
-            arch -x86_64 "${PY_INTEL}" -c "import coperceive, numpy, pyarrow, PIL; print('Intel Python loaded successfully; PIL version:', PIL.__version__)"
-            echo "Running smoke test on Intel .app under Rosetta:"
-            arch -x86_64 bash scripts/desktop/smoke_test.sh "${APP_INTEL}"
-            echo "::notice title=Rosetta-Test::Intel Mac build verified under Rosetta 2"
-          else
-            echo "::error title=Rosetta-Test::Rosetta 2 is not available on this runner (arch -x86_64 returned non-zero)" >&2
-            exit 1
-          fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: coperceive-desktop-macos-x86_64
-          path: ${{ env.DMG_INTEL_PATH }}
-          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: desktop-e2e-screenshots
           path: /tmp/e2e-shots/*.png
           if-no-files-found: ignore
-
-  desktop-macos-intel:
-    needs: [changes, desktop-macos]
-    if: github.event_name != 'pull_request' || needs.changes.outputs.desktop == 'true'
-    runs-on: macos-15-intel
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: coperceive-desktop-macos-x86_64
-          path: /tmp/intel-dmg
-      - name: Install x64 DMG and run smoke test on native Intel macOS
-        env:
-          COPERCEIVE_PRESERVE_LOGS_DIR: /tmp/intel-smoke-evidence
-          # macos-15-intel runs in a headless VM whose WKWebView returns null for WebGL
-          # vendor/renderer/shader precision ("webgl":{"renderer":null,"unmaskedRenderer":null,
-          # "vendor":null,"webgl":true,"webgl2":true}, "THREE.WebGLRenderer: null is not an
-          # object (evaluating 'e.getShaderPrecisionFormat(e.VERTEX_SHADER,e.HIGH_FLOAT).precision')").
-          # Keep all install/launch/bundled-python/sidecar/demo/API/non-WebGL UI assertions blocking,
-          # verify the visible "3D view unavailable" notice, and skip only 3D rendering/playback ratio.
-          COPERCEIVE_INTEL_VM_NO_WEBGL: "1"
-        run: |
-          rm -rf /tmp/intel-smoke-evidence
-          mkdir -p /tmp/intel-smoke-evidence
-          DMG_FILE="$(find /tmp/intel-dmg -maxdepth 2 -name '*.dmg' | head -n 1)"
-          if [ -z "${DMG_FILE}" ]; then
-            echo "Error: No Intel .dmg found in /tmp/intel-dmg" >&2
-            exit 1
-          fi
-          echo "Mounting ${DMG_FILE}..."
-          MOUNT_DIR="/tmp/coperceive-intel-dmg"
-          mkdir -p "${MOUNT_DIR}" /tmp/intel-app
-          hdiutil attach "${DMG_FILE}" -nobrowse -readonly -mountpoint "${MOUNT_DIR}"
-          cp -R "${MOUNT_DIR}/Coperceive.app" /tmp/intel-app/Coperceive.app
-          hdiutil detach "${MOUNT_DIR}" || true
-          bash scripts/desktop/smoke_test.sh /tmp/intel-app/Coperceive.app "${DMG_FILE}"
-      - name: Upload native Intel screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-intel-screenshots
-          path: /tmp/e2e-shots/*.png
-          if-no-files-found: ignore
-      - name: Collect Intel macOS smoke evidence on failure
-        if: failure()
-        run: |
-          mkdir -p /tmp/intel-smoke-evidence/coperceive-logs /tmp/intel-smoke-evidence/diagnostic-reports
-          if [ -d "$HOME/Library/Logs/Coperceive" ]; then
-            for f in "$HOME/Library/Logs/Coperceive"/*; do
-              [ -f "$f" ] || continue
-              case "$(basename "$f")" in
-                *token*|*secret*|*ctrl_info*|*marker*) continue ;;
-              esac
-              sed -E 's/Bearer [A-Za-z0-9._-]+/Bearer [REDACTED]/g; s/([Tt]oken[^A-Za-z0-9]*)[:=][[:space:]]*[^[:space:]"]+/\1=[REDACTED]/g' "$f" > "/tmp/intel-smoke-evidence/coperceive-logs/$(basename "$f")" || true
-              echo "=== $f ==="
-              tail -n 60 "/tmp/intel-smoke-evidence/coperceive-logs/$(basename "$f")"
-            done
-          fi
-          for dir in "$HOME/Library/Logs/DiagnosticReports" "/Library/Logs/DiagnosticReports"; do
-            [ -d "$dir" ] || continue
-            for f in "$dir"/Coperceive* "$dir"/coperceive*; do
-              [ -f "$f" ] || continue
-              cp "$f" /tmp/intel-smoke-evidence/diagnostic-reports/ || true
-              echo "=== DiagnosticReport: $f ==="
-              head -n 40 "$f" || true
-            done
-          done
-          find /tmp/intel-smoke-evidence -maxdepth 3 -type f || true
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: intel-macos-smoke-evidence
-          path: /tmp/intel-smoke-evidence
-          if-no-files-found: warn

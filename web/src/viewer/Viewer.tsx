@@ -76,6 +76,7 @@ import {
 import PredictionsBlock, { LineSample } from "./predictions";
 import PanelState from "../desktop/PanelState";
 import { PANEL_DEFINITIONS } from "../desktop/panelStates";
+import { sameEvalProtocol } from "../desktop/runPlan";
 import { useCameraStripMode } from "./cameraStripSetting";
 import { useStreamingSettings } from "./streamingSettings";
 import {
@@ -3763,7 +3764,14 @@ export default function Viewer({
   const runNote = runList && runList.sceneId === sceneKey ? runList.note : "";
   const run = runs?.find((item) => item.run_id === runId) ?? null;
   const compareRun =
-    compareId && compareId !== runId ? (runs?.find((item) => item.run_id === compareId && item.evaluated) ?? null) : null;
+    compareId && compareId !== runId
+      ? (runs?.find(
+          (item) =>
+            item.run_id === compareId &&
+            item.evaluated &&
+            sameEvalProtocol(run?.config, item.config),
+        ) ?? null)
+      : null;
   const activeCompare = compareRun?.run_id ?? "";
   const predKey = `${sceneKey}|${runId}|${activeCompare}`;
   const livePred =

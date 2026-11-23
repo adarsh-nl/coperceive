@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { CarlaMapsSettings } from "./CarlaMapsSettings";
 import { ClusterDatasetSettings } from "./ClusterDatasetSettings";
+import { ModelRunSettings } from "./ModelRunSettings";
 import {
   getPersistentState,
   getStorageInfo,
@@ -303,6 +304,12 @@ export function DesktopPreferences() {
       {isViewerWindow() ? null : (
         <div className="settings-cluster-card">
           <ClusterDatasetSettings />
+        </div>
+      )}
+
+      {isViewerWindow() ? null : (
+        <div className="settings-cluster-card">
+          <ModelRunSettings />
         </div>
       )}
 

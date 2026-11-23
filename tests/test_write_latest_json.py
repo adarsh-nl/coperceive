@@ -31,13 +31,10 @@ def make_mock_minisign_signature(filename: str, version: str = "0.1.0") -> str:
 
 
 def create_mock_assets(assets_dir: Path, version: str = "0.1.0") -> dict[str, str]:
-    """Create a complete set of mock updater assets for all 4 platforms."""
+    """Create a complete set of mock updater assets for the 3 supported platforms."""
     files = {
         "Coperceive_aarch64.app.tar.gz": make_mock_minisign_signature(
             "Coperceive_aarch64.app.tar.gz", version
-        ),
-        "Coperceive_x64.app.tar.gz": make_mock_minisign_signature(
-            "Coperceive_x64.app.tar.gz", version
         ),
         f"Coperceive_{version}_amd64.AppImage": make_mock_minisign_signature(
             f"Coperceive_{version}_amd64.AppImage", version
@@ -52,8 +49,8 @@ def create_mock_assets(assets_dir: Path, version: str = "0.1.0") -> dict[str, st
     return files
 
 
-def test_the_4_platform_urls_are_distinct_and_exist_in_assets(tmp_path: Path) -> None:
-    """All 4 platform URLs must be distinct and point to existing asset files."""
+def test_the_3_platform_urls_are_distinct_and_omit_intel_mac(tmp_path: Path) -> None:
+    """All 3 platform URLs must be distinct, exist on disk, and omit darwin-x86_64."""
     conf = tmp_path / "tauri.conf.json"
     conf.write_text(json.dumps({"version": "0.1.0"}))
     assets = tmp_path / "assets"
@@ -79,9 +76,9 @@ def test_the_4_platform_urls_are_distinct_and_exist_in_assets(tmp_path: Path) ->
     manifest = json.loads(out.read_text())
     assert manifest["version"] == "0.1.0"
     platforms = manifest["platforms"]
+    assert "darwin-x86_64" not in platforms
     assert set(platforms.keys()) == {
         "darwin-aarch64",
-        "darwin-x86_64",
         "windows-x86_64",
         "linux-x86_64",
     }
@@ -111,10 +108,10 @@ def test_signature_trusted_comment_file_must_equal_filename(tmp_path: Path) -> N
     assets.mkdir()
     create_mock_assets(assets, "0.1.0")
 
-    # Tamper with Intel signature to claim it signs Coperceive.app.tar.gz instead
-    # of Coperceive_x64.app.tar.gz
+    # Tamper with arm64 signature to claim it signs Coperceive.app.tar.gz instead
+    # of Coperceive_aarch64.app.tar.gz
     bad_sig = make_mock_minisign_signature("Coperceive.app.tar.gz", "0.1.0")
-    (assets / "Coperceive_x64.app.tar.gz.sig").write_text(bad_sig + "\n")
+    (assets / "Coperceive_aarch64.app.tar.gz.sig").write_text(bad_sig + "\n")
 
     out = tmp_path / "latest.json"
     argv = [
@@ -135,17 +132,58 @@ def test_signature_trusted_comment_file_must_equal_filename(tmp_path: Path) -> N
     assert "does not match archive" in str(exc_info.value) or exc_info.value.code != 0
 
 
-def test_missing_intel_archive_fails_without_falling_back(tmp_path: Path) -> None:
-    """If Intel macOS archive is missing, it must not fall back to arm64; require-all must fail."""
+def test_intel_archive_does_not_populate_darwin_x86_64(tmp_path: Path) -> None:
+    """Even if an Intel archive sits in assets, darwin-x86_64 must stay absent."""
+    conf = tmp_path / "tauri.conf.json"
+    conf.write_text(json.dumps({"version": "0.1.3"}))
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    create_mock_assets(assets, "0.1.3")
+    (assets / "Coperceive_x64.app.tar.gz").write_bytes(b"legacy-intel")
+    (assets / "Coperceive_x64.app.tar.gz.sig").write_text(
+        make_mock_minisign_signature("Coperceive_x64.app.tar.gz", "0.1.3") + "\n"
+    )
+
+    out = tmp_path / "latest.json"
+    argv = [
+        "--conf",
+        str(conf),
+        "--tag",
+        "v0.1.3",
+        "--assets",
+        str(assets),
+        "--repo",
+        "adarsh-nl/coperceive",
+        "--out",
+        str(out),
+        "--require-all",
+    ]
+    assert wlj.main(argv) == 0
+    platforms = json.loads(out.read_text())["platforms"]
+    assert "darwin-x86_64" not in platforms
+    assert set(platforms.keys()) == {"darwin-aarch64", "windows-x86_64", "linux-x86_64"}
+
+
+@pytest.mark.parametrize(
+    "missing_archive",
+    [
+        "Coperceive_aarch64.app.tar.gz",
+        "Coperceive_0.1.0_x64-setup.exe",
+        "Coperceive_0.1.0_amd64.AppImage",
+    ],
+)
+def test_missing_required_platform_fails_without_falling_back(
+    tmp_path: Path, missing_archive: str
+) -> None:
+    """require-all fails if any of the 3 platforms is missing; never emits darwin-x86_64."""
     conf = tmp_path / "tauri.conf.json"
     conf.write_text(json.dumps({"version": "0.1.0"}))
     assets = tmp_path / "assets"
     assets.mkdir()
     create_mock_assets(assets, "0.1.0")
 
-    # Remove the Intel archive
-    (assets / "Coperceive_x64.app.tar.gz").unlink()
-    (assets / "Coperceive_x64.app.tar.gz.sig").unlink()
+    (assets / missing_archive).unlink()
+    (assets / f"{missing_archive}.sig").unlink()
 
     out = tmp_path / "latest.json"
     argv = [
@@ -162,10 +200,7 @@ def test_missing_intel_archive_fails_without_falling_back(tmp_path: Path) -> Non
         "--require-all",
     ]
     assert wlj.main(argv) == 1
-    # Ensure no latest.json was written with arm64 falling back to intel
-    if out.exists():
-        manifest = json.loads(out.read_text())
-        assert "darwin-x86_64" not in manifest.get("platforms", {})
+    assert not out.exists()
 
 
 def test_two_platforms_resolving_to_same_file_raises_error(tmp_path: Path) -> None:
@@ -175,14 +210,16 @@ def test_two_platforms_resolving_to_same_file_raises_error(tmp_path: Path) -> No
     assets = tmp_path / "assets"
     assets.mkdir()
 
-    # Symlink Intel archive to arm64 archive
+    # Symlink Linux archive to arm64 archive
     (assets / "Coperceive_aarch64.app.tar.gz").write_bytes(b"content")
     (assets / "Coperceive_aarch64.app.tar.gz.sig").write_text(
         make_mock_minisign_signature("Coperceive_aarch64.app.tar.gz") + "\n"
     )
-    (assets / "Coperceive_x64.app.tar.gz").symlink_to(assets / "Coperceive_aarch64.app.tar.gz")
-    (assets / "Coperceive_x64.app.tar.gz.sig").write_text(
-        make_mock_minisign_signature("Coperceive_x64.app.tar.gz") + "\n"
+    (assets / "Coperceive_0.1.0_amd64.AppImage").symlink_to(
+        assets / "Coperceive_aarch64.app.tar.gz"
+    )
+    (assets / "Coperceive_0.1.0_amd64.AppImage.sig").write_text(
+        make_mock_minisign_signature("Coperceive_0.1.0_amd64.AppImage") + "\n"
     )
 
     with pytest.raises(SystemExit) as exc_info:

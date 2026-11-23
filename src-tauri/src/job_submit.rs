@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::hpc::{EnvironmentKind, JobState, ServerProfile};
 use crate::run_plan::{
     environment_lines, model_run_output_checks, quoted_command_with, strip_output_dir,
-    validate_plan_id, verify_plan_inputs, RunPlan, WORK_IN_SCRATCH,
+    validate_plan_id, validate_plugin_python, verify_plan_inputs, RunPlan, EVAL_PROTOCOLS,
+    PLUGIN_PYTHON_FLAG, WORK_IN_SCRATCH,
 };
 use crate::slurm_adapter::{RemoteRunner, map_slurm_state};
 use crate::ssh::shell_quote;
@@ -176,11 +177,11 @@ pub fn render_run_script(
     // introduced (9b4d9a0): serde defaults leave all of them empty. work_dir is the marker
     // for that schema version: every built-in plan saved since then records the job's work
     // directory, so an empty one means the plan predates those fields. The media root is
-    // not the marker: it is optional now, and an empty one is a valid new plan.
+    // not the marker: it is optional. The raw root is not the marker either: a model whose
+    // manifest declares no inputs.raw (OpenCOOD CoBEVT) saves a valid plan with an empty
+    // one. An empty model is still refused: a built-in plan without one cannot run.
     if plan.pipeline.source == "builtin"
-        && (plan.model.trim().is_empty()
-            || plan.raw_root.path.trim().is_empty()
-            || plan.work_dir.trim().is_empty())
+        && (plan.model.trim().is_empty() || plan.work_dir.trim().is_empty())
     {
         return Err(
             "This saved plan predates the model/raw/work fields. Rebuild this plan before submitting."
@@ -191,6 +192,13 @@ pub fn render_run_script(
     // saved plan that records the model's option keys but no value is refused here, before
     // anything is submitted. A plan saved before model_options existed has none recorded;
     // its argv then lacks the option and `coperceive model run` refuses it by name.
+    if plan.pipeline.source == "builtin" && !EVAL_PROTOCOLS.contains(&plan.eval_protocol.trim())
+    {
+        return Err(
+            "This saved plan records an unknown AP protocol. Rebuild this plan before submitting."
+                .to_string(),
+        );
+    }
     if plan.pipeline.source == "builtin"
         && plan.model_options.iter().any(|option| option == "ckpt_root")
         && plan.ckpt_root.path.trim().is_empty()
@@ -218,6 +226,7 @@ pub fn render_run_script(
     validate_plan_id(&plan.id)?;
     if builtin {
         check_builtin_run_words(plan)?;
+        check_plugin_python_words(plan)?;
     }
     profile.validate()?;
     plan.environment.validate()?;
@@ -725,6 +734,33 @@ fn capture_interpreter(plan: &RunPlan) -> Result<(String, Option<String>), Strin
 /// output directory, `--run-id` its id and `--work` the job's scratch. The post-run
 /// checks and the results views rely on it, so a saved plan that says otherwise (stale
 /// or edited) is refused, as `--output-dir` is.
+/// A saved plan's plugin interpreter, checked again before submitting: a full path with
+/// no line break, and on the run line exactly once, last, as the plan records it (or not
+/// at all without one). A plan edited by hand cannot slip another path into the job.
+fn check_plugin_python_words(plan: &RunPlan) -> Result<(), String> {
+    validate_plugin_python(&plan.plugin_python)
+        .map_err(|error| format!("{error} Rebuild this plan before submitting."))?;
+    let flags = plan.argv.iter().filter(|word| word.starts_with(PLUGIN_PYTHON_FLAG)).count();
+    let tail = match plan.argv.as_slice() {
+        [.., flag, value] if flag == PLUGIN_PYTHON_FLAG => Some(value.as_str()),
+        _ => None,
+    };
+    let matches = if plan.plugin_python.is_empty() {
+        flags == 0
+    } else {
+        flags == 1 && tail == Some(plan.plugin_python.as_str())
+    };
+    if matches {
+        Ok(())
+    } else {
+        Err(format!(
+            "This saved plan's run line does not pass {PLUGIN_PYTHON_FLAG} as the plan records \
+             it ({:?}). Rebuild this plan before submitting.",
+            plan.plugin_python
+        ))
+    }
+}
+
 fn check_builtin_run_words(plan: &RunPlan) -> Result<(), String> {
     let Some(start) = plan
         .argv
@@ -1032,6 +1068,8 @@ mod tests {
             media_root: crate::run_plan::PlanArtifact::default(),
             ckpt_root: crate::run_plan::PlanArtifact::default(),
             model_options: Vec::new(),
+            eval_protocol: "default".to_string(),
+            plugin_python: String::new(),
             work_dir: String::new(),
             staging_seconds: None,
             checkpoint: crate::run_plan::PlanArtifact {
@@ -1287,6 +1325,27 @@ mod tests {
     }
 
     #[test]
+    fn a_new_builtin_plan_without_a_raw_root_is_accepted_and_omits_the_flag() {
+        // work_dir is the marker of a plan saved since 9b4d9a0. An empty raw root is a
+        // valid new plan for a model whose manifest declares no raw inputs; the job
+        // script must contain no --raw-root word at all (not an empty one).
+        let profile = profile("ps");
+        let mut plan = builtin_plan(&profile);
+        plan.raw_root = crate::run_plan::PlanArtifact::default();
+        let at = plan
+            .argv
+            .iter()
+            .position(|word| word == "--raw-root")
+            .expect("fixture passes --raw-root");
+        plan.argv.drain(at..at + 2);
+        let preview =
+            render_run_script(&profile, &plan, &SubmitOptions::default()).expect("render");
+        assert!(!preview.script.contains("--raw-root"), "{}", preview.script);
+        assert!(preview.script.contains("--work"), "{}", preview.script);
+        assert!(!plan.work_dir.trim().is_empty());
+    }
+
+    #[test]
     fn a_saved_plan_missing_its_required_ckpt_root_is_refused_before_submission() {
         // ckpt_root has no manifest default: a plan that records the model's options but
         // no value must be rebuilt, not submitted with a guessed path.
@@ -1303,6 +1362,105 @@ mod tests {
             .expect_err("missing ckpt_root");
         assert!(error.contains("ckpt_root"), "{error}");
         assert!(error.contains("Rebuild this plan"), "{error}");
+    }
+
+    #[test]
+    fn a_legacy_plan_renders_the_protocol_and_a_default_plan_does_not() {
+        let profile = profile("ps");
+        let mut plan = builtin_plan(&profile);
+        let plain = render_run_script(&profile, &plan, &SubmitOptions::default()).expect("default");
+        assert!(!plain.script.contains("--protocol"), "{}", plain.script);
+        plan.eval_protocol = "legacy".to_string();
+        plan.argv.push("--protocol".to_string());
+        plan.argv.push("legacy".to_string());
+        let legacy = render_run_script(&profile, &plan, &SubmitOptions::default()).expect("legacy");
+        assert!(legacy.script.contains("--protocol legacy"), "{}", legacy.script);
+    }
+
+    /// A built-in plan with `--plugin-python <path>` as save_run_plan writes it.
+    fn with_plugin_python(mut plan: RunPlan, path: &str) -> RunPlan {
+        plan.plugin_python = path.to_string();
+        crate::run_plan::push_plugin_python(&mut plan.argv, path).expect("a valid path");
+        plan
+    }
+
+    /// Interpreter paths a job script must carry as one inert word: a space, quotes,
+    /// and command substitution.
+    const AWKWARD_PLUGIN_PYTHONS: [&str; 4] = [
+        "/opt/envs/opencood-official/bin/python",
+        "/opt/envs/opencood official/bin/python",
+        "/opt/envs/it's \"x\"/bin/python",
+        "/opt/envs/$(touch pwned)/`touch pwned2`/$HOME/bin/python",
+    ];
+
+    #[test]
+    fn the_plugin_interpreter_reaches_the_run_line_last_and_quoted() {
+        let profile = profile("ps");
+        let plain = render_run_script(&profile, &builtin_plan(&profile), &SubmitOptions::default())
+            .expect("no override");
+        assert!(!plain.script.contains("--plugin-python"), "{}", plain.script);
+        for path in AWKWARD_PLUGIN_PYTHONS {
+            let plan = with_plugin_python(builtin_plan(&profile), path);
+            let script = render_run_script(&profile, &plan, &SubmitOptions::default())
+                .expect(path)
+                .script;
+            let run_line = script
+                .lines()
+                .find(|line| line.contains(" model run --manifest "))
+                .expect("run line");
+            // Last on the line, quoted by the job script's one quoting helper.
+            assert!(
+                run_line.ends_with(&format!(" --plugin-python {}", shell_quote(path))),
+                "{run_line}"
+            );
+        }
+    }
+
+    /// Bash reads each quoted word back as exactly the path and expands nothing (the
+    /// job script runs under bash on the cluster; Windows CI has no /bin/bash).
+    #[cfg(unix)]
+    #[test]
+    fn bash_reads_the_quoted_plugin_interpreter_back_unchanged() {
+        let dir = std::env::temp_dir().join(format!("coperceive-plugin-python-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        for path in AWKWARD_PLUGIN_PYTHONS {
+            let echoed = std::process::Command::new("/bin/bash")
+                .arg("-c")
+                .arg(format!("printf '%s' {}", shell_quote(path)))
+                .current_dir(&dir)
+                .output()
+                .expect("bash");
+            assert_eq!(String::from_utf8_lossy(&echoed.stdout), path);
+            assert!(!dir.join("pwned").exists() && !dir.join("pwned2").exists());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_saved_plan_with_a_bad_or_mismatched_plugin_interpreter_is_refused() {
+        let profile = profile("ps");
+        let render = |plan: &RunPlan| {
+            render_run_script(&profile, plan, &SubmitOptions::default()).expect_err("refused")
+        };
+        // A relative path, or one with a line break, recorded by hand in a saved plan.
+        let mut relative = builtin_plan(&profile);
+        relative.plugin_python = "envs/opencood/bin/python".to_string();
+        relative.argv.extend(["--plugin-python".to_string(), relative.plugin_python.clone()]);
+        assert!(render(&relative).contains("--plugin-python: give a full path"), "{}", render(&relative));
+        let mut newline = builtin_plan(&profile);
+        newline.plugin_python = "/opt/envs/x\n/bin/python".to_string();
+        newline.argv.extend(["--plugin-python".to_string(), newline.plugin_python.clone()]);
+        assert!(render(&newline).contains("line break"), "{}", render(&newline));
+        // The plan records one interpreter and the run line passes another, or none.
+        let mut other = with_plugin_python(builtin_plan(&profile), "/opt/envs/a/bin/python");
+        other.plugin_python = "/opt/envs/b/bin/python".to_string();
+        assert!(render(&other).contains("does not pass --plugin-python"), "{}", render(&other));
+        let mut unrecorded = with_plugin_python(builtin_plan(&profile), "/opt/envs/a/bin/python");
+        unrecorded.plugin_python = String::new();
+        assert!(render(&unrecorded).contains("does not pass --plugin-python"));
+        let mut missing = builtin_plan(&profile);
+        missing.plugin_python = "/opt/envs/a/bin/python".to_string();
+        assert!(render(&missing).contains("does not pass --plugin-python"));
     }
 
     #[test]
@@ -2082,7 +2240,6 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn a_good_builtin_run_exits_zero_and_one_without_output_does_not() {
-        use std::os::unix::fs::PermissionsExt;
         if !std::path::Path::new("/bin/bash").exists() {
             return;
         }
@@ -2092,7 +2249,7 @@ mod tests {
         let python = root.join("venv/bin/python");
         std::fs::create_dir_all(python.parent().unwrap()).unwrap();
         std::fs::create_dir_all(root.join("results")).unwrap();
-        std::fs::write(
+        crate::test_seams::write_executable_atomically(
             &python,
             r#"#!/bin/bash
 if [ "$1" = "-" ]; then cat >/dev/null; printf '{}\n' > "$2"; exit 0; fi
@@ -2118,8 +2275,7 @@ printf '{\n  "provenance": {\n    "boxes_written": %s\n  }\n}\n' "$N" > "$OUT/$R
 exit "${FAKE_EXIT:-0}"
 "#,
         )
-        .unwrap();
-        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+        .expect("write fake python");
         let mut profile = profile("ps");
         profile.data_roots = vec![root.join("data").to_string_lossy().to_string()];
         profile.code_roots = Vec::new();
@@ -2140,7 +2296,8 @@ exit "${FAKE_EXIT:-0}"
             .expect("render")
             .script;
         let path = root.join("job.sbatch");
-        std::fs::write(&path, &script).unwrap();
+        crate::test_seams::write_executable_atomically(&path, &script)
+            .expect("write job script");
         let run_full = |no_boxes: bool, zero_boxes: bool, exit: &str| {
             let mut command = std::process::Command::new("/bin/bash");
             command.arg(&path).env("SLURM_JOB_ID", "7").env("USER", "tester").env("FAKE_EXIT", exit);
@@ -2192,7 +2349,8 @@ exit "${FAKE_EXIT:-0}"
             r#"printf '{\n  "provenance": {\n    "seed": 0\n  }\n}\n'"#,
         );
         assert_ne!(older, fake, "the fake's run.json line moved");
-        std::fs::write(&python, &older).unwrap();
+        crate::test_seams::write_executable_atomically(&python, &older)
+            .expect("write fake python");
         let unknown = run(true);
         assert!(
             unknown.status.success(),
@@ -2201,14 +2359,20 @@ exit "${FAKE_EXIT:-0}"
         );
         assert!(run_dir.join("run.json").is_file());
         assert!(!run_dir.join("val00/boxes.parquet").exists());
-        std::fs::write(&python, &fake).unwrap();
+        crate::test_seams::write_executable_atomically(&python, &fake)
+            .expect("write fake python");
         // No run.json at all: a failed run.
         std::fs::remove_dir_all(&plan.output_dir).unwrap();
-        std::fs::write(&python, fake.replace("> \"$OUT/$RID/run.json\"", "> /dev/null")).unwrap();
+        crate::test_seams::write_executable_atomically(
+            &python,
+            &fake.replace("> \"$OUT/$RID/run.json\"", "> /dev/null"),
+        )
+        .expect("write fake python");
         let missing = run(false);
         assert_eq!(missing.status.code(), Some(1), "{}", String::from_utf8_lossy(&missing.stderr));
         assert!(String::from_utf8_lossy(&missing.stderr).contains("run.json"));
-        std::fs::write(&python, fake).unwrap();
+        crate::test_seams::write_executable_atomically(&python, &fake)
+            .expect("write fake python");
         // A partial run (exit 3) still records environment.json and brings its logs home,
         // then the job exits with the run's status.
         std::fs::remove_dir_all(&plan.output_dir).unwrap();

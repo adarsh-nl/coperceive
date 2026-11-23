@@ -128,3 +128,4 @@ nav:
           - Plan parity: adr/0018-plan-parity.md
           - Security review: adr/0019-security-review.md
           - App runs follow the CLI job: adr/0021-app-model-runs-follow-the-cli-slurm-job.md
+          - Drop macOS Intel: adr/0022-drop-macos-intel.md

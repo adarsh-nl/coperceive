@@ -25,6 +25,14 @@ use crate::slurm_adapter::RemoteRunner;
 use crate::ssh::shell_quote;
 
 pub const RUN_PLAN_SCHEMA: &str = "coperceive-run-plan-1";
+/// The AP protocol used when a plan does not name one: the evaluator's default
+/// (per-frame ranking, connected-union ground truth within 70 m).
+pub const DEFAULT_EVAL_PROTOCOL: &str = "default";
+pub const EVAL_PROTOCOLS: [&str; 2] = ["default", "legacy"];
+
+fn default_eval_protocol() -> String {
+    DEFAULT_EVAL_PROTOCOL.to_string()
+}
 pub const PIPELINE_SPEC_FILE: &str = "coperceive-pipeline.json";
 pub const CONTRACT_CHECK_FRAMES: u32 = 3;
 
@@ -90,6 +98,10 @@ pub struct BuiltinModel {
     pub staging_seconds: Option<serde_json::Number>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversion_seconds: Option<serde_json::Number>,
+    /// True when the manifest's `inputs.raw` is non-empty. None from a listing that does
+    /// not carry it (older coperceive): the raw root stays required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_inputs: Option<bool>,
 }
 
 /// What a built-in model's manifest asks of the job, recorded in the plan from the
@@ -191,6 +203,14 @@ pub struct RunPlanRequest {
     /// A built-in model parameter the plan records as a path (Griffin's `ckpt_root`).
     #[serde(default)]
     pub ckpt_root: String,
+    /// The AP protocol the run is made for: `default` or `legacy`.
+    #[serde(default = "default_eval_protocol")]
+    pub eval_protocol: String,
+    /// The plugin's interpreter for a built-in model (`--plugin-python`): a full path on
+    /// the cluster, or empty for the manifest's `environment`. New evaluation fills it
+    /// from the server's default (Settings → Model runs) and the user may change it.
+    #[serde(default)]
+    pub plugin_python: String,
     #[serde(default)]
     pub environment_override: Option<EnvironmentSetup>,
 }
@@ -289,6 +309,14 @@ pub struct RunPlan {
     /// for a custom pipeline and on plans saved before this field existed.
     #[serde(default)]
     pub model_options: Vec<String>,
+    /// The AP protocol the run was made for (`default` or `legacy`), recorded so a later
+    /// `coperceive eval run` uses it. A plan saved before this field is `default`.
+    #[serde(default = "default_eval_protocol")]
+    pub eval_protocol: String,
+    /// The plugin's interpreter the run line passes as `--plugin-python`, exactly as
+    /// given; empty when the manifest's `environment` decides (and on older plans).
+    #[serde(default)]
+    pub plugin_python: String,
     /// Work directory (inside the run output) and the staging seconds the job
     /// measured. Empty/None on plans saved before these fields existed.
     #[serde(default)]
@@ -653,6 +681,51 @@ fn artifact_from_check_for_input(path: &str, kind: &str) -> PlanArtifact {
     }
 }
 
+/// The flag `coperceive model run` takes for the plugin's interpreter.
+pub const PLUGIN_PYTHON_FLAG: &str = "--plugin-python";
+
+/// Checks a plugin interpreter path as `coperceive model run --plugin-python` will on the
+/// cluster, before anything is saved or submitted. Empty means no override. The path is
+/// never resolved or rewritten (the job passes it exactly as given), so it must be a full
+/// path; the check is a leading `/`, the cluster's form on every client OS. A line break
+/// or another control character is refused: the path goes into a job script.
+pub fn validate_plugin_python(path: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Ok(());
+    }
+    if path.chars().any(char::is_control) {
+        return Err(format!(
+            "{PLUGIN_PYTHON_FLAG}: the interpreter path contains a line break or another control \
+             character."
+        ));
+    }
+    if !path.starts_with('/') {
+        return Err(format!("{PLUGIN_PYTHON_FLAG}: give a full path (got {path})"));
+    }
+    Ok(())
+}
+
+/// The plugin interpreter a request names: empty (or only spaces) is no override;
+/// anything else is kept exactly as typed and checked.
+fn requested_plugin_python(value: &str) -> Result<String, String> {
+    if value.trim().is_empty() {
+        return Ok(String::new());
+    }
+    validate_plugin_python(value)?;
+    Ok(value.to_string())
+}
+
+/// Appends `--plugin-python <path>` last, as the CLI's job line ends with it
+/// (`coperceive/models/slurm.py`); nothing for no override, so the line is unchanged.
+pub fn push_plugin_python(argv: &mut Vec<String>, plugin_python: &str) -> Result<(), String> {
+    validate_plugin_python(plugin_python)?;
+    if !plugin_python.is_empty() {
+        argv.push(PLUGIN_PYTHON_FLAG.to_string());
+        argv.push(plugin_python.to_string());
+    }
+    Ok(())
+}
+
 /// Built-in argv for an installed model plugin: `coperceive model run` with its own
 /// output flags (`--out`, `--run-id`, `--work`; it has no `--output-dir`). A
 /// checkpoint is passed as `--option checkpoint=<path>` only when one is given, which
@@ -669,6 +742,7 @@ pub fn build_builtin_argv(
     raw_root: &str,
     media_root: &str,
     ckpt_root: &str,
+    eval_protocol: &str,
     work_dir: &str,
 ) -> Result<Vec<String>, String> {
     if plugin_manifest.trim().is_empty() {
@@ -715,6 +789,12 @@ pub fn build_builtin_argv(
     if !ckpt_root.trim().is_empty() {
         argv.push("--option".to_string());
         argv.push(format!("ckpt_root={}", ckpt_root.trim()));
+    }
+    // Record the AP protocol in the run so eval run can use it. The default is left
+    // out, exactly as the CLI's no-flag command leaves it out; the parity then holds.
+    if eval_protocol == "legacy" {
+        argv.push("--protocol".to_string());
+        argv.push("legacy".to_string());
     }
     if !work_dir.trim().is_empty() {
         argv.push("--work".to_string());
@@ -1875,6 +1955,13 @@ impl BuiltinChoice {
         self.model.options.iter().any(|option| option == "ckpt_root")
     }
 
+    /// Whether the model reads raw files. `model list --json` reports `raw_inputs` from
+    /// the manifest's `inputs.raw`. A listing that omits the field keeps the raw root
+    /// required, which is what every plan did before that field existed.
+    fn needs_raw_root(&self) -> bool {
+        self.model.raw_inputs.unwrap_or(true)
+    }
+
     /// Model options exactly as the manifest declares them: a checkpoint only when the
     /// model has a `checkpoint` option, and every extra `K=V` a declared key. The CLI's
     /// `check_options` would refuse anything else on the node, after the job queued.
@@ -2191,12 +2278,28 @@ pub fn build_run_plan(
         Some(choice) => choice.gres(entry)?,
         None => default_eval_gres(entry),
     };
+    let plugin_python = if builtin { requested_plugin_python(&request.plugin_python)? } else { String::new() };
     if builtin {
+        let eval_protocol = request.eval_protocol.trim();
+        if !EVAL_PROTOCOLS.contains(&eval_protocol) {
+            return Err(format!(
+                "Choose the AP protocol for this run: one of {}.",
+                EVAL_PROTOCOLS.join(", ")
+            ));
+        }
         let raw = request.raw_root.trim();
-        if raw.is_empty() {
+        let needs_raw = builtin_choice
+            .as_ref()
+            .map(|choice| choice.needs_raw_root())
+            .unwrap_or(true);
+        if needs_raw && raw.is_empty() {
             return Err("Choose the raw root on the cluster before checking the plan.".to_string());
         }
-        validate_path_in_roots(profile, raw, "raw root")?;
+        // Optional when the model declares no inputs.raw: an empty one leaves --raw-root
+        // out of the job script, as the CLI does. A given path is still confined.
+        if !raw.is_empty() {
+            validate_path_in_roots(profile, raw, "raw root")?;
+        }
         // The media root is optional, as the CLI's repeatable --media-root is: an empty
         // one leaves the flag out of the job script instead of passing an empty path.
         let media = request.media_root.trim();
@@ -2704,8 +2807,10 @@ pub fn build_run_plan(
                 request.raw_root.trim(),
                 request.media_root.trim(),
                 request.ckpt_root.trim(),
+                request.eval_protocol.trim(),
                 WORK_IN_SCRATCH,
-            )?
+            )
+            .and_then(|mut argv| push_plugin_python(&mut argv, &plugin_python).map(|()| argv))?
         }
         _ => build_pipeline_argv(&pipeline, &request.values, &output_dir)?,
     };
@@ -2767,6 +2872,8 @@ pub fn build_run_plan(
         media_root: if builtin { artifact_from_check_for_input(&request.media_root, "folder") } else { PlanArtifact::default() },
         ckpt_root: if builtin { artifact_from_check_for_input(&request.ckpt_root, "folder") } else { PlanArtifact::default() },
         model_options: builtin_choice.as_ref().map(|choice| choice.model.options.clone()).unwrap_or_default(),
+        eval_protocol: if builtin { request.eval_protocol.trim().to_string() } else { DEFAULT_EVAL_PROTOCOL.to_string() },
+        plugin_python,
         work_dir: if builtin { WORK_IN_SCRATCH.to_string() } else { String::new() },
         staging_seconds: None,
         output_dir,
@@ -3710,6 +3817,25 @@ pub fn save_run_plan(
             _ => {}
         }
     }
+    let eval_protocol = if request.eval_protocol.trim().is_empty() {
+        plan.eval_protocol.trim()
+    } else {
+        request.eval_protocol.trim()
+    };
+    // The form's value; a request without one (an older client) keeps the plan's.
+    let plugin_python = if save_pipeline.builtin.is_none() {
+        String::new()
+    } else if request.plugin_python.trim().is_empty() {
+        requested_plugin_python(&plan.plugin_python)?
+    } else {
+        requested_plugin_python(&request.plugin_python)?
+    };
+    if save_pipeline.builtin.is_some() && !EVAL_PROTOCOLS.contains(&eval_protocol) {
+        return Err(format!(
+            "Choose the AP protocol for this run: one of {}.",
+            EVAL_PROTOCOLS.join(", ")
+        ));
+    }
     let argv: Vec<String> = if let Some(choice) = &save_pipeline.builtin {
         let model = request.model.trim();
         let raw = request.raw_root.trim();
@@ -3719,13 +3845,15 @@ pub fn save_run_plan(
         } else {
             plan.ckpt_root.path.trim()
         };
-        if model.is_empty() || raw.is_empty() {
+        if model.is_empty() || (choice.needs_raw_root() && raw.is_empty()) {
             return Err(
                 "This plan predates the model/raw fields; rebuild this plan before saving."
                     .to_string(),
             );
         }
-        validate_path_in_roots(profile, raw, "raw root")?;
+        if !raw.is_empty() {
+            validate_path_in_roots(profile, raw, "raw root")?;
+        }
         // Optional, as the CLI's --media-root is; when empty build_builtin_argv writes no
         // --media-root at all.
         if !media.is_empty() {
@@ -3747,8 +3875,10 @@ pub fn save_run_plan(
             raw,
             media,
             ckpt_root,
+            eval_protocol,
             WORK_IN_SCRATCH,
-        )?
+        )
+        .and_then(|mut argv| push_plugin_python(&mut argv, &plugin_python).map(|()| argv))?
     } else {
         // A custom pipeline follows the output contract: force the output directory
         // pair to the recomputed value.
@@ -3850,6 +3980,12 @@ pub fn save_run_plan(
         .as_ref()
         .map(|choice| choice.model.options.clone())
         .unwrap_or_default();
+    validated.eval_protocol = if save_pipeline.source == "builtin" {
+        eval_protocol.to_string()
+    } else {
+        DEFAULT_EVAL_PROTOCOL.to_string()
+    };
+    validated.plugin_python = plugin_python;
     validated.work_dir = if save_pipeline.source == "builtin" {
         WORK_IN_SCRATCH.to_string()
     } else {
@@ -4154,6 +4290,8 @@ mod tests {
             raw_root: String::new(),
             media_root: String::new(),
             ckpt_root: String::new(),
+            eval_protocol: "default".to_string(),
+            plugin_python: String::new(),
             environment_override: None,
         }
     }
@@ -4347,6 +4485,7 @@ mod tests {
         req.raw_root = "/data/scenes/raw".to_string();
         req.media_root = "/data/scenes/raw".to_string();
         req.ckpt_root = "/data/scenes/ckpts".to_string();
+        req.eval_protocol = "default".to_string();
         req
     }
 
@@ -4366,6 +4505,58 @@ mod tests {
             // The work directory is the job's scratch (the CLI's `--work "$SCRATCH/work"`).
             assert_eq!(at("--work"), Some("$SCRATCH_DIR/work".to_string()));
         }
+    }
+
+    #[test]
+    fn a_plugin_interpreter_is_recorded_and_passed_last_on_build_and_save() {
+        let cluster = GriffinCluster::new();
+        // No override: the run line names none, as before.
+        let plain = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        assert!(!plain.argv.iter().any(|word| word == "--plugin-python"), "{:?}", plain.argv);
+        assert!(plain.plugin_python.is_empty());
+        let mut req = griffin_request();
+        req.plugin_python = "/opt/envs/opencood official/bin/python".to_string();
+        let built = build_run_plan(&cluster, &entry(), &req).expect("build");
+        let saved = save_run_plan(&cluster, &entry(), &built, &req).expect("save");
+        for plan in [&built, &saved] {
+            assert_eq!(plan.plugin_python, req.plugin_python);
+            // Last, exactly as given, as the CLI's job line ends.
+            assert_eq!(
+                &plan.argv[plan.argv.len() - 2..],
+                ["--plugin-python", "/opt/envs/opencood official/bin/python"]
+            );
+        }
+        // An older client's save request without the field keeps the plan's value.
+        let mut older = req.clone();
+        older.plugin_python = String::new();
+        let kept = save_run_plan(&cluster, &entry(), &built, &older).expect("save");
+        assert_eq!(kept.plugin_python, req.plugin_python);
+        // Blank is no override.
+        req.plugin_python = "   ".to_string();
+        let blank = build_run_plan(&cluster, &entry(), &req).expect("blank");
+        assert!(blank.plugin_python.is_empty() && !blank.argv.contains(&"--plugin-python".to_string()));
+    }
+
+    #[test]
+    fn a_relative_or_multi_line_plugin_interpreter_is_refused_before_a_plan_exists() {
+        let cluster = GriffinCluster::new();
+        for (path, message) in [
+            ("envs/opencood/bin/python", "--plugin-python: give a full path (got envs/opencood/bin/python)"),
+            ("~/envs/opencood/bin/python", "--plugin-python: give a full path"),
+            ("/opt/envs/x\n/bin/python", "line break"),
+            ("/opt/envs/x\r/bin/python", "line break"),
+            ("/opt/envs/x\u{0}/bin/python", "control"),
+        ] {
+            let mut req = griffin_request();
+            req.plugin_python = path.to_string();
+            let error = build_run_plan(&cluster, &entry(), &req).expect_err(path);
+            assert!(error.contains(message), "{path:?}: {error}");
+        }
+        // The save path checks the plan it is sent back too.
+        let mut built = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        built.plugin_python = "relative/python".to_string();
+        let error = save_run_plan(&cluster, &entry(), &built, &griffin_request()).expect_err("save");
+        assert!(error.contains("give a full path"), "{error}");
     }
 
     #[test]
@@ -4551,7 +4742,6 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn the_model_list_check_runs_a_coperceive_command_with_quoted_words_under_sh() {
-        use std::os::unix::fs::PermissionsExt;
         // A venv under a folder whose name has a space, a quote and a `;`: shell_quote
         // single-quotes it, so it must reach `sh -c` as a positional parameter, never
         // inside the single-quoted script body.
@@ -4568,17 +4758,16 @@ mod tests {
             } else {
                 format!("cat <<'EOF'\n{MODEL_LIST_JSON}\nEOF\nexit 0\n")
             };
-            std::fs::write(
+            crate::test_seams::write_executable_atomically(
                 &python,
-                format!(
+                &format!(
                     "#!/bin/sh\n\
                      [ \"$1 $2 $3 $4\" = \"-m coperceive model list\" ] || {{ echo \"bad argv: $*\" >&2; exit 9; }}\n\
                      if [ \"${{5:-}}\" = --json ]; then\n{json}fi\n\
                      echo \"griffin  entry-point  coperceive_griffin_model:MANIFEST\"\n"
                 ),
             )
-            .unwrap();
-            std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+            .expect("write fake coperceive");
             python.to_string_lossy().to_string()
         };
         let runner = LocalShell { cwd: root.clone() };
@@ -6293,7 +6482,7 @@ mod tests {
             "/data/scenes",
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
-            "", "", "", "", "",
+            "", "", "", "", "", "",
         )
         .expect("argv");
         assert_eq!(
@@ -6332,7 +6521,7 @@ mod tests {
             // vehicle-side declares no checkpoint option: the plan passes none.
             "",
             "/data/results/runs/plan-1790000000-aabbccddeeff",
-            "vehicle-side", "/data/raw", "/data/raw", "", "/data/results/runs/plan-1790000000-aabbccddeeff/work",
+            "vehicle-side", "/data/raw", "/data/raw", "", "default", "/data/results/runs/plan-1790000000-aabbccddeeff/work",
         )
         .expect("argv");
         for item in [
@@ -6391,7 +6580,7 @@ mod tests {
             "/data/scenes",
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
-            "", "", "", "", "",
+            "", "", "", "", "", "",
         )
         .expect("argv");
         assert_eq!(argv[0], "/home/bob/coperceive-app/.venv/bin/python");
@@ -6413,7 +6602,7 @@ mod tests {
             "/data/scenes",
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
-            "", "", "", "", "",
+            "", "", "", "", "", "",
         )
         .expect_err("empty manifest");
         assert!(error.contains("no pipeline manifest"), "{error}");
@@ -6534,6 +6723,44 @@ mod tests {
         let error = build_run_plan(&checked_runner(), &entry(), &req).expect_err("missing");
         assert!(error.contains("ckpt_root"), "{error}");
         assert!(error.contains("vehicle-side"), "{error}");
+    }
+
+    #[test]
+    fn a_legacy_plan_carries_the_protocol_and_an_old_plan_defaults() {
+        // The plan records the AP protocol and passes it to model run, which writes it
+        // into run.json for a later eval run. A plan saved before the field is default.
+        let mut req = griffin_request();
+        req.split = "/data/code/splits/test.txt".to_string();
+        req.raw_root = "/data/code/raw".to_string();
+        req.media_root = "/data/code/raw".to_string();
+        req.ckpt_root = "/data/code/ckpts".to_string();
+        req.eval_protocol = "legacy".to_string();
+        let plan = build_run_plan(&checked_runner(), &entry(), &req).expect("build");
+        assert_eq!(plan.eval_protocol, "legacy");
+        let at = plan
+            .argv
+            .iter()
+            .position(|word| word == "--protocol")
+            .expect("--protocol");
+        assert_eq!(plan.argv[at + 1], "legacy");
+        let mut echo = EchoRunner::new();
+        echo.model_list = Some(MODEL_LIST_JSON.to_string());
+        let saved = save_run_plan(&echo, &entry(), &plan, &req).expect("save");
+        assert_eq!(saved.eval_protocol, "legacy");
+        assert!(saved.argv.iter().any(|word| word == "legacy"));
+
+        let mut json = serde_json::to_value(&plan).unwrap();
+        json.as_object_mut().unwrap().remove("eval_protocol");
+        let old: RunPlan = serde_json::from_value(json).unwrap();
+        assert_eq!(old.eval_protocol, DEFAULT_EVAL_PROTOCOL);
+    }
+
+    #[test]
+    fn a_builtin_plan_refuses_an_unknown_evaluation_protocol() {
+        let mut req = griffin_request();
+        req.eval_protocol = "v0.1.1".to_string();
+        let error = build_run_plan(&checked_runner(), &entry(), &req).expect_err("bad protocol");
+        assert!(error.contains("AP protocol"), "{error}");
     }
 
     #[test]

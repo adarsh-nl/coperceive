@@ -38,6 +38,11 @@ export interface BuiltinModel {
   gpu: boolean;
   /** The `--option` keys the model's manifest declares. */
   options: string[];
+  /**
+   * True when the manifest's `inputs.raw` is non-empty. Absent on a listing from an
+   * older coperceive: the raw root stays required.
+   */
+  raw_inputs?: boolean;
   cpus?: number | null;
   memory_gb?: number | null;
   transient_artifacts?: string[];
@@ -80,6 +85,13 @@ export interface RunPlanRequest {
   media_root: string;
   /** A model parameter the plan records as a path (Griffin's required ckpt_root). */
   ckpt_root: string;
+  /** The AP protocol the run is made for: `default` or `legacy`. */
+  eval_protocol: string;
+  /**
+   * The plugin's interpreter for a built-in model (`--plugin-python`): a full path on
+   * the cluster, or empty for the manifest's environment.
+   */
+  plugin_python?: string;
   environment_override: EnvironmentSetup | null;
 }
 
@@ -130,6 +142,10 @@ export interface RunPlan {
   ckpt_root: PlanArtifact;
   /** The --option keys the model's manifest declared when the plan was saved. */
   model_options?: string[];
+  /** The AP protocol recorded with the plan; old plans are `default`. */
+  eval_protocol: string;
+  /** The `--plugin-python` the run line passes; empty or absent = the manifest's environment. */
+  plugin_python?: string;
   work_dir: string;
   staging_seconds: number | null;
   output_dir: string;
@@ -257,6 +273,101 @@ export function pipelineNeedsCkptRoot(entry: PipelineEntry | null, model: string
   return entry.builtin?.models[model.trim()]?.options.includes("ckpt_root") ?? false;
 }
 
+export type EvalProtocol = "default" | "legacy";
+
+export const DEFAULT_EVAL_PROTOCOL: EvalProtocol = "default";
+
+/** The two choices New evaluation offers, with the wording of docs/eval.md. */
+export const EVAL_PROTOCOL_CHOICES: ReadonlyArray<{
+  value: EvalProtocol;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "default",
+    label: "Default",
+    description:
+      "OpenCOOD-style: per-frame ranking, ground truth from every connected agent within 70 m",
+  },
+  {
+    value: "legacy",
+    label: "Legacy (v0.1.1)",
+    description: "for numbers comparable to v0.1.1",
+  },
+];
+
+/**
+ * Why a plugin interpreter path cannot be used, or null when it can (empty = none).
+ * The same rules as the app's Rust check and `coperceive model run --plugin-python`:
+ * a full path (the job passes it exactly as given, so a relative one would resolve
+ * against the compute node's directory) and no line break or other control character.
+ */
+export function pluginPythonProblem(value: string): string | null {
+  if (value.trim() === "") return null;
+  // Control characters (U+0000–U+001F, U+007F–U+009F): a job-script line must stay one line.
+  const isControl = (code: number) => code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+  if ([...value].some((char) => isControl(char.codePointAt(0) ?? 0))) {
+    return "--plugin-python: the interpreter path contains a line break or another control character.";
+  }
+  if (!value.startsWith("/")) return `--plugin-python: give a full path (got ${value})`;
+  return null;
+}
+
+/** The plan review's line for the plugin interpreter. */
+export function pluginPythonLabel(value: string | null | undefined): string {
+  return value && value.trim() !== "" ? value : "From the model's manifest (environment)";
+}
+
+/** One line for the plan review, the run history and the job watch. */
+export function evalProtocolLabel(value: string | null | undefined): string {
+  const found = EVAL_PROTOCOL_CHOICES.find((choice) => choice.value === value);
+  return found ? `${found.label} — ${found.description}` : `${DEFAULT_EVAL_PROTOCOL} (not recorded)`;
+}
+
+/** The `metrics.json` config keys that identify an evaluated run's protocol. */
+export interface EvalProtocolConfig {
+  ranking_scope?: string | null;
+  gt_scope?: string | null;
+  comm_range_m?: number | null;
+}
+
+/**
+ * The label `coperceive eval report` prints (coperceive/evaluation/report.py,
+ * config_protocol_label): a config without the keys, or pooled + ego-only, is the
+ * legacy protocol. `eval compare` refuses two runs whose labels differ.
+ */
+export function evalProtocolConfigLabel(config: EvalProtocolConfig | null | undefined): string {
+  if (!config || config.ranking_scope == null || config.gt_scope == null) {
+    return "legacy (pooled, ego-only)";
+  }
+  if (config.ranking_scope === "pooled" && config.gt_scope === "ego_only") {
+    return "legacy (pooled, ego-only)";
+  }
+  let text = `ranking ${config.ranking_scope}, ground truth ${config.gt_scope}`;
+  if (config.gt_scope === "connected_union" && typeof config.comm_range_m === "number") {
+    text += ` (${config.comm_range_m} m)`;
+  }
+  return text;
+}
+
+/** Whether two evaluated runs can be compared (same ranking scope, GT scope and range). */
+export function sameEvalProtocol(
+  a: EvalProtocolConfig | null | undefined,
+  b: EvalProtocolConfig | null | undefined,
+): boolean {
+  return evalProtocolConfigLabel(a) === evalProtocolConfigLabel(b);
+}
+
+/**
+ * Whether a built-in model reads raw files (`inputs.raw` in its manifest). The cluster's
+ * model list reports that as `raw_inputs`. A listing that omits the field, or a model it
+ * does not name, keeps the raw root required.
+ */
+export function pipelineNeedsRawRoot(entry: PipelineEntry | null, model: string): boolean {
+  if (!entry || entry.source !== "builtin") return false;
+  return entry.builtin?.models[model.trim()]?.raw_inputs !== false;
+}
+
 /** A built-in model always runs over its scenes; a custom pipeline when it declares one. */
 export function pipelineNeedsSplit(entry: PipelineEntry | null): boolean {
   if (!entry) return false;
@@ -265,16 +376,20 @@ export function pipelineNeedsSplit(entry: PipelineEntry | null): boolean {
 }
 
 /**
- * Why a built-in model's plan inputs cannot be checked, or null. The model key and the raw
- * root are required; the media root is optional, exactly as the CLI's repeatable
- * `--media-root` is (the job script then leaves the flag out).
+ * Why a built-in model's plan inputs cannot be checked, or null. The model key is required.
+ * The raw root is required only when the model declares raw inputs (`needsRawInputs`,
+ * from `inputs.raw`); omitted means required, as an older listing does. The media root is
+ * optional, exactly as the CLI's repeatable `--media-root` is (the job script then leaves
+ * the flag out).
  */
 export function builtinPlanInputProblem(input: {
   model: string;
   rawRoot: string;
   mediaRoot: string;
+  needsRawInputs?: boolean;
 }): string | null {
-  if (!input.model.trim() || !input.rawRoot.trim()) {
+  const needsRaw = input.needsRawInputs !== false;
+  if (!input.model.trim() || (needsRaw && !input.rawRoot.trim())) {
     return "Choose the model key and raw root for this built-in model.";
   }
   // input.mediaRoot is deliberately not checked: it is optional.
@@ -551,6 +666,8 @@ export interface RunHistoryEntry {
   started: string | null;
   ended: string | null;
   plan_available: boolean;
+  /** The protocol the saved plan records; old plans are `default`. */
+  eval_protocol?: string;
 }
 
 /** Seconds in a Slurm duration ("[D-]HH:MM:SS", "MM:SS"), or null. */
