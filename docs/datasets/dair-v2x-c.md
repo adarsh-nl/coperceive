@@ -8,7 +8,7 @@ DAIR-V2X-C is the real-world cooperative subset of DAIR-V2X: the catalog calls t
 
 **Citation.** Use the canonical source and single BibTeX block in [Citation](#citation) below.
 
-**Download.** [Project page](https://thudair.baai.ac.cn/index) or the authors [Google Drive folder](https://drive.google.com/drive/folders/1gnrw5llXAIxuB9sEKKCm6xTaJ5HQAw2e?usp=sharing).
+**Download.** [Project page](https://thudair.baai.ac.cn/index) or the authors' [Google Drive folder](https://drive.google.com/drive/folders/1gnrw5llXAIxuB9sEKKCm6xTaJ5HQAw2e?usp=sharing).
 
 Data access requires an application according to the catalog comment. Project-page access and terms have not been verified; consult that page before use.
 

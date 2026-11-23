@@ -217,6 +217,12 @@ export interface ClusterSceneStatusEntry {
 /** How a cluster scene's camera images are read (docs/datasets/cluster-datasets.md). */
 export type CameraImagesMode = "originals" | "previews";
 
+/** Whether status could check the raw files for changes (docs/datasets/cluster-datasets.md). */
+export interface ClusterRawCheck {
+  state: "complete" | "incomplete" | "not_run";
+  reason: string | null;
+}
+
 export interface ClusterSceneStatusDocument {
   schema: "coperceive-cluster-scene-status-1" | string;
   cache_root: string;
@@ -224,6 +230,8 @@ export interface ClusterSceneStatusDocument {
   raw_root: string;
   split: string | null;
   updated_unix: number;
+  /** Absent when the cluster runs an older Coperceive. */
+  raw_check?: ClusterRawCheck;
   scenes: ClusterSceneStatusEntry[];
 }
 

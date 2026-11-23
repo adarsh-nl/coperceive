@@ -280,6 +280,32 @@ def _write_dataset(cache_dir: Path, payload: dict[str, Any]) -> None:
 # The reason a ready scene turns stale when its adapter's conversion rules changed.
 MANIFEST_CHANGED = "adapter manifest changed"
 RAW_CHANGED = "raw dataset fingerprint changed"
+# Why the status cannot say whether the raw files changed: a walk hit its bound.
+RAW_CHECK_INCOMPLETE = "raw check incomplete"
+
+
+def _complete(fingerprint: object) -> bool:
+    return isinstance(fingerprint, dict) and not fingerprint.get("truncated", False)
+
+
+def _raw_changed(stored: object, current: Mapping[str, object]) -> bool:
+    """Whether two raw walks prove the raw files changed.
+
+    Only two complete walks can: a walk cut off by its entry or time bound
+    covers a different part of the tree each run, so its digest changes with
+    no raw change at all. A truncated walk therefore never marks a scene stale.
+    """
+    if not _complete(stored) or not _complete(current):
+        return False
+    assert isinstance(stored, dict)
+    return stored.get("digest") != current.get("digest")
+
+
+def _mark_raw_stale(dataset: dict[str, Any]) -> None:
+    for record in dataset.get("scenes", {}).values():
+        if record.get("state") == "ready":
+            record["state"] = "stale"
+            record["reason"] = RAW_CHANGED
 
 
 def _adapter_digest(adapter_name: object) -> str | None:
@@ -708,11 +734,9 @@ def prepare_cluster_dataset(
                 "updated_unix": int(time.time()),
                 "scenes": {},
             }
-        if dataset.get("raw_fingerprint", {}).get("digest") != fingerprint["digest"]:
-            for record in dataset.get("scenes", {}).values():
-                if record.get("state") == "ready":
-                    record["state"] = "stale"
-                    record["reason"] = RAW_CHANGED
+        stored = dataset.get("raw_fingerprint")
+        if _raw_changed(stored, fingerprint):
+            _mark_raw_stale(dataset)
         _mark_manifest_stale(cache, dataset)
         for ref in refs:
             dataset.setdefault("scenes", {}).setdefault(
@@ -725,7 +749,10 @@ def prepare_cluster_dataset(
                     "scene_dir": ref.scene_id,
                 },
             )
-        dataset["raw_fingerprint"] = fingerprint
+        # Keep a complete fingerprint over a truncated one, so a later complete
+        # walk can still compare against it.
+        if _complete(fingerprint) or not _complete(stored):
+            dataset["raw_fingerprint"] = fingerprint
         dataset["updated_unix"] = int(time.time())
         _write_dataset(cache, dataset)
     job_id = _slurm_job_id()
@@ -773,6 +800,7 @@ def dataset_status_document(cache_dir: str | Path, *, refresh_stale: bool = True
     cache = _real(cache_dir)
     dataset = _read_dataset(cache)
     fingerprint = dataset.get("raw_fingerprint", {})
+    raw_check: dict[str, str | None] = {"state": "not_run", "reason": None}
     if refresh_stale and isinstance(fingerprint, dict):
         raw_root = dataset.get("raw_root")
         split = dataset.get("split")
@@ -783,11 +811,12 @@ def dataset_status_document(cache_dir: str | Path, *, refresh_stale: bool = True
                 max_entries=DEFAULT_MAX_ENTRIES,
                 deadline=time.monotonic() + max(2.0, DEFAULT_TIMEOUT_S),
             )
-            if current["digest"] != fingerprint.get("digest"):
-                for record in dataset.get("scenes", {}).values():
-                    if record.get("state") == "ready":
-                        record["state"] = "stale"
-                        record["reason"] = RAW_CHANGED
+            if _complete(current) and _complete(fingerprint):
+                raw_check = {"state": "complete", "reason": None}
+            else:
+                raw_check = {"state": "incomplete", "reason": RAW_CHECK_INCOMPLETE}
+            if _raw_changed(fingerprint, current):
+                _mark_raw_stale(dataset)
     if refresh_stale:
         _mark_manifest_stale(cache, dataset)
     records = []
@@ -802,6 +831,7 @@ def dataset_status_document(cache_dir: str | Path, *, refresh_stale: bool = True
         "raw_root": dataset.get("raw_root"),
         "split": dataset.get("split"),
         "updated_unix": dataset.get("updated_unix"),
+        "raw_check": raw_check,
         "scenes": records,
     }
 

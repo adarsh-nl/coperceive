@@ -93,6 +93,9 @@ class RunOptions:
     force: bool = False
     staging_seconds: float | None = None  # the rsync wall time, measured by the Slurm job
     perturbation: PerturbationSpec | None = None
+    # The evaluation protocol to record for this run, so a later eval run uses it
+    # by default (docs/guides/evaluate.md). None means "do not record one".
+    eval_protocol: str | None = None
 
 
 @dataclass(frozen=True)
@@ -227,6 +230,7 @@ def provenance_json(
     checkpoint: CheckpointInfo | None = None,
     gpu: str | None = None,
     perturbation: Mapping[str, object] | None = None,
+    eval_protocol: str | None = None,
 ) -> dict[str, object]:
     """Every key of spec §Provenance."""
     body: dict[str, object] = {
@@ -257,6 +261,8 @@ def provenance_json(
     }
     if perturbation is not None:
         body["perturbation"] = dict(perturbation)
+    if eval_protocol is not None:
+        body["eval_protocol"] = eval_protocol
     return body
 
 
@@ -380,6 +386,10 @@ def run_batch(
     """Run ``manifest``'s model over the scenes and write ``<out_root>/<run_id>``."""
     env: dict[str, str] = dict(os.environ if parent_env is None else parent_env)
     check_run_id(run_id)
+    if options.eval_protocol not in (None, "default", "legacy"):
+        raise BatchError(
+            f"model run --protocol must be default or legacy, got {options.eval_protocol!r}"
+        )
     spec = select_model(manifest, options.model)
     effective = check_options(spec, options.options)
     declared_checkpoint = require_checkpoint(spec, effective)
@@ -456,6 +466,7 @@ def run_batch(
             timings=_timings(wall, frames, reported, options.staging_seconds),
             parent_env=env,
             perturbation=None if options.perturbation is None else options.perturbation.to_json(),
+            eval_protocol=options.eval_protocol,
         )
         return run_meta_for(
             manifest, spec, run_id=run_id, created_utc=created_utc, provenance=provenance
