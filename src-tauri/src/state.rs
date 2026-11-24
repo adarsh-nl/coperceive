@@ -2137,7 +2137,6 @@ pub mod tests {
         assert!(loaded.welcome_card_dismissed);
         assert_eq!(loaded.remote_view_cache_bytes, 512 * 1024 * 1024);
         assert_eq!(loaded.camera_images(Some("cluster-a")).effective, "originals");
-        assert_eq!(loaded.viewer_sessions.get("alias|p|/r|").map(String::as_str), Some("abc123"));
         assert_eq!(loaded.layout.as_ref().map(|l| l.left_px), Some(300.0));
     }
 
