@@ -126,9 +126,11 @@ jobs:
         run: bash scripts/desktop/build_dmg.sh x86_64-apple-darwin
       - name: Verify packaged app ships the viewer bundle
         run: |
-          APP="$(find src-tauri/target -type d -name Coperceive.app | head -n 1)"
-          test -n "${APP}" || { echo "No Coperceive.app found" >&2; exit 1; }
-          python3 scripts/check_bundle_assets.py --app "${APP}"
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            APP="src-tauri/target/${target}/release/bundle/macos/Coperceive.app"
+            test -d "${APP}" || { echo "No Coperceive.app found for ${target} at ${APP}" >&2; exit 1; }
+            python3 scripts/check_bundle_assets.py --app "${APP}"
+          done
       - name: Prepare macOS Release Assets
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -163,6 +165,50 @@ jobs:
           test -f "release-assets-macos/$(basename "${ARM64_DMG}")" || { echo "::error::Missing ARM64 DMG in release-assets" >&2; exit 1; }
           test -f "release-assets-macos/$(basename "${INTEL_DMG}")" || { echo "::error::Missing Intel DMG in release-assets" >&2; exit 1; }
           ls -la release-assets-macos/
+      - name: Run macOS Smoke Test on Installed DMGs (arm64 and Intel via Rosetta)
+        run: |
+          ARM64_DMG="$(find release-assets-macos -maxdepth 1 -type f \( -name "*aarch64*.dmg" -o -name "*arm64*.dmg" \) | head -n 1)"
+          INTEL_DMG="$(find release-assets-macos -maxdepth 1 -type f \( -name "*x64*.dmg" -o -name "*x86_64*.dmg" \) | head -n 1)"
+          test -n "${ARM64_DMG}" && test -f "${ARM64_DMG}" || { echo "::error::Missing arm64 DMG in release-assets-macos" >&2; exit 1; }
+          test -n "${INTEL_DMG}" && test -f "${INTEL_DMG}" || { echo "::error::Missing Intel DMG in release-assets-macos" >&2; exit 1; }
+
+          smoke_dmg() {
+            local dmg="$1"
+            local arch_prefix="$2"
+            local tag="$3"
+            (
+              set -euo pipefail
+              local mount_dir="${RUNNER_TEMP}/mnt-${tag}"
+              local install_dir="${RUNNER_TEMP}/app-${tag}"
+              local app_path="${install_dir}/Coperceive.app"
+              cleanup_dmg() {
+                hdiutil detach "${mount_dir}" -force >/dev/null 2>&1 || true
+                rm -rf "${mount_dir}" "${install_dir}"
+              }
+              trap cleanup_dmg EXIT
+              rm -rf "${mount_dir}" "${install_dir}"
+              mkdir -p "${mount_dir}" "${install_dir}"
+              hdiutil attach "${dmg}" -nobrowse -readonly -mountpoint "${mount_dir}"
+              cp -R "${mount_dir}/Coperceive.app" "${app_path}"
+              hdiutil detach "${mount_dir}" || hdiutil detach "${mount_dir}" -force || true
+              if [ -n "${arch_prefix}" ]; then
+                local py_intel="${app_path}/Contents/Resources/resources/python/bin/python3"
+                test -x "${py_intel}" || { echo "::error::Bundled Intel python3 missing at ${py_intel}" >&2; exit 1; }
+                ${arch_prefix} "${py_intel}" -c "import coperceive, numpy, pyarrow, PIL; print('Intel Python loaded successfully; PIL version:', PIL.__version__)"
+                ${arch_prefix} bash scripts/desktop/smoke_test.sh "${app_path}" "${dmg}"
+              else
+                bash scripts/desktop/smoke_test.sh "${app_path}" "${dmg}"
+              fi
+            )
+          }
+
+          smoke_dmg "${ARM64_DMG}" "" "arm64"
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            smoke_dmg "${INTEL_DMG}" "arch -x86_64" "intel"
+          else
+            echo "::error title=Rosetta-Test::Rosetta 2 is not available on this runner" >&2
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: release-assets-macos
@@ -271,6 +317,49 @@ jobs:
           Copy-Item -Path $exe.FullName -Destination release-assets-windows\
           Copy-Item -Path $sig.FullName -Destination release-assets-windows\
           Get-ChildItem -Path release-assets-windows
+      - name: Run Windows Smoke Test on Installed NSIS Package
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Path release-assets-windows -Filter "*setup.exe" | Where-Object { $_.Name -notmatch "uninstall" } | Select-Object -First 1
+          if (-not $installer) {
+            Write-Error "No NSIS installer found in release-assets-windows"
+            exit 1
+          }
+          Write-Host "Installing NSIS package silently: $($installer.FullName)"
+          Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait
+          Start-Sleep -Seconds 3
+
+          $installedExe = Get-ChildItem -Path $env:LOCALAPPDATA -Filter "coperceive-desktop.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $installedExe) {
+            $installedExe = Get-ChildItem -Path $env:LOCALAPPDATA -Filter "Coperceive.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $installedExe) {
+            Write-Host "Falling back to search across LOCALAPPDATA and PROGRAMFILES..."
+            $installedExe = Get-ChildItem -Path @($env:LOCALAPPDATA, $env:ProgramFiles) -Filter "*coperceive*.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "uninstall" } | Select-Object -First 1
+          }
+          if (-not $installedExe) {
+            Write-Error "Could not locate installed coperceive executable after silent install"
+            exit 1
+          }
+          Write-Host "Found installed application at $($installedExe.FullName)"
+          $installDir = $installedExe.DirectoryName
+
+          pwsh scripts/desktop/smoke_test_windows.ps1 $installedExe.FullName
+
+          $uninstaller = Get-ChildItem -Path $installDir -Filter "*uninstall*.exe" | Select-Object -First 1
+          if (-not $uninstaller) {
+            Write-Error "Could not find uninstaller in $installDir"
+            exit 1
+          }
+          Write-Host "Uninstalling silently: $($uninstaller.FullName)"
+          Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S _?=$installDir" -Wait
+          Start-Sleep -Seconds 3
+
+          if (Test-Path $installedExe.FullName) {
+            Write-Error "Installed exe $($installedExe.FullName) still exists after silent uninstall!"
+            exit 1
+          }
+          Write-Host "Uninstall verified: $installDir is removed."
       - uses: actions/upload-artifact@v4
         with:
           name: release-assets-windows
@@ -308,7 +397,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libappindicator3-dev librsvg2-dev patchelf xvfb dbus-x11 imagemagick
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libappindicator3-dev librsvg2-dev patchelf xvfb dbus-x11 imagemagick libfuse2 squashfs-tools
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -374,6 +463,19 @@ jobs:
           test -f "release-assets-linux/$(basename "${APPIMAGE_FILE}")" || exit 1
           test -f "release-assets-linux/$(basename "${APPIMAGE_SIG}")" || exit 1
           ls -la release-assets-linux/
+      - name: Run Linux Smoke Test on Installed Debian Package
+        run: |
+          DEB_FILE="$(find release-assets-linux -maxdepth 1 -type f -name "*.deb" | head -n 1)"
+          test -n "${DEB_FILE}" || { echo "No .deb package found in release-assets-linux" >&2; exit 1; }
+          DEB_ABS="$(readlink -f "${DEB_FILE}")"
+          echo "Installing ${DEB_ABS} via apt-get..."
+          sudo apt-get install -y "${DEB_ABS}"
+          INSTALLED_BIN="/usr/bin/coperceive-desktop"
+          test -x "${INSTALLED_BIN}" || { echo "Installed binary not found at ${INSTALLED_BIN}" >&2; exit 1; }
+          xvfb-run -a -s "-screen 0 1920x1080x24" bash scripts/desktop/smoke_test_linux.sh "${INSTALLED_BIN}"
+          echo "Removing installed Debian package..."
+          PKG_NAME="$(dpkg-deb -f "${DEB_ABS}" Package 2>/dev/null || echo coperceive)"
+          sudo dpkg -r "${PKG_NAME}" || sudo apt-get remove -y "${PKG_NAME}"
       - uses: actions/upload-artifact@v4
         with:
           name: release-assets-linux
