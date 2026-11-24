@@ -230,6 +230,88 @@ pub fn tail_predictions(
     })
 }
 
+/// What a scored built-in run's `<run>/evaluation.json` says (docs/spec/predictions.md
+/// `## evaluation.json`): that scoring ran, how, and how it went. The AP numbers are
+/// not here; they stay in each scene's `metrics.json`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EvaluationRecord {
+    /// `ok`, `errors` (some scenes failed to score) or `failed` (scoring stopped).
+    pub status: String,
+    pub error: Option<String>,
+    /// The protocol line `eval report` prints, e.g. `default (ranking per_frame, GT connected_union)`.
+    pub protocol: Option<String>,
+    pub config_sha256: Option<String>,
+    pub created_utc: Option<String>,
+    pub command: Option<String>,
+    pub evaluated: Vec<String>,
+    pub skipped: Vec<String>,
+    /// One line per scene that failed to score.
+    pub errors: Vec<String>,
+}
+
+const EVALUATION_STATUSES: [&str; 3] = ["ok", "errors", "failed"];
+
+/// Reads `<output_dir>/<plan_id>/evaluation.json` (bounded, like `metrics.json`), or
+/// `None` when the run was not scored (yet). A file that is not a format-1 record is an
+/// error, never shown as a score.
+pub fn read_evaluation(
+    runner: &dyn RemoteRunner,
+    profile: &ServerProfile,
+    output_dir: &str,
+    plan_id: &str,
+) -> Result<Option<EvaluationRecord>, String> {
+    crate::run_plan::validate_plan_id(plan_id)?;
+    let path = output_path(profile, output_dir, &format!("{plan_id}/evaluation.json"))?;
+    let command = format!(
+        "sh -c 'head -c {MAX_METRICS_BYTES} -- \"$1\"' sh {path}",
+        path = shell_quote(&path)
+    );
+    let result = runner
+        .run(&command, READ_TIMEOUT, None)
+        .map_err(|error| format!("Could not read evaluation.json: {error}"))?;
+    if !result.success || result.stdout.trim().is_empty() {
+        return Ok(None);
+    }
+    let value: Value = serde_json::from_str(&result.stdout)
+        .map_err(|error| format!("evaluation.json is not valid JSON: {error}"))?;
+    if value.get("format").and_then(Value::as_str) != Some("coperceive-evaluation")
+        || value.get("format_version").and_then(Value::as_u64) != Some(1)
+    {
+        return Err("evaluation.json is not a coperceive-evaluation format 1 record.".to_string());
+    }
+    let status = value.get("status").and_then(Value::as_str).unwrap_or("");
+    if !EVALUATION_STATUSES.contains(&status) {
+        return Err(format!("evaluation.json has an unknown status {status:?}."));
+    }
+    let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_string);
+    let list = |key: &str| -> Vec<String> {
+        value
+            .get(key)
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| match item {
+                        Value::String(text) => text.clone(),
+                        other => other.to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    Ok(Some(EvaluationRecord {
+        status: status.to_string(),
+        error: text("error"),
+        protocol: text("protocol"),
+        config_sha256: text("config_sha256"),
+        created_utc: text("created_utc"),
+        command: text("command"),
+        evaluated: list("evaluated"),
+        skipped: list("skipped"),
+        errors: list("errors"),
+    }))
+}
+
 /// Reads and validates the pipeline's `metrics.json`, or `None` when it does not
 /// exist yet (the run is still going, or it failed before the end).
 pub fn read_metrics(
@@ -564,6 +646,42 @@ mod tests {
         let error = tail_predictions(&runner, &profile(), "/tmp/elsewhere", 0, 1024)
             .expect_err("outside results_root");
         assert!(error.contains("outside results_root") || error.contains("scratch"), "{error}");
+    }
+
+    #[test]
+    fn a_scored_runs_evaluation_record_is_read_and_checked() {
+        let out = "/data/results/runs/plan-1793222864-c5af819dbd2b";
+        let failed = r#"{"format":"coperceive-evaluation","format_version":1,"run_id":"plan-1793222864-c5af819dbd2b","command":"eval run","created_utc":"2026-11-23T12:00:00Z","status":"failed","error":"KeyError: 'ap'","protocol":"default (ranking per_frame, GT connected_union)","ranking_scope":"per_frame","gt_scope":"connected_union","config_sha256":"ab12","config_file":null,"config_file_sha256":null,"evaluated":[],"skipped":["coop"],"errors":[]}"#;
+        let runner = FakeRunner::default().with("evaluation.json", failed);
+        let record = read_evaluation(&runner, &profile(), out, PLAN_ID).expect("read").expect("some");
+        assert_eq!(record.status, "failed");
+        assert_eq!(record.error.as_deref(), Some("KeyError: 'ap'"));
+        assert_eq!(record.protocol.as_deref(), Some("default (ranking per_frame, GT connected_union)"));
+        assert_eq!(record.skipped, ["coop"]);
+        // The record is the run directory's, read bounded and quoted.
+        let calls = runner.calls();
+        let calls = calls.lock().unwrap();
+        assert!(calls[0].starts_with("sh -c 'head -c "), "{calls:?}");
+        assert!(calls[0].ends_with(&format!("{out}/{PLAN_ID}/evaluation.json")), "{calls:?}");
+        drop(calls);
+
+        // Not scored (yet): none.
+        let runner = FakeRunner::default().fail("evaluation.json");
+        assert!(read_evaluation(&runner, &profile(), out, PLAN_ID).expect("none").is_none());
+        // Anything else is an error, never shown as a score.
+        for bad in [
+            r#"{"format":"coperceive-evaluation","format_version":2,"status":"ok"}"#,
+            r#"{"format":"other","format_version":1,"status":"ok"}"#,
+            r#"{"format":"coperceive-evaluation","format_version":1,"status":"maybe"}"#,
+            "not json",
+        ] {
+            let runner = FakeRunner::default().with("evaluation.json", bad);
+            assert!(read_evaluation(&runner, &profile(), out, PLAN_ID).is_err(), "{bad}");
+        }
+        // The plan id is checked before it becomes part of a path.
+        let runner = FakeRunner::default();
+        assert!(read_evaluation(&runner, &profile(), out, "../x").is_err());
+        assert!(runner.calls().lock().unwrap().is_empty());
     }
 
     #[test]

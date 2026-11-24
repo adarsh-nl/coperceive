@@ -3319,6 +3319,22 @@ async fn run_metrics(
     .map_err(|error| format!("Could not read the metrics report: {error}"))?
 }
 
+/// A scored built-in run's `evaluation.json` (None when it was not scored, or not yet).
+#[tauri::command]
+async fn run_evaluation(
+    profile_id: String,
+    plan_id: String,
+) -> Result<Option<job_report::EvaluationRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        let plan = job_submit::load_saved_plan(&runner, &entry.profile, &plan_id)?;
+        job_report::read_evaluation(&runner, &entry.profile, &plan.output_dir, &plan.id)
+    })
+    .await
+    .map_err(|error| format!("Could not read the scoring record: {error}"))?
+}
+
 /// Imports the run's predictions as a stored run and opens the viewer on it.
 #[tauri::command]
 async fn open_predictions(
@@ -4551,6 +4567,7 @@ fn main() {
             cancel_run_job,
             prediction_stream,
             run_metrics,
+            run_evaluation,
             open_predictions,
             list_run_history,
             preview_repro_card,

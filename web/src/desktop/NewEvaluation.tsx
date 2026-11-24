@@ -183,6 +183,8 @@ export default function NewEvaluation() {
   const [mediaRoot, setMediaRoot] = useState("");
   const [ckptRoot, setCkptRoot] = useState("");
   const [evalProtocol, setEvalProtocol] = useState<EvalProtocol>(DEFAULT_EVAL_PROTOCOL);
+  // "Score the run after it finishes": on by default for a built-in model.
+  const [evaluate, setEvaluate] = useState(true);
   // The plugin's interpreter (--plugin-python); starts from the server's default
   // (Settings → Model runs), empty = the manifest's environment.
   const [pluginPython, setPluginPython] = useState("");
@@ -470,6 +472,7 @@ export default function NewEvaluation() {
         // Exactly as typed (the job passes it as given); blank = the manifest's environment.
         plugin_python: selectedPipeline.source === "builtin" && pluginPython.trim() ? pluginPython : "",
         environment_override: overrideEnv ? environment : null,
+        evaluate: selectedPipeline.source === "builtin" && evaluate,
       };
       const built = await buildRunPlan(selectedProfile.id, request);
       setLastRequest(request);
@@ -557,6 +560,8 @@ export default function NewEvaluation() {
                     <dd className="c-mono">{mediaRoot.trim() || "—"}</dd>
                     <dt>AP protocol</dt>
                     <dd>{evalProtocolLabel(evalProtocol)}</dd>
+                    <dt>Scoring</dt>
+                    <dd>{evaluate ? "In the same job, after the run (eval run)" : "Not scored in the job"}</dd>
                     <dt>Plugin interpreter</dt>
                     <dd className={pluginPython.trim() ? "c-mono" : undefined}>
                       {pluginPythonLabel(pluginPython)}
@@ -751,6 +756,20 @@ export default function NewEvaluation() {
                           ))}
                           <span className="c-step-note">
                             Recorded with the run; a later eval run uses it unless told otherwise.
+                          </span>
+                        </div>
+                        <div style={field}>
+                          <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", fontSize: "0.82rem", color: "var(--text)" }}>
+                            <input
+                              id="plan-evaluate"
+                              type="checkbox"
+                              checked={evaluate}
+                              onChange={(event) => setEvaluate(event.target.checked)}
+                            />
+                            <strong>Score the run after it finishes</strong>
+                          </label>
+                          <span className="c-step-note">
+                            The job runs eval run on the run under the AP protocol above, as coperceive model run --evaluate does, and writes metrics.json per scene and evaluation.json. If scoring fails after the model finished, the job exits 5.
                           </span>
                         </div>
                         <div style={field}>
@@ -1208,6 +1227,8 @@ export default function NewEvaluation() {
                         planId={plan.id}
                         initialOutcome={submitOutcome}
                         evalProtocol={plan.eval_protocol}
+                        builtin={plan.pipeline.source === "builtin"}
+                        evaluate={plan.evaluate ?? false}
                       />
                     </div>
                   ) : null}

@@ -93,6 +93,8 @@ export interface RunPlanRequest {
    */
   plugin_python?: string;
   environment_override: EnvironmentSetup | null;
+  /** "Score the run after it finishes" (built-in models): the job runs eval run after the model. */
+  evaluate?: boolean;
 }
 
 export interface PlanArtifact {
@@ -144,6 +146,8 @@ export interface RunPlan {
   model_options?: string[];
   /** The AP protocol recorded with the plan; old plans are `default`. */
   eval_protocol: string;
+  /** The job scores the run after the model (exit 5: model completed, scoring failed). */
+  evaluate?: boolean;
   /** The `--plugin-python` the run line passes; empty or absent = the manifest's environment. */
   plugin_python?: string;
   work_dir: string;
@@ -521,6 +525,109 @@ export interface JobWatchStatus {
   elapsed: string | null;
   time_left: string | null;
   node: string | null;
+  /** The job's exit code once it ended (sacct ExitCode); absent while live. */
+  exit_code?: number | null;
+}
+
+/**
+ * A scored run's `<run>/evaluation.json` (docs/spec/predictions.md): that scoring ran,
+ * under which protocol, and how it went. AP numbers are not in it.
+ */
+export interface EvaluationRecord {
+  status: "ok" | "errors" | "failed";
+  error: string | null;
+  protocol: string | null;
+  config_sha256: string | null;
+  created_utc: string | null;
+  command: string | null;
+  evaluated: string[];
+  skipped: string[];
+  errors: string[];
+}
+
+/** The job exit code that means "the model completed, but scoring it failed". */
+export const EXIT_SCORING_FAILED = 5;
+
+export interface ScoringSummary {
+  headline: string;
+  /** Lines under the headline; the protocol is always one of them when known. */
+  detail: string[];
+  /** True when scoring itself did not succeed (not when the model failed). */
+  failed: boolean;
+  /** The job ended with exit 5: the model is fine, only scoring failed. */
+  modelFinished: boolean;
+}
+
+/**
+ * What the job watch says about scoring once a job that scores its run has ended:
+ * `record` is its evaluation.json (undefined while being read, null when absent).
+ * Exit 5 is "Model finished, scoring failed" with the record's error, never a model
+ * failure; a model failure (any other non-zero exit, a timeout) keeps its own panel.
+ * No AP number is shown here: the pooled AP of a run is what `eval report` prints.
+ */
+export function scoringSummary(input: {
+  evaluate: boolean;
+  state: string;
+  exitCode?: number | null;
+  record: EvaluationRecord | null | undefined;
+}): ScoringSummary | null {
+  const { evaluate, state, exitCode, record } = input;
+  if (!evaluate || isJobActive(state)) return null;
+  const modelFinished = state === "failed" && exitCode === EXIT_SCORING_FAILED;
+  if (record === undefined) {
+    return { headline: "Reading the scoring record…", detail: [], failed: false, modelFinished };
+  }
+  const detail = (lines: Array<string | null | undefined>) =>
+    lines.filter((line): line is string => typeof line === "string" && line.trim() !== "");
+  const facts = record
+    ? [
+        record.protocol ? `AP protocol: ${record.protocol}` : "AP protocol: not recorded",
+        `${record.evaluated.length} scene${record.evaluated.length === 1 ? "" : "s"} scored` +
+          (record.skipped.length ? `, ${record.skipped.length} skipped` : "") +
+          (record.errors.length ? `, ${record.errors.length} failed to score` : ""),
+      ]
+    : [];
+  if (modelFinished) {
+    return {
+      headline: "Model finished, scoring failed.",
+      detail: detail([
+        record
+          ? (record.error ?? `Scoring status: ${record.status}.`)
+          : "No evaluation.json was written (the run left no run.json to score); the stderr tail below says why.",
+        ...(record?.errors.slice(0, 5) ?? []),
+        ...facts,
+      ]),
+      failed: true,
+      modelFinished,
+    };
+  }
+  if (!record) {
+    return state === "completed"
+      ? { headline: "Not scored: the job wrote no evaluation.json.", detail: [], failed: true, modelFinished }
+      : {
+          headline: "Not scored: the model did not finish, so the job did not score it.",
+          detail: [],
+          failed: false,
+          modelFinished,
+        };
+  }
+  if (record.status === "ok") {
+    return {
+      headline: state === "completed" ? "Scored." : "The model's finished scenes were scored.",
+      detail: detail([
+        ...facts,
+        "Per-scene AP is in each scene's metrics.json; the run's pooled AP is what coperceive eval report prints.",
+      ]),
+      failed: false,
+      modelFinished,
+    };
+  }
+  return {
+    headline: record.status === "errors" ? "Scoring had errors." : "Scoring failed.",
+    detail: detail([record.error, ...record.errors.slice(0, 5), ...facts]),
+    failed: true,
+    modelFinished,
+  };
 }
 
 /** A bounded tail of one log stream. */
