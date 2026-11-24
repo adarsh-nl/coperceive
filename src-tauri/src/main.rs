@@ -3414,20 +3414,15 @@ async fn open_predictions(
             store.trim_end_matches('/')
         )
     })?;
-    let session = ensure_stream_session(&app, state.inner(), &profile_id, &entry, &cache, &raw_root)?;
+    let mut session = ensure_stream_session(&app, state.inner(), &profile_id, &entry, &cache, &raw_root)?;
     let ctrl_port = state.ctrl_port.lock().ok().and_then(|port| *port).unwrap_or(0);
     let query = format!(
         "predictions={}&scene={}",
         urlencoding_component(&plan_id),
         urlencoding_component(&scene)
     );
-    if let Err(error) =
-        open_viewer_window(&app, &session.origin, &session.token, &cache, ctrl_port, state.inner(), Some(&query))
-    {
-        if !session.reused {
-            stop_stream_session(state.inner());
-        }
-        return Err(error);
+    if session.started.is_some() || !show_predictions_in_viewer(&app, state.inner(), &session.origin, &query) {
+        finish_stream_session(&app, state.inner(), &mut session, &cache, ctrl_port, Some(&query))?;
     }
     Ok(ImportedPredictions {
         run_id: plan_id,
@@ -3919,16 +3914,11 @@ async fn dataset_open(
         persistent.agent_visibility = None;
         let _ = state::save_state(&persistent);
     }
-    let session = ensure_stream_session(&app, state.inner(), &profile_id, &entry, &cache, &raw_root)?;
-    if session.reused {
-        if !show_scene_in_viewer(&app, state.inner(), &session.origin, scene_id.as_deref()) {
-            open_viewer_window(&app, &session.origin, &session.token, &cache, ctrl_port, state.inner(), query.as_deref())?;
-        }
-    } else if let Err(error) =
-        open_viewer_window(&app, &session.origin, &session.token, &cache, ctrl_port, state.inner(), query.as_deref())
+    let mut session = ensure_stream_session(&app, state.inner(), &profile_id, &entry, &cache, &raw_root)?;
+    if session.started.is_some()
+        || !show_scene_in_viewer(&app, state.inner(), &session.origin, scene_id.as_deref())
     {
-        stop_stream_session(state.inner());
-        return Err(error);
+        finish_stream_session(&app, state.inner(), &mut session, &cache, ctrl_port, query.as_deref())?;
     }
     Ok(SessionPayload {
         origin: session.origin,
@@ -3945,7 +3935,72 @@ struct StreamSession {
     origin: String,
     token: String,
     predictions: PathBuf,
-    reused: bool,
+    /// A server this call started, not yet kept in AppState: it is kept only once
+    /// its viewer window is open (`finish_stream_session`), because closing an
+    /// earlier viewer window stops whatever server AppState holds.
+    started: Option<StartedServer>,
+}
+
+struct StartedServer {
+    session: SidecarSession,
+    key: String,
+    dataset: (String, String, String),
+}
+
+/// Opens the viewer window for a server `ensure_stream_session` just started and
+/// keeps that server; on failure the new server is stopped. A reused server needs
+/// neither: the caller points its open viewer at the scene.
+fn finish_stream_session(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    session: &mut StreamSession,
+    cache: &str,
+    ctrl_port: u16,
+    query: Option<&str>,
+) -> Result<(), String> {
+    let Some(started) = session.started.take() else {
+        return open_viewer_window(app, &session.origin, &session.token, cache, ctrl_port, state, query);
+    };
+    if let Err(error) = open_viewer_window(app, &session.origin, &session.token, cache, ctrl_port, state, query) {
+        let mut server = started.session;
+        let _ = server.stop();
+        return Err(error);
+    }
+    if let Ok(mut lock) = state.sidecar.lock() {
+        *lock = Some(started.session);
+    }
+    if let Ok(mut current) = state.stream_key.lock() {
+        *current = Some(started.key);
+    }
+    if let Ok(mut current) = state.stream_dataset.lock() {
+        *current = Some(started.dataset);
+    }
+    Ok(())
+}
+
+/// Points an open viewer of `origin` at `query` (`predictions=…&scene=…`) and reloads
+/// it, as `show_scene_in_viewer` does for a scene: the window, and so its server,
+/// stay. The viewer reads `predictions=` when the page loads. False when no viewer
+/// of that origin is open.
+fn show_predictions_in_viewer(app: &tauri::AppHandle, state: &AppState, origin: &str, query: &str) -> bool {
+    use tauri::Manager;
+    let same_origin = state
+        .viewer_origin
+        .lock()
+        .ok()
+        .and_then(|lock| lock.clone())
+        .is_some_and(|current| current == origin);
+    let Some(viewer) = app.get_webview_window("viewer").filter(|_| same_origin) else {
+        return false;
+    };
+    let hash = serde_json::to_string(&format!("#/viewer?{query}")).unwrap_or_else(|_| "\"#/viewer\"".to_string());
+    let _ = viewer.eval(&format!("window.location.hash = {hash}; window.location.reload();"));
+    let _ = viewer.show();
+    let _ = viewer.set_focus();
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
+    }
+    true
 }
 
 fn stream_session_key(profile_id: &str, cache: &str, raw_root: &str) -> String {
@@ -4010,7 +4065,7 @@ fn ensure_stream_session(
         }
     };
     if let Some((origin, token)) = reusable {
-        return Ok(StreamSession { origin, token, predictions, reused: true });
+        return Ok(StreamSession { origin, token, predictions, started: None });
     }
 
     // Anything else stops: the previous local server and any viewer job.
@@ -4067,17 +4122,13 @@ fn ensure_stream_session(
         return Err(format!("The viewer did not start: {error}\n\n{tail}"));
     }
     eprintln!("[viewer] reading {cache} over SSH, no Slurm job");
-    {
-        let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
-        *lock = Some(session);
-    }
-    if let Ok(mut current) = state.stream_key.lock() {
-        *current = Some(key);
-    }
-    if let Ok(mut current) = state.stream_dataset.lock() {
-        *current = Some((profile_id.to_string(), cache.to_string(), raw_root.to_string()));
-    }
-    Ok(StreamSession { origin, token, predictions, reused: false })
+    let dataset = (profile_id.to_string(), cache.to_string(), raw_root.to_string());
+    Ok(StreamSession {
+        origin,
+        token,
+        predictions,
+        started: Some(StartedServer { session, key, dataset }),
+    })
 }
 
 /// Runs the test-only dataset flow (see `test_seams::DatasetFlowProbe`): saves
