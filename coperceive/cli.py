@@ -181,6 +181,17 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--remote-cache-bytes", type=int, default=None, help="Cap of the local disk cache (bytes)."
     )
+    serve.add_argument(
+        "--heartbeat-file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "The viewer job's lease file (coperceive remote start passes it). The server "
+            "touches it at most every 10 s while it answers authenticated /api requests "
+            "(/api/health does not count) and never recreates it, so an idle job still "
+            "ends when its lease expires."
+        ),
+    )
     serve.set_defaults(func=_serve)
 
     scene = sub.add_parser("scene", help="Copy a scene into a self-contained library folder.")
@@ -1294,6 +1305,7 @@ def _serve(args: argparse.Namespace) -> None:
         remote_cache_dir=args.remote_cache_dir,
         remote_cache_bytes=args.remote_cache_bytes,
         bundle_info=args.bundle_info,
+        heartbeat_file=args.heartbeat_file,
     )
 
 

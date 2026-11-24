@@ -33,6 +33,15 @@ def add_parser(
     remote_parser = sub.add_parser(
         "remote",
         help="Manage remote coperceive serve sessions on Slurm clusters.",
+        description=(
+            "Manage remote coperceive serve sessions on Slurm clusters. A session's job "
+            "holds a lease: it ends when the lease is COPERCEIVE_HEARTBEAT_TIMEOUT seconds "
+            "old (default 600; 0 turns the lease off), or at its --time, whichever comes "
+            "first. The served viewer renews the lease itself, at most every 10 s, while it "
+            "answers authenticated /api requests; /api/health probes (remote status) do not "
+            "count. An idle viewer is not renewed, so an abandoned job ends one lease after "
+            "its last request. remote heartbeat renews it by hand."
+        ),
     )
     remote_sub = remote_parser.add_subparsers(dest="remote_command", required=True)
 
@@ -133,7 +142,12 @@ def add_parser(
 
     # remote heartbeat
     heartbeat_parser = remote_sub.add_parser(
-        "heartbeat", help="Send heartbeat lease renewal for a remote session."
+        "heartbeat",
+        help="Send heartbeat lease renewal for a remote session.",
+        description=(
+            "Renew a session's lease by hand. Not needed while the viewer is in use: the "
+            "served viewer renews its own lease while it answers requests."
+        ),
     )
     heartbeat_parser.add_argument("uuid", nargs="?", default=None, help="Session UUID.")
     heartbeat_parser.add_argument("--uuid", dest="opt_uuid", default=None, help="Session UUID.")
