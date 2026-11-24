@@ -488,6 +488,21 @@ pub struct AppPersistentState {
     /// Whether the first-run welcome card was dismissed. Off (false) by default.
     #[serde(default)]
     pub welcome_card_dismissed: bool,
+
+    /// Settings → Viewer → "Point size": the lidar point size in CSS pixels a
+    /// view starts with, 1–4. 2 by default. The viewer toolbar's Point size
+    /// slider keeps a per-view override (`coperceive-view` in localStorage).
+    /// Display only: it never changes a stored result.
+    #[serde(default = "default_viewer_point_size")]
+    pub viewer_point_size: u8,
+
+    /// Settings → Viewer → "Camera view": the viewpoint a viewer starts in, one
+    /// of [`VIEWPOINTS`]. None ("Last used", the default) starts in
+    /// `last_viewpoint`, as before. A view the scene cannot show still falls
+    /// back to orbit. Its own field because the viewer rewrites `last_viewpoint`
+    /// on every save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_viewpoint: Option<String>,
 }
 
 /// The values "Group scenes" may hold; anything else is ignored.
@@ -501,6 +516,32 @@ pub const VIEWER_STYLES: [&str; 4] = ["classic", "studio", "instrument", "cinema
 
 fn default_camera_strip() -> String {
     "all".to_string()
+}
+
+/// The point sizes "Point size" may hold, in CSS pixels (the toolbar slider's range).
+pub const VIEWER_POINT_SIZES: [u8; 4] = [1, 2, 3, 4];
+
+/// The viewpoints "Camera view" may name; anything else is ignored.
+pub const VIEWPOINTS: [&str; 5] = ["orbit", "bird", "chase", "drone", "camera"];
+
+fn default_viewer_point_size() -> u8 {
+    2
+}
+
+/// A point size from a settings update, when it is one of [`VIEWER_POINT_SIZES`].
+pub fn viewer_point_size_from(value: &serde_json::Value) -> Option<u8> {
+    let size = u8::try_from(value.as_u64()?).ok()?;
+    VIEWER_POINT_SIZES.contains(&size).then_some(size)
+}
+
+/// A "Camera view" from a settings update: `Some(None)` for null ("Last used"),
+/// `Some(Some(view))` for one of [`VIEWPOINTS`], `None` (ignored) otherwise.
+pub fn default_viewpoint_from(value: &serde_json::Value) -> Option<Option<String>> {
+    if value.is_null() {
+        return Some(None);
+    }
+    let text = value.as_str()?;
+    VIEWPOINTS.contains(&text).then(|| Some(text.to_string()))
 }
 
 /// A camera strip mode from a settings update, when it is one of [`CAMERA_STRIP_MODES`].
@@ -583,6 +624,8 @@ const VIEWER_ALLOWED_PATCH_KEYS: &[&str] = &[
     "camera_strip",
     "viewer_style",
     "cinema_drift",
+    "viewer_point_size",
+    "default_viewpoint",
     "agent_visibility",
     "layer_toggles",
     "selected_camera",
@@ -606,6 +649,12 @@ pub struct ViewerPreferences {
     pub buffer_target_seconds: u64,
     pub client_memory_limit_bytes: u64,
     pub show_stream_stats: bool,
+    /// Settings → Viewer display defaults; the viewer reads them and Settings in
+    /// the viewer window may write them (they are bounded display preferences).
+    #[serde(default = "default_viewer_point_size")]
+    pub viewer_point_size: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_viewpoint: Option<String>,
 }
 
 /// Projects only viewer UI preferences out of [`AppPersistentState`].
@@ -620,6 +669,8 @@ pub fn viewer_preferences(persistent: &AppPersistentState) -> ViewerPreferences 
         buffer_target_seconds: persistent.buffer_target_seconds,
         client_memory_limit_bytes: persistent.client_memory_limit_bytes,
         show_stream_stats: persistent.show_stream_stats,
+        viewer_point_size: persistent.viewer_point_size,
+        default_viewpoint: persistent.default_viewpoint.clone(),
     }
 }
 
@@ -681,6 +732,12 @@ pub fn apply_state_patch(
     }
     if let Some(drift) = val.get("cinema_drift").and_then(|v| v.as_bool()) {
         persistent.cinema_drift = drift;
+    }
+    if let Some(size) = val.get("viewer_point_size").and_then(viewer_point_size_from) {
+        persistent.viewer_point_size = size;
+    }
+    if let Some(view) = val.get("default_viewpoint").and_then(default_viewpoint_from) {
+        persistent.default_viewpoint = view;
     }
     if let Some(vis) = val.get("agent_visibility") {
         if let Ok(map) = serde_json::from_value::<HashMap<String, bool>>(vis.clone()) {
@@ -876,6 +933,8 @@ impl Default for AppPersistentState {
             viewer_style: default_viewer_style(),
             cinema_drift: true,
             welcome_card_dismissed: false,
+            viewer_point_size: default_viewer_point_size(),
+            default_viewpoint: None,
         }
     }
 }
@@ -1290,6 +1349,8 @@ pub mod tests {
             viewer_style: "cinema".into(),
             cinema_drift: false,
             welcome_card_dismissed: true,
+            viewer_point_size: 3,
+            default_viewpoint: Some("bird".into()),
         };
 
         let json = serde_json::to_string(&state).expect("serialize");
@@ -1889,6 +1950,194 @@ pub mod tests {
         assert_eq!(prefs.buffer_target_seconds, 5);
         assert_eq!(prefs.client_memory_limit_bytes, 268435456);
         assert!(prefs.show_stream_stats);
+    }
+
+    /// Settings phase 1 (inventory L87 "Point size", L91 "Default camera view"):
+    /// the serde default and the hand-written `Default` agree, so a state.json
+    /// written before the fields existed reads exactly as a fresh install.
+    #[test]
+    fn viewer_display_defaults_agree_between_serde_and_default() {
+        let fresh = AppPersistentState::default();
+        let old: AppPersistentState = serde_json::from_str("{}").expect("old state");
+        assert_eq!(fresh.viewer_point_size, 2);
+        assert_eq!(old.viewer_point_size, 2);
+        assert_eq!(fresh.default_viewpoint, None);
+        assert_eq!(old.default_viewpoint, None);
+        assert_eq!(fresh.theme_override, None);
+        // "Last used" is not serialized, so an unchanged setting leaves state.json as it was.
+        let raw = serde_json::to_string(&fresh).expect("serialize");
+        assert!(!raw.contains("default_viewpoint"), "{raw}");
+        assert!(raw.contains("\"viewer_point_size\":2"), "{raw}");
+    }
+
+    #[test]
+    fn viewer_display_settings_accept_only_known_values() {
+        for size in VIEWER_POINT_SIZES {
+            assert_eq!(viewer_point_size_from(&serde_json::json!(size)), Some(size));
+        }
+        for value in [
+            serde_json::json!(0),
+            serde_json::json!(5),
+            serde_json::json!(256 + 2),
+            serde_json::json!(-1),
+            serde_json::json!(2.5),
+            serde_json::json!("2"),
+            serde_json::Value::Null,
+        ] {
+            assert_eq!(viewer_point_size_from(&value), None, "{value}");
+        }
+        for view in VIEWPOINTS {
+            assert_eq!(
+                default_viewpoint_from(&serde_json::json!(view)),
+                Some(Some(view.to_string()))
+            );
+        }
+        assert_eq!(default_viewpoint_from(&serde_json::Value::Null), Some(None));
+        for value in [serde_json::json!("top"), serde_json::json!(""), serde_json::json!(1), serde_json::json!(true)] {
+            assert_eq!(default_viewpoint_from(&value), None, "{value}");
+        }
+
+        let mut s = AppPersistentState::default();
+        apply_state_patch(
+            &mut s,
+            &serde_json::json!({ "viewer_point_size": 4, "default_viewpoint": "bird", "theme_override": "dark" }),
+            StatePatchScope::Full,
+        )
+        .expect("full scope applies");
+        assert_eq!((s.viewer_point_size, s.default_viewpoint.as_deref(), s.theme_override.as_deref()), (4, Some("bird"), Some("dark")));
+
+        // Bad values are dropped, not errors, and keep the saved value.
+        apply_state_patch(
+            &mut s,
+            &serde_json::json!({ "viewer_point_size": 9, "default_viewpoint": "top", "theme_override": "sepia" }),
+            StatePatchScope::Full,
+        )
+        .expect("invalid values are ignored");
+        assert_eq!((s.viewer_point_size, s.default_viewpoint.as_deref(), s.theme_override.as_deref()), (4, Some("bird"), Some("dark")));
+
+        // null is "Last used" / "System".
+        apply_state_patch(
+            &mut s,
+            &serde_json::json!({ "default_viewpoint": null, "theme_override": null }),
+            StatePatchScope::Full,
+        )
+        .expect("null clears");
+        assert_eq!((s.default_viewpoint.as_deref(), s.theme_override.as_deref()), (None, None));
+
+        // A patch without the keys leaves them alone (the viewer's frequent saves).
+        s.default_viewpoint = Some("chase".into());
+        s.theme_override = Some("light".into());
+        apply_state_patch(
+            &mut s,
+            &serde_json::json!({ "viewpoint": "drone", "sample_index": 3 }),
+            StatePatchScope::ViewerOnly,
+        )
+        .expect("viewer save applies");
+        assert_eq!(s.last_viewpoint.as_deref(), Some("drone"));
+        assert_eq!(s.default_viewpoint.as_deref(), Some("chase"), "last used must not overwrite the setting");
+        assert_eq!(s.theme_override.as_deref(), Some("light"), "a viewer save must not wipe the theme");
+    }
+
+    /// Settings can render inside the viewer window, whose writes use the
+    /// ViewerOnly scope; the three display settings are allowed there and are
+    /// readable through the viewer's preferences projection.
+    #[test]
+    fn viewer_display_settings_patch_from_the_viewer_window_and_project() {
+        let mut s = AppPersistentState::default();
+        apply_state_patch(
+            &mut s,
+            &serde_json::json!({ "viewer_point_size": 1, "default_viewpoint": "camera", "theme_override": "light" }),
+            StatePatchScope::ViewerOnly,
+        )
+        .expect("viewer scope allows the display settings");
+        assert_eq!(s.viewer_point_size, 1);
+        assert_eq!(s.default_viewpoint.as_deref(), Some("camera"));
+        assert_eq!(s.theme_override.as_deref(), Some("light"));
+
+        let prefs = viewer_preferences(&s);
+        assert_eq!(prefs.viewer_point_size, 1);
+        assert_eq!(prefs.default_viewpoint.as_deref(), Some("camera"));
+        assert_eq!(prefs.theme_override.as_deref(), Some("light"));
+        let json = serde_json::to_value(&prefs).expect("serialize prefs");
+        assert_eq!(json["viewer_point_size"], 1);
+        assert_eq!(json["default_viewpoint"], "camera");
+
+        let defaults = viewer_preferences(&AppPersistentState::default());
+        let json = serde_json::to_value(&defaults).expect("serialize prefs");
+        assert_eq!(json["viewer_point_size"], 2);
+        assert!(json.get("default_viewpoint").is_none(), "Last used is omitted: {json}");
+    }
+
+    /// A state.json as release/v0.1.2 wrote it: none of the Settings phase 1
+    /// fields, plus a key this build does not know. It must load with the new
+    /// defaults and keep every other value (not fall back to `Default`).
+    #[test]
+    fn a_v012_state_file_without_the_new_fields_loads_with_their_defaults() {
+        let v012 = r#"{
+            "last_data_root": "/Users/a/coperceive-data/opv2v",
+            "library_root": "/Users/a/coperceive-data",
+            "auto_download_updates": false,
+            "last_scene_id": "Town03-000",
+            "last_sample_index": 42,
+            "last_timestamp_us": 4200000,
+            "last_viewpoint": "chase",
+            "last_loop": false,
+            "theme_override": "dark",
+            "reopen_last_session": false,
+            "agent_visibility": {"vehicle1": true, "drone1": false},
+            "layer_toggles": {"points": true, "boxes": false, "frustums": true, "map": true, "axes": false, "frustum_images": false, "frustum_opacity": 0.75},
+            "selected_camera": "vehicle1/cam_front",
+            "split_view": true,
+            "panel_collapse": {"left_collapsed": true, "right_collapsed": false, "camera_strip_open": false},
+            "layout": {"left_px": 300.0, "right_px": 320.0, "strip_px": 110.0},
+            "recent_roots": ["/Users/a/coperceive-data/opv2v"],
+            "camera_images_default": "previews",
+            "camera_images_by_profile": {"cluster-a": "originals"},
+            "viewer_sessions": {"alias|p|/r|": "abc123"},
+            "auto_next_scene": true,
+            "open_first_ready_scene": false,
+            "remote_view_cache_bytes": 536870912,
+            "dataset_grouping": "day",
+            "camera_strip": "agent",
+            "buffer_target_seconds": 5,
+            "client_memory_limit_bytes": 1073741824,
+            "show_stream_stats": true,
+            "viewer_style": "cinema",
+            "cinema_drift": false,
+            "welcome_card_dismissed": true,
+            "a_field_from_a_newer_build": {"anything": [1, 2, 3]}
+        }"#;
+        let tmp = std::env::temp_dir().join(format!("coperceive-test-state-v012-{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp);
+        let state_path = tmp.join("state.json");
+        fs::write(&state_path, v012).expect("write v0.1.2 state");
+
+        let loaded = load_state_from_path(&state_path);
+        let _ = fs::remove_dir_all(&tmp);
+
+        assert_ne!(loaded, AppPersistentState::default(), "the file must parse, not fall back");
+        // The new fields take their defaults.
+        assert_eq!(loaded.viewer_point_size, 2);
+        assert_eq!(loaded.default_viewpoint, None);
+        // Everything else is kept.
+        assert_eq!(loaded.last_viewpoint.as_deref(), Some("chase"));
+        assert_eq!(loaded.theme_override.as_deref(), Some("dark"));
+        assert!(!loaded.auto_download_updates);
+        assert!(!loaded.reopen_last_session);
+        assert_eq!(loaded.last_sample_index, Some(42));
+        assert_eq!(loaded.dataset_grouping, "day");
+        assert_eq!(loaded.camera_strip, "agent");
+        assert_eq!(loaded.buffer_target_seconds, 5);
+        assert_eq!(loaded.client_memory_limit_bytes, 1024 * 1024 * 1024);
+        assert!(loaded.show_stream_stats);
+        assert_eq!(loaded.viewer_style, "cinema");
+        assert!(!loaded.cinema_drift);
+        assert!(loaded.auto_next_scene);
+        assert!(!loaded.open_first_ready_scene);
+        assert!(loaded.welcome_card_dismissed);
+        assert_eq!(loaded.remote_view_cache_bytes, 512 * 1024 * 1024);
+        assert_eq!(loaded.camera_images(Some("cluster-a")).effective, "originals");
+        assert_eq!(loaded.layout.as_ref().map(|l| l.left_px), Some(300.0));
     }
 
     #[test]
