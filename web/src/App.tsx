@@ -14,6 +14,7 @@ import { installGlobalErrorRecorders } from "./desktop/globalErrors";
 import Landing, { writeTheme } from "./landing/Landing";
 import { IconGear } from "./viewer/controls";
 import { systemTheme, type ThemeName } from "./viewer/appearance";
+import { resolveThemeChoice, subscribeThemeChoice, systemPrefersDark } from "./viewer/themeSetting";
 import Viewer from "./viewer/Viewer";
 
 function useHashRoute(): "home" | "viewer" | "connect" {
@@ -127,6 +128,17 @@ export default function App() {
   const [hasThemeOverride, setHasThemeOverride] = useState<boolean>(() => {
     return typeof window !== "undefined" && Boolean(window.__COPERCEIVE_INITIAL_STATE__?.theme_override);
   });
+
+  // Settings → Viewer → Theme (and the viewer toolbar), applied live here and
+  // read again from state.json when the window gets focus.
+  useEffect(
+    () =>
+      subscribeThemeChoice((choice) => {
+        setHasThemeOverride(choice !== "system");
+        setTheme(resolveThemeChoice(choice, systemPrefersDark()));
+      }),
+    [],
+  );
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;

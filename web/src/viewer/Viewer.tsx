@@ -16,8 +16,6 @@ import {
   showCameraImage,
   toggleFrustumImages,
   toggleOneFrustumImage,
-  systemTheme,
-  setThemeOverride,
   type Appearance,
 } from "./appearance";
 import { BLOOM_LAYER, createBloom, enableBloom, type BloomRig } from "./bloom";
@@ -26,6 +24,15 @@ import { createFrameCache, isAbortError, type FrameCache } from "./cache";
 import { EyeToggle, IconMoon, IconSun, Menu, Segmented, Slider, SwatchToggle } from "./controls";
 import { otherSeenLabel, seenDash, seenKind, type SeenKind } from "./seenBy";
 import { effectiveCinemaDrift, useViewerStyle, VIEWER_STYLE_TOKENS, type ViewerStyle } from "./viewerStyle";
+import { isViewpoint, startViewpoint, useViewerDefaults } from "./viewerDefaults";
+import {
+  initialThemeChoice,
+  resolveThemeChoice,
+  saveThemeChoice,
+  subscribeThemeChoice,
+  systemPrefersDark,
+  type ThemeChoice,
+} from "./themeSetting";
 import { createImagePlane, disposeImageTextures, FRUSTUM_DEPTH, FRUSTUM_TEXTURE, textureForBitmap } from "./frustumImages";
 import { boxCenter, followPick, type PickRecord } from "./inspect";
 import { pickFromObject, syncFrustumPicks, syncPicks } from "./picks";
@@ -1128,6 +1135,8 @@ declare global {
       last_timestamp_us?: number;
       last_timestamp_ns?: number;
       last_viewpoint?: string;
+      default_viewpoint?: string;
+      viewer_point_size?: number;
       theme_override?: string;
       last_theme?: string;
       reopen_last_session?: boolean;
@@ -1325,13 +1334,10 @@ function savedLoopChoice(): boolean | null {
 }
 
 function initialSavedViewpoint(): Viewpoint {
-  if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.last_viewpoint) {
-    const vp = window.__COPERCEIVE_INITIAL_STATE__.last_viewpoint as Viewpoint;
-    if (vp === "orbit" || vp === "chase" || vp === "drone" || vp === "bird" || vp === "camera") {
-      return vp;
-    }
-  }
-  return "orbit";
+  // Settings → Viewer → Camera view, else the last used view, else orbit; the
+  // scene's capabilities are applied once its summary arrives (viewpointFor).
+  const init = typeof window !== "undefined" ? window.__COPERCEIVE_INITIAL_STATE__ : undefined;
+  return startViewpoint(init?.default_viewpoint, init?.last_viewpoint);
 }
 
 function initialSavedAppearance(): Appearance {
@@ -1659,6 +1665,34 @@ export default function Viewer({
   const userThemeOverrideRef = useRef<boolean>(
     typeof window !== "undefined" && Boolean(window.__COPERCEIVE_INITIAL_STATE__?.theme_override)
   );
+  // Settings → Viewer → Theme as last read or chosen; a scene load applies it
+  // instead of the theme the window was opened with.
+  const themeChoiceRef = useRef<ThemeChoice>(initialThemeChoice());
+  useEffect(
+    () =>
+      subscribeThemeChoice((choice) => {
+        themeChoiceRef.current = choice;
+        userThemeOverrideRef.current = choice !== "system";
+        const next = resolveThemeChoice(choice, systemPrefersDark());
+        setAppearance((curr) => (curr.theme === next ? curr : { ...curr, theme: next }));
+        onTheme?.(next);
+      }),
+    [onTheme],
+  );
+  // Settings → Viewer → Point size and Camera view, kept live.
+  const [viewerDefaults] = useViewerDefaults();
+  const viewerDefaultsRef = useRef(viewerDefaults);
+  useEffect(() => {
+    viewerDefaultsRef.current = viewerDefaults;
+  }, [viewerDefaults]);
+  useEffect(() => {
+    // A view whose point size was not chosen in its toolbar follows Settings.
+    setAppearance((curr) =>
+      curr.pointSizeChosen || curr.pointSize === viewerDefaults.pointSize
+        ? curr
+        : { ...curr, pointSize: viewerDefaults.pointSize },
+    );
+  }, [viewerDefaults.pointSize]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
@@ -1729,11 +1763,8 @@ export default function Viewer({
       }
     };
     window.__COPERCEIVE_TOGGLE_THEME__ = () => {
-      setAppearance((curr) => {
-        const next = curr.theme === "dark" ? "light" : "dark";
-        onTheme?.(next);
-        return { ...curr, theme: next };
-      });
+      // The menu's toggle is the toolbar button's: it saves the choice too.
+      saveThemeChoice(appearanceRef.current.theme === "dark" ? "light" : "dark");
     };
     window.__COPERCEIVE_TOGGLE_FULLSCREEN__ = () => {
       setIsFullScreen((prev) => !prev);
@@ -3163,21 +3194,17 @@ export default function Viewer({
       if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__) {
         const init = window.__COPERCEIVE_INITIAL_STATE__;
         initialFrame = initialSampleIndex(init, body.scene_id, body.times_us);
-        if (init.last_viewpoint) {
-          const vp = init.last_viewpoint as Viewpoint;
-          if (vp === "orbit" || vp === "chase" || vp === "drone" || vp === "bird" || vp === "camera") {
-            modeRef.current = vp;
-            setViewpoint(vp);
-          }
+        // Settings → Viewer → Camera view (read live), else the last used view.
+        const defaultView = viewerDefaultsRef.current.defaultViewpoint;
+        if (isViewpoint(defaultView) || isViewpoint(init.last_viewpoint)) {
+          const vp = startViewpoint(defaultView, init.last_viewpoint);
+          modeRef.current = vp;
+          setViewpoint(vp);
         }
-        if (init.theme_override && (init.theme_override === "dark" || init.theme_override === "light")) {
-          onTheme?.(init.theme_override);
-          setAppearance((curr) => ({ ...curr, theme: init.theme_override as "dark" | "light" }));
-        } else {
-          const sys = systemTheme();
-          onTheme?.(sys);
-          setAppearance((curr) => ({ ...curr, theme: sys }));
-        }
+        // The current Settings theme, not the one the window was opened with.
+        const openTheme = resolveThemeChoice(themeChoiceRef.current, systemPrefersDark());
+        onTheme?.(openTheme);
+        setAppearance((curr) => ({ ...curr, theme: openTheme }));
         if (init.agent_visibility && (!init.last_scene_id || init.last_scene_id === body.scene_id)) {
           initialHidden = init.agent_visibility;
         }
@@ -3334,7 +3361,9 @@ export default function Viewer({
         sample_index: frameIndex,
         timestamp_us: typeof timeUs === "number" ? timeUs : undefined,
         viewpoint,
-        theme_override: userThemeOverrideRef.current ? appearance.theme : null,
+        // No theme_override here: the theme is saved only when it is chosen
+        // (toolbar, menu or Settings), so these frequent saves never undo a
+        // theme chosen in Settings while this viewer is open.
         agent_visibility: hidden,
         layer_toggles: {
           points: appearance.points,
@@ -5064,10 +5093,9 @@ export default function Viewer({
         onClick={() => {
           userThemeOverrideRef.current = true;
           const next = appearance.theme === "dark" ? "light" : "dark";
-          setThemeOverride(next);
           setAppearance((current) => ({ ...current, theme: next }));
           onTheme?.(next);
-          postControllerState({ theme_override: next });
+          saveThemeChoice(next);
         }}
       >
         {appearance.theme === "dark" ? <IconMoon /> : <IconSun />}
@@ -5334,9 +5362,15 @@ export default function Viewer({
                 max={4}
                 step={1}
                 valueText={`${appearance.pointSize} px`}
-                onChange={(value) => setAppearance((current) => ({ ...current, pointSize: Math.round(value) }))}
+                onChange={(value) =>
+                  setAppearance((current) => ({ ...current, pointSize: Math.round(value), pointSizeChosen: true }))
+                }
               />
-              <button type="button" className="ghost" onClick={() => setAppearance(defaultAppearance())}>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setAppearance(defaultAppearance(viewerDefaultsRef.current.pointSize))}
+              >
                 Reset view
               </button>
             </div>

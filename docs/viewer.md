@@ -113,7 +113,15 @@ The page has the same camera export, plus **This view**, which steps the 3D canv
 
 ## View settings
 
-The row under export toggles lidar points, boxes, frustums, the map, and agent axes. Color is by agent type or by box class. Point size is 1, 2, 3, or 4 CSS pixels. Boxes are a wireframe or a translucent solid with the wire kept. Categories in the current sample can be hidden. Theme is dark or light. The choices are stored in `localStorage` under `coperceive-view`. That object has no token. The bearer token stays in `sessionStorage` under `coperceive-token`. Reset view restores the defaults: every layer on, color by agent, 2 px points, wire boxes, dark, no hidden class.
+The row under export toggles lidar points, boxes, frustums, the map, and agent axes. Color is by agent type or by box class. Point size is 1, 2, 3, or 4 CSS pixels. Boxes are a wireframe or a translucent solid with the wire kept. Categories in the current sample can be hidden. Theme is dark or light. The choices are stored in `localStorage` under `coperceive-view`. That object has no token. The bearer token stays in `sessionStorage` under `coperceive-token`. Reset view restores the defaults: every layer on, color by agent, the Settings point size, wire boxes, no hidden class.
+
+In the desktop app, Settings → Viewer holds the defaults that the toolbar overrides. These are display settings only, and none of them changes a stored result:
+
+- **Point size** (1–4 px, default 2 px; state.json `viewer_point_size`) is the size used by a view whose Point size slider was never moved. Moving the slider marks that view as chosen (`pointSizeChosen` in `coperceive-view`), and the view then keeps its own size. A view saved before the marker existed keeps its size if it is not 2.
+- **Camera view** (default **Last used**; `default_viewpoint`, absent means Last used) is the view a scene opens in: Last used (`last_viewpoint`, as before), Orbit, Bird's-eye, Chase, Drone or Camera. A view the scene cannot show opens in Orbit.
+- **Theme** (System, Light or Dark, default System; `theme_override`, null means System) is the same setting that the toolbar's sun/moon button and the menu's **Toggle Theme** change.
+
+All three apply live to an open viewer and are read back when the window gets focus. Each section of Settings (General, Viewer, Datasets, Updates) has **Reset to defaults**, which resets only that section. It never moves the local library folder, which has its own move flow in the Library.
 
 Class color is used for boxes only. Points and frustums stay colored by agent, because a sweep has no class. The photo strip keeps its own Boxes and Lidar checkboxes and does not read this row.
 
