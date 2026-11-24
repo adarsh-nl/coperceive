@@ -1,6 +1,6 @@
 # Desktop updates
 
-Coperceive checks GitHub Releases for a newer macOS build and asks before restarting. The check is not Apple code signing. It uses a Tauri updater keypair. The private key must never be committed, pasted into a chat, or written into `state.json`, logs, or this file.
+Coperceive checks GitHub Releases for a newer build on macOS, Windows, and Linux and asks before restarting. The check is not Apple code signing. It uses a Tauri updater keypair. The private key must never be committed, pasted into a chat, or written into `state.json`, logs, or this file.
 
 The public key that used to be in `src-tauri/tauri.conf.json` matched a private key that was committed in `docs/updater-secrets.md` (commit `e7f6fef`). Treat that keypair as public. It was replaced on 2026-10-30: the current public key (minisign key id `9AB294B56FC3C444`) is in `src-tauri/tauri.conf.json`, and its private key and password exist only on the maintainer's Mac and in the GitHub Actions secrets below.
 
@@ -49,7 +49,7 @@ The in-app banner can still be exercised in CI against a mock `latest.json` (`CO
 
 ## Platform update behavior
 
-- **macOS (Apple Silicon & Intel)**: Checks `latest.json` for `darwin-aarch64` or `darwin-x86_64`, downloads the architecture-specific update archive (`Coperceive_aarch64.app.tar.gz` or `Coperceive_x64.app.tar.gz`), and prompts to restart into the new version.
+- **macOS (Apple Silicon & Intel)**: Checks `latest.json` for `darwin-aarch64` or `darwin-x86_64`, downloads the architecture-specific update archive (`Coperceive_aarch64.app.tar.gz` or `Coperceive_x64.app.tar.gz`), and prompts to restart into the new version. On Intel Macs (`PR #235`), if a future release manifest omits `darwin-x86_64`, background checks stay quiet and **Help → Check for Updates…** shows `"Coperceive v0.1.2 is the last version for Intel Macs."` without a Retry error.
 - **Windows (x86_64)**: Checks `latest.json` for `windows-x86_64`, downloads the NSIS installer executable (`Coperceive_<version>_x64-setup.exe`), and applies the update.
 - **Linux (AppImage)**: In-app updates replace the running `.AppImage` executable in-place.
 - **Linux (Debian / Ubuntu `.deb`)**: In-app updates do not apply to `.deb` package installs. The background updater suppresses the sidebar update card so an un-installable update is never offered; a manual check via **Help → Check for Updates…** informs the user to update with `apt` or download the new `.deb` from GitHub Releases.
