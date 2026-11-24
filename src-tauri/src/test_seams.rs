@@ -301,8 +301,8 @@ pub fn hpc_share_probe_request() -> Option<(std::path::PathBuf, std::path::PathB
 /// Test-only request for the packaged-app cluster-dataset flow: read
 /// `{"server": <ServerEntry fixture path>, "steps": [{"command": "dataset_detect",
 /// "args": {...}}, ...]}`, save the server, call the real Tauri dataset commands
-/// in order with the UI's camelCase arguments, and write every response or
-/// error for `scripts/desktop/e2e_cluster_datasets_app.sh`.
+/// (and `open_predictions`) in order with the UI's camelCase arguments, and write
+/// every response or error for `scripts/desktop/e2e_cluster_datasets_app.sh`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatasetFlowProbe {
     pub request: std::path::PathBuf,

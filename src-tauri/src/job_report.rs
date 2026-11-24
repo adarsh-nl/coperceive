@@ -408,12 +408,36 @@ pub fn import_predictions(
 ) -> Result<ImportedPredictions, String> {
     crate::run_plan::validate_plan_id(plan_id)?;
     let data_root = validate_data_root(profile, data_root)?;
-    let predictions_file = output_path(profile, output_dir, "predictions.jsonl")?;
     let predictions_root = format!("{}/predictions", data_root.trim_end_matches('/'));
     let predictions_root = normalise_path(&predictions_root, "predictions root")?;
     if !is_under(&predictions_root, &data_root) {
         return Err("The predictions root escapes the data root.".to_string());
     }
+    import_predictions_into(runner, profile, plan_id, output_dir, &data_root, &predictions_root)
+}
+
+/// The run's predictions store for a custom pipeline viewed over the stream path:
+/// `<output_dir>/viewer-predictions`, inside the run's own output (under results_root),
+/// so an import never writes into a dataset root.
+pub fn viewer_predictions_root(profile: &ServerProfile, output_dir: &str) -> Result<String, String> {
+    output_path(profile, output_dir, "viewer-predictions")
+}
+
+/// [`import_predictions`] with the scenes root and the predictions store chosen by the
+/// caller, which has validated both: `predictions import <run output>/predictions.jsonl
+/// --run <plan> --root <scenes_root> --predictions <predictions_root>`.
+pub fn import_predictions_into(
+    runner: &dyn RemoteRunner,
+    profile: &ServerProfile,
+    plan_id: &str,
+    output_dir: &str,
+    scenes_root: &str,
+    predictions_root: &str,
+) -> Result<ImportedPredictions, String> {
+    crate::run_plan::validate_plan_id(plan_id)?;
+    let data_root = scenes_root.to_string();
+    let predictions_root = predictions_root.to_string();
+    let predictions_file = output_path(profile, output_dir, "predictions.jsonl")?;
     let nonempty = runner
         .run(
             &format!("test -s -- {}", shell_quote(&predictions_file)),
@@ -730,6 +754,28 @@ mod tests {
         assert!(command.contains("--predictions /data/scenes/predictions"), "{command}");
         assert!(command.contains("--run plan-1"), "{command}");
         assert!(!command.contains("--scene"), "scene_id rows need no --scene: {command}");
+    }
+
+    #[test]
+    fn a_custom_run_viewed_over_the_stream_is_imported_into_its_own_output() {
+        // Open predictions on a custom pipeline: scenes from the open dataset (a cache
+        // under results_root), the store inside the run's output, never a data root.
+        let output = "/data/results/runs/plan-1793222864-c5af819dbd2b";
+        let store = viewer_predictions_root(&profile(), output).expect("store");
+        assert_eq!(store, format!("{output}/viewer-predictions"));
+        assert!(viewer_predictions_root(&profile(), "/data/scenes/x").is_err());
+        let runner = FakeRunner::default()
+            .with("test -s", "")
+            .with("head -n 1", r#"{"source":"bev","scene_id":"Town03-000"}"#)
+            .with("metrics.json", r#"{"schema":"coperceive-pipeline-metrics","version":1,"run":{"scenes":["Town03-000"]},"outputs":[],"metrics":{}}"#)
+            .with("predictions import", "");
+        let cache = "/data/results/coperceive-cache/opv2v/0123456789ab/test";
+        let imported = import_predictions_into(&runner, &profile(), PLAN_ID, output, cache, &store).expect("import");
+        assert_eq!(imported.predictions_root, store);
+        let calls = runner.calls();
+        let calls = calls.lock().unwrap();
+        let command = calls.iter().find(|cmd| cmd.contains("predictions import")).expect("import call");
+        assert!(command.contains(&format!("--root {cache} --predictions {store}")), "{command}");
     }
 
     #[test]
