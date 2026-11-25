@@ -6,7 +6,7 @@
 # Launches the real built app with COPERCEIVE_TEST_DATASET_FLOW_REQUEST; its test
 # seam calls the same Tauri commands the Dataset view invokes (dataset_detect,
 # dataset_index, dataset_prepare, dataset_prepare_submit, dataset_status,
-# dataset_open). The fake cluster is this machine: dataset commands run the
+# dataset_open, and Job watch's/Run history's open_predictions). The fake cluster is this machine: dataset commands run the
 # bundled coperceive, a confirmed sbatch runs the rendered prepare script, and
 # dataset_open starts the app's local `coperceive serve` reading the cache over
 # the fake ssh (`coperceive dataset stream`), with no Slurm job. The raw tree is the synthetic OPV2V layout from
@@ -248,6 +248,19 @@ for query in queries:
     except urllib.error.HTTPError as error:
         fetched.append({"url": url.split("/api/", 1)[1], "status": error.code, "type": None, "bytes": 0, "ms": 0})
 json.dump(fetched, open(served.replace("-served.json", "-served-images.json"), "w", encoding="utf-8"))
+# Open predictions earlier in the flow: the viewer's own requests for the run's first
+# scene on the same server (the scene summary first, which mirrors the scene).
+opened = [s["value"] for s in steps if s["command"] == "open_predictions" and s["ok"]]
+if opened:
+    scene = opened[-1]["scenes"][0]
+    bodies = {}
+    for path in (f"/api/scenes/{scene}", f"/api/scenes/{scene}/predictions"):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(session["origin"] + path, headers={"Authorization": "Bearer " + session["token"]}), timeout=20) as response:
+                bodies[path] = {"status": response.status, "body": json.load(response)}
+        except urllib.error.HTTPError as error:
+            bodies[path] = {"status": error.code, "body": error.read().decode("utf-8", "replace")}
+    json.dump(bodies, open(served.replace("-served.json", "-served-predictions.json"), "w", encoding="utf-8"))
 PY
     kill -9 "${APP_PID}" 2>/dev/null || true
     wait "${APP_PID}" 2>/dev/null || true
@@ -616,6 +629,103 @@ assert log.count("remote-start") == 1 and "remote-status" in log, log
 print(f"Step CD-15 verified: a viewer job that ran before writing its session (status by id "
       f"alone said stopped/RUNNING) is attached, not refused: origin {step['value']['origin']}, "
       f"{log.count('remote-status')} status check(s), 1 remote start")
+PY
+
+# --- Flow S: Open predictions from Job watch and Run history (stream path) -------
+# Both buttons call open_predictions(profile, plan). A built-in model's run is a
+# prediction store at <output_dir>/<plan>, on the scenes its run line read; the app
+# copies the run's viewer files into its stream server's predictions root and opens
+# the viewer on it. Until v0.1.2 this needed a remote viewer session that nothing
+# set (since 803386a), so both buttons failed with "needs an active remote session".
+STREAM_CACHE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["steps"][0]["value"]["data_root"])' "${TMP_DIR}/reuse-result.json")"
+PRED_PLAN="plan-1790000000-aabbccddeeff"
+GONE_PLAN="plan-1790000001-aabbccddee00"
+python3 - "${CLUSTER}/results" "${STREAM_CACHE}" "${RAW_ROOT}" "${PYTHON}" "${PROFILE_ID}" "${PRED_PLAN}" "${GONE_PLAN}" <<'PY'
+import json, pathlib, sys
+results, cache, raw, python, profile_id = sys.argv[1:6]
+plans = pathlib.Path(results, "plans")
+plans.mkdir(parents=True, exist_ok=True)
+for plan_id in sys.argv[6:8]:
+    out = f"{results}/runs/{plan_id}"
+    plan = {
+        "schema": "coperceive-run-plan/1", "id": plan_id, "created_unix": 1790000000,
+        "profile_id": profile_id, "profile_name": "Dataset e2e fake cluster",
+        "pipeline": {"id": "e2e-model", "name": "e2e built-in model", "source": "builtin"},
+        "argv": [python, "-m", "coperceive", "model", "run", "--manifest", f"{results}/model.yaml",
+                 "--scenes", cache, "--out", out, "--run-id", plan_id, "--raw-root", raw],
+        "environment": {"kind": "none"}, "raw_root": {"path": raw, "kind": "folder"},
+        "output_dir": out, "scratch_dir": f"{results}/scratch", "checks": [],
+        "contract_check_script": "", "nothing_submitted": True,
+    }
+    (plans / f"{plan_id}.json").write_text(json.dumps(plan), encoding="utf-8")
+PY
+# What `model run --out <output_dir> --run-id <plan>` leaves: run.json and one
+# boxes.parquet per scene (empty here: the model found nothing in scene_0000).
+"${PYTHON}" -I - "${CLUSTER}/results/runs/${PRED_PLAN}" "${PRED_PLAN}" <<'PY'
+import pathlib, sys
+from coperceive.evaluation.predictions import RunMeta, write_run
+root, run_id = pathlib.Path(sys.argv[1]), sys.argv[2]
+meta = RunMeta(run_id=run_id, model="e2e-model", score_note="e2e fixture", categories=("car",),
+               sources=(("lidar", "e2e"),), created_utc="2026-11-24T00:00:00Z")
+write_run(root, run_id, meta, [], scene_ids=["scene_0000"])
+PY
+OPEN_PREDICTIONS="{\"command\": \"open_predictions\", \"args\": {$(profile_args), \"planId\": \"${PRED_PLAN}\"}}"
+# Job watch: a fresh app (no dataset open). The trailing Open reads the served
+# predictions with the session's token and proves it is the same server.
+run_flow openpreds-watch "[
+  ${OPEN_PREDICTIONS},
+  {\"command\": \"dataset_open\", \"args\": {${DATASET_ARGS}, \"sceneId\": \"scene_0000\"}}
+]"
+# Run history: the dataset is already open; Open predictions reuses its server.
+run_flow openpreds-history "[
+  {\"command\": \"dataset_open\", \"args\": {${DATASET_ARGS}, \"sceneId\": \"scene_0001\"}},
+  ${OPEN_PREDICTIONS},
+  {\"command\": \"dataset_open\", \"args\": {${DATASET_ARGS}, \"sceneId\": \"scene_0000\"}}
+]"
+# A run whose predictions directory is missing: a plain error, no viewer started.
+run_flow openpreds-missing "[
+  {\"command\": \"open_predictions\", \"args\": {$(profile_args), \"planId\": \"${GONE_PLAN}\"}}
+]"
+check openpreds-watch "${PRED_PLAN}" "${GONE_PLAN}" <<'PY'
+import json, os, sys
+result, ssh_log, tmp, raw, plan_id, gone_id = sys.argv[1:7]
+summary = []
+for flow, opened_at in (("openpreds-watch", 0), ("openpreds-history", 1)):
+    steps = json.load(open(f"{tmp}/{flow}-result.json", encoding="utf-8"))["steps"]
+    for step in steps:
+        assert step["ok"], (flow, step)
+    opened = steps[opened_at]["value"]
+    session = steps[-1]["value"]
+    assert opened["run_id"] == plan_id and opened["scenes"] == ["scene_0000"], (flow, opened)
+    assert opened["url"] == f"{session['origin']}/#/viewer?predictions={plan_id}&scene=scene_0000", (flow, opened["url"])
+    if opened_at:
+        assert steps[0]["value"]["origin"] == session["origin"], (flow, "Open predictions started another server")
+    root = opened["predictions_root"]
+    assert root.startswith(f"{tmp}/remote-view/mirror/") and root.endswith("/predictions"), (flow, root)
+    assert sorted(os.listdir(f"{root}/{plan_id}")) == ["run.json", "scene_0000"], (flow, os.listdir(f"{root}/{plan_id}"))
+    assert os.listdir(f"{root}/{plan_id}/scene_0000") == ["boxes.parquet"], flow
+    log = open(f"{tmp}/{flow}-ssh.txt", encoding="utf-8").read().splitlines()
+    assert "plan-read" in log and log.count("predictions-copy") == 1, (flow, log)
+    assert log.count("dataset-stream") == 1, (flow, log)
+    assert not [line for line in log if line.startswith(("remote-", "sbatch", "tunnel"))], (flow, log)
+    served = json.load(open(f"{tmp}/{flow}-served-predictions.json", encoding="utf-8"))
+    listing = served["/api/scenes/scene_0000/predictions"]
+    assert listing["status"] == 200, (flow, served)
+    assert [run["run_id"] for run in listing["body"]["runs"]] == [plan_id], (flow, listing)
+    summary.append(f"{flow.split('-')[1]}: {session['origin']}")
+steps = json.load(open(f"{tmp}/openpreds-missing-result.json", encoding="utf-8"))["steps"]
+(missing,) = steps
+assert not missing["ok"], missing
+error = missing["error"]
+assert f"has no predictions on the cluster: {tmp}/cluster/results/runs/{gone_id}/{gone_id} does not exist" in error, error
+assert "remote session" not in error, error
+log = open(f"{tmp}/openpreds-missing-ssh.txt", encoding="utf-8").read().splitlines()
+assert "dataset-stream" not in log and not [l for l in log if l.startswith("remote-")], log
+print(f"Step CD-20 verified: Open predictions (Job watch, fresh app; Run history, dataset open) -> "
+      f"run {plan_id} copied into the stream server's predictions root and listed for scene_0000 "
+      f"on the same server ({'; '.join(summary)}); one ssh stream each, no viewer job, no "
+      f"'active remote session' error; a run with no predictions directory -> {error.split(':')[0]!r}, "
+      f"no viewer started")
 PY
 
 # --- Flow J: view prepared scenes while the prepare job runs ---------------------
