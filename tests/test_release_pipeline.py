@@ -236,7 +236,9 @@ def test_the_release_builds_run_install_and_smoke_checks_on_all_three_oses() -> 
     macos = workflow[workflow.index("  build-macos:") : workflow.index("  build-windows:")]
     assert "hdiutil attach" in macos
     assert "scripts/desktop/smoke_test.sh" in macos
-    assert "arch -x86_64" in macos
+    # v0.1.3 is Apple Silicon only (ADR 0022): no Intel DMG, no Rosetta smoke.
+    assert "arch -x86_64" not in macos
+    assert "x86_64-apple-darwin" not in macos
     assert macos.index("smoke_test.sh") < macos.index("actions/upload-artifact@v4")
 
     windows = workflow[workflow.index("  build-windows:") : workflow.index("  build-linux:")]

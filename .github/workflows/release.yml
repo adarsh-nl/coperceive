@@ -119,7 +119,7 @@ jobs:
         run: bash scripts/desktop/build_dmg.sh aarch64-apple-darwin
       - name: Verify packaged app ships the viewer bundle
         run: |
-          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+          for target in aarch64-apple-darwin; do
             APP="src-tauri/target/${target}/release/bundle/macos/Coperceive.app"
             test -d "${APP}" || { echo "No Coperceive.app found for ${target} at ${APP}" >&2; exit 1; }
             python3 scripts/check_bundle_assets.py --app "${APP}"
@@ -147,17 +147,14 @@ jobs:
           test -f "release-assets-macos/Coperceive_aarch64.app.tar.gz.sig" || { echo "::error::Missing Coperceive_aarch64.app.tar.gz.sig" >&2; exit 1; }
           test -f "release-assets-macos/$(basename "${ARM64_DMG}")" || { echo "::error::Missing ARM64 DMG in release-assets" >&2; exit 1; }
           ls -la release-assets-macos/
-      - name: Run macOS Smoke Test on Installed DMGs (arm64 and Intel via Rosetta)
+      - name: Run macOS Smoke Test on Installed DMG (arm64)
         run: |
           ARM64_DMG="$(find release-assets-macos -maxdepth 1 -type f \( -name "*aarch64*.dmg" -o -name "*arm64*.dmg" \) | head -n 1)"
-          INTEL_DMG="$(find release-assets-macos -maxdepth 1 -type f \( -name "*x64*.dmg" -o -name "*x86_64*.dmg" \) | head -n 1)"
           test -n "${ARM64_DMG}" && test -f "${ARM64_DMG}" || { echo "::error::Missing arm64 DMG in release-assets-macos" >&2; exit 1; }
-          test -n "${INTEL_DMG}" && test -f "${INTEL_DMG}" || { echo "::error::Missing Intel DMG in release-assets-macos" >&2; exit 1; }
 
           smoke_dmg() {
             local dmg="$1"
-            local arch_prefix="$2"
-            local tag="$3"
+            local tag="$2"
             (
               set -euo pipefail
               local mount_dir="${RUNNER_TEMP}/mnt-${tag}"
@@ -173,24 +170,11 @@ jobs:
               hdiutil attach "${dmg}" -nobrowse -readonly -mountpoint "${mount_dir}"
               cp -R "${mount_dir}/Coperceive.app" "${app_path}"
               hdiutil detach "${mount_dir}" || hdiutil detach "${mount_dir}" -force || true
-              if [ -n "${arch_prefix}" ]; then
-                local py_intel="${app_path}/Contents/Resources/resources/python/bin/python3"
-                test -x "${py_intel}" || { echo "::error::Bundled Intel python3 missing at ${py_intel}" >&2; exit 1; }
-                ${arch_prefix} "${py_intel}" -c "import coperceive, numpy, pyarrow, PIL; print('Intel Python loaded successfully; PIL version:', PIL.__version__)"
-                ${arch_prefix} bash scripts/desktop/smoke_test.sh "${app_path}" "${dmg}"
-              else
-                bash scripts/desktop/smoke_test.sh "${app_path}" "${dmg}"
-              fi
+              bash scripts/desktop/smoke_test.sh "${app_path}" "${dmg}"
             )
           }
 
-          smoke_dmg "${ARM64_DMG}" "" "arm64"
-          if arch -x86_64 /usr/bin/true 2>/dev/null; then
-            smoke_dmg "${INTEL_DMG}" "arch -x86_64" "intel"
-          else
-            echo "::error title=Rosetta-Test::Rosetta 2 is not available on this runner" >&2
-            exit 1
-          fi
+          smoke_dmg "${ARM64_DMG}" "arm64"
       - uses: actions/upload-artifact@v4
         with:
           name: release-assets-macos
