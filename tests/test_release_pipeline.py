@@ -227,3 +227,27 @@ def test_the_release_publish_step_requires_tag_ref() -> None:
     # workflow_dispatch dry_run must default to true so accidental clicks never publish
     dispatch_input = workflow[workflow.index("  workflow_dispatch:") : workflow.index("jobs:")]
     assert "default: true" in dispatch_input
+
+
+def test_the_release_builds_run_install_and_smoke_checks_on_all_three_oses() -> None:
+    """Every OS release job installs and smoke-tests its packaged artifact before uploading."""
+    workflow = RELEASE_YML.read_text()
+
+    macos = workflow[workflow.index("  build-macos:") : workflow.index("  build-windows:")]
+    assert "hdiutil attach" in macos
+    assert "scripts/desktop/smoke_test.sh" in macos
+    assert "arch -x86_64" in macos
+    assert macos.index("smoke_test.sh") < macos.index("actions/upload-artifact@v4")
+
+    windows = workflow[workflow.index("  build-windows:") : workflow.index("  build-linux:")]
+    assert 'ArgumentList "/S" -Wait' in windows
+    assert "scripts/desktop/smoke_test_windows.ps1" in windows
+    assert "uninstall" in windows.lower()
+    assert windows.index("smoke_test_windows.ps1") < windows.index("actions/upload-artifact@v4")
+
+    linux = workflow[workflow.index("  build-linux:") : workflow.index("  publish-release:")]
+    assert "apt-get install -y" in linux
+    assert "xvfb-run" in linux
+    assert "scripts/desktop/smoke_test_linux.sh" in linux
+    assert "dpkg -r" in linux
+    assert linux.index("smoke_test_linux.sh") < linux.index("actions/upload-artifact@v4")

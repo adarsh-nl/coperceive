@@ -7,6 +7,7 @@ from pathlib import Path
 
 import uvicorn
 
+from coperceive.app.lease import ViewerLease
 from coperceive.app.server import create_app
 
 
@@ -26,6 +27,7 @@ def run(
     remote_cache_dir: str | None = None,
     remote_cache_bytes: int | None = None,
     bundle_info: str | None = None,
+    heartbeat_file: str | None = None,
 ) -> None:
     remote = None
     if remote_stream_argv:
@@ -52,6 +54,8 @@ def run(
         # reach the app: a DNS-rebinding page keeps its own Host header.
         loopback_port=port if token is None else None,
         bundle_info=bundle_info,
+        # The viewer job's lease (remote_serve.sbatch), renewed while in use.
+        lease=None if heartbeat_file is None else ViewerLease(heartbeat_file),
     )
     uvicorn.run(app, host=host, port=port, root_path=root_path)
 

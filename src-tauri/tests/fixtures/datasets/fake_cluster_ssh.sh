@@ -12,6 +12,7 @@
 #   really runs `coperceive dataset prepare`; squeue
 #   then reports nothing and sacct reports COMPLETED/FAILED.
 # - the viewer-page upload commands run with HOME=$FAKE_REMOTE_HOME.
+# - Open predictions' saved-plan read and run copy run locally on the results tree.
 # - `coperceive remote start|stop` and the `-N -L` tunnel are served by
 #   fake_remote.py / tcp_forward.py (a real `coperceive serve` on 127.0.0.1).
 #
@@ -147,6 +148,17 @@ case "${remote}" in
         ;;
     "# coperceive-static-verify"*|"sh -c 'mkdir -p -- \"\$HOME/"*|"sh -c 'cat > \"\$HOME/"*)
         log_command "static"
+        HOME="${home}" exec sh -c "${remote}"
+        ;;
+    "sh -c 'cat -- \"\$1\"' sh "*)
+        # load_saved_plan: the saved plan JSON under results_root/plans.
+        log_command "plan-read"
+        HOME="${home}" exec sh -c "${remote}"
+        ;;
+    "sh -c '# coperceive-predictions-copy"*)
+        # Open predictions: the run's viewer files, framed, from the results tree.
+        log_command "predictions-copy"
+        cd "${home}" || exit 1
         HOME="${home}" exec sh -c "${remote}"
         ;;
     *" remote start "*|*" remote stop "*|*" remote status "*|*" remote token "*)

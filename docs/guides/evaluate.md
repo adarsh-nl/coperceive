@@ -35,7 +35,13 @@ coperceive eval report my-run --root /path/to/scenes --predictions /path/to/pred
 - The run directory gains `evaluation.json`: that scoring ran, the protocol, and the SHA-256 of the config it used ([Predictions, `evaluation.json`](../spec/predictions.md#evaluationjson)). `eval run` writes the same file.
 - Exit codes: the model's own (`0`, `1`, `3`, `4`) always wins; `5` means the run completed and scoring failed ([model-plugin spec §Exit codes](../spec/model-plugin.md#exit-codes)). A partial run is still scored on its finished scenes.
 
-The app does not pass `--evaluate` yet.
+**In the desktop app:** New evaluation's **Score the run after it finishes** (on by default for a built-in model) adds the same scoring step to the app's job, under the AP protocol chosen above. The step runs after the model and before the job exits, on the run's own scenes and output directory (the app's run is written in place, so nothing is copied home). The job watch then reads the run's `evaluation.json`:
+
+- **Scored.** It shows the AP protocol and the number of scenes scored.
+- **Model finished, scoring failed.** The job exited 5. The panel shows the record's error, or, when the run left no `run.json`, the stderr tail.
+- **Not scored: the model did not finish.** The job was a model failure or a timeout, and it keeps the existing failure panel.
+
+The app does not show AP numbers yet: per-scene AP is in each scene's `metrics.json`, and the run's pooled AP is what `eval report` prints.
 
 ## AP protocol
 

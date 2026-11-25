@@ -156,7 +156,8 @@
         "venv_script_command",
         "spaces_and_quotes",
         "no_raw_root",
-        "plugin_python_override"
+        "plugin_python_override",
+        "evaluate_after_run"
       ]
     },
     {
@@ -203,7 +204,8 @@
         "modules_profile_other_python",
         "venv_profile",
         "venv_script_command",
-        "plugin_python_override"
+        "plugin_python_override",
+        "evaluate_after_run"
       ]
     },
     {
@@ -319,7 +321,8 @@
         "modules_profile_other_python",
         "venv_profile",
         "venv_script_command",
-        "plugin_python_override"
+        "plugin_python_override",
+        "evaluate_after_run"
       ]
     },
     {
@@ -387,7 +390,8 @@
         "venv_script_command",
         "spaces_and_quotes",
         "no_raw_root",
-        "plugin_python_override"
+        "plugin_python_override",
+        "evaluate_after_run"
       ]
     },
     {
@@ -420,7 +424,8 @@
         "venv_script_command",
         "spaces_and_quotes",
         "no_raw_root",
-        "plugin_python_override"
+        "plugin_python_override",
+        "evaluate_after_run"
       ]
     },
     {
@@ -451,7 +456,8 @@
         "modules_profile_other_python",
         "venv_profile",
         "venv_script_command",
-        "plugin_python_override"
+        "plugin_python_override",
+        "evaluate_after_run"
       ]
     },
     {
@@ -493,7 +499,8 @@
         "modules_profile_other_python",
         "venv_profile",
         "venv_script_command",
-        "plugin_python_override"
+        "plugin_python_override",
+        "evaluate_after_run"
       ]
     },
     {
@@ -535,7 +542,8 @@
         "modules_profile_other_python",
         "venv_profile",
         "venv_script_command",
-        "plugin_python_override"
+        "plugin_python_override",
+        "evaluate_after_run"
       ]
     },
     {
@@ -579,7 +587,8 @@
         "venv_script_command",
         "spaces_and_quotes",
         "no_raw_root",
-        "plugin_python_override"
+        "plugin_python_override",
+        "evaluate_after_run"
       ]
     },
     {
@@ -628,7 +637,8 @@
         "proxy_jump_modules",
         "spaces_and_quotes",
         "no_raw_root",
-        "plugin_python_override"
+        "plugin_python_override",
+        "evaluate_after_run"
       ]
     },
     {
@@ -721,20 +731,99 @@
       "kind": "intended",
       "why": "The app's job fails when run.json says rows were written (provenance.boxes_written above zero) but no scene has boxes.parquet; a run without boxes passes, as the CLI's job does with model run's exit 0.",
       "cite": "coperceive/models/batch.py provenance_json boxes_written; coperceive/evaluation/predictions.py write_run"
+    },
+    {
+      "id": "scoring-guard-cli",
+      "side": "cli",
+      "match": "if \\[ -f \"\\$SCRATCH/out/\\$RUN_ID/run\\.json\" \\]; then",
+      "kind": "intended",
+      "why": "The scoring step is guarded by the run's run.json on both sides; the CLI's run is in scratch under $RUN_ID, the app's is written in place under its output directory and plan id.",
+      "cite": "docs/models.md, 'Scoring in the job (--evaluate)'; coperceive/models/slurm.py evaluate_lines; src-tauri/src/job_submit.rs evaluate_lines",
+      "cases": [
+        "evaluate_after_run"
+      ]
+    },
+    {
+      "id": "scoring-guard-app",
+      "side": "app",
+      "match": "if \\[ -f \"\\$OUT_DIR/plan-[0-9]+-[0-9a-f]+/run\\.json\" \\]; then",
+      "kind": "intended",
+      "why": "The scoring step is guarded by the run's run.json on both sides; the CLI's run is in scratch under $RUN_ID, the app's is written in place under its output directory and plan id.",
+      "cite": "docs/models.md, 'Scoring in the job (--evaluate)'; coperceive/models/slurm.py evaluate_lines; src-tauri/src/job_submit.rs evaluate_lines",
+      "cases": [
+        "evaluate_after_run"
+      ]
+    },
+    {
+      "id": "scoring-eval-run-cli",
+      "side": "cli",
+      "match": "  /opt/venv/bin/python -m coperceive eval run \"\\$RUN_ID\" --root \"\\$SCRATCH/scenes\" --predictions \"\\$SCRATCH/out\"",
+      "kind": "intended",
+      "why": "The same eval run on the same run: the CLI scores the scenes and predictions it staged into scratch, the app reads the scenes in place and its run is already under $OUT_DIR. The argv is otherwise word for word (test_both_jobs_score_after_the_run_and_change_nothing_else).",
+      "cite": "docs/models.md, 'Scoring in the job (--evaluate)'; coperceive/models/slurm.py evaluate_lines; src-tauri/src/job_submit.rs evaluate_lines",
+      "cases": [
+        "evaluate_after_run"
+      ]
+    },
+    {
+      "id": "scoring-eval-run-app",
+      "side": "app",
+      "match": "  /opt/venv/bin/python -m coperceive eval run plan-[0-9]+-[0-9a-f]+ --root /data/griffin/scenes --predictions \"\\$OUT_DIR\"",
+      "kind": "intended",
+      "why": "The same eval run on the same run: the CLI scores the scenes and predictions it staged into scratch, the app reads the scenes in place and its run is already under $OUT_DIR. The argv is otherwise word for word (test_both_jobs_score_after_the_run_and_change_nothing_else).",
+      "cite": "docs/models.md, 'Scoring in the job (--evaluate)'; coperceive/models/slurm.py evaluate_lines; src-tauri/src/job_submit.rs evaluate_lines",
+      "cases": [
+        "evaluate_after_run"
+      ]
+    },
+    {
+      "id": "scoring-copy-home",
+      "side": "cli",
+      "match": "  rsync -a \"\\$SCRATCH/out/(\\$RUN_ID/)?\" \\S+/",
+      "kind": "intended",
+      "why": "The CLI's run lives in scratch, so after scoring it copies the run directory home again with metrics.json and evaluation.json; the app's run already writes to its output directory, so there is nothing to copy.",
+      "cite": "docs/models.md, 'Scoring in the job (--evaluate)'; coperceive/models/slurm.py evaluate_lines; src-tauri/src/job_submit.rs evaluate_lines",
+      "cases": [
+        "evaluate_after_run"
+      ]
+    },
+    {
+      "id": "scoring-skipped-cli",
+      "side": "cli",
+      "match": "  echo \"eval run skipped: no run\\.json for \\$RUN_ID\" >&2",
+      "kind": "intended",
+      "why": "The same message when there is no run.json to score; the CLI names the run by $RUN_ID, the app by its plan id.",
+      "cite": "docs/models.md, 'Scoring in the job (--evaluate)'; coperceive/models/slurm.py evaluate_lines; src-tauri/src/job_submit.rs evaluate_lines",
+      "cases": [
+        "evaluate_after_run"
+      ]
+    },
+    {
+      "id": "scoring-skipped-app",
+      "side": "app",
+      "match": "  echo \"eval run skipped: no run\\.json for plan-[0-9]+-[0-9a-f]+\" >&2",
+      "kind": "intended",
+      "why": "The same message when there is no run.json to score; the CLI names the run by $RUN_ID, the app by its plan id.",
+      "cite": "docs/models.md, 'Scoring in the job (--evaluate)'; coperceive/models/slurm.py evaluate_lines; src-tauri/src/job_submit.rs evaluate_lines",
+      "cases": [
+        "evaluate_after_run"
+      ]
+    },
+    {
+      "id": "scoring-blank",
+      "side": "app",
+      "match": "",
+      "kind": "intended",
+      "why": "The blank line before the scoring step: the CLI's base script already has one at that point, the app's does not.",
+      "cite": "cosmetic",
+      "cases": [
+        "evaluate_after_run"
+      ]
     }
   ],
   "argv_fields": {
     "out": "The app writes under results_root/runs/<plan id>; the CLI under scratch, then copies home (ADR 0015 §3a).",
     "staging_seconds": "Only the CLI stages, so only it times the staging (provenance timing only)."
   },
-  "pending_app_cases": [
-    {
-      "case": "evaluate_after_run",
-      "side": "app",
-      "line": "the scoring step after the run's copy home (`eval run \"$RUN_ID\" --root \"$SCRATCH/scenes\" --predictions \"$SCRATCH/out\"`, the second copy home, `RC=5`)",
-      "follow_up": "The app's job script does not score yet; Cursor adds the same step after PR agent/claude-model-run-evaluate (see cases.json pending_app).",
-      "why": "--evaluate is new in the CLI. Until the app passes it, an app-planned run ends without metrics.json.",
-      "cite": "docs/models.md, 'Scoring in the job (--evaluate)'; tests/test_plan_parity.py test_the_cli_scores_after_the_run_the_app_does_not_yet"
-    }
-  ]
+  "pending_app_cases": []
 }

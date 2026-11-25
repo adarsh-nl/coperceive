@@ -248,17 +248,18 @@ pub fn stream_argv(
     cache_root: &str,
     raw_root: &str,
 ) -> Vec<String> {
-    let remote = crate::hpc::coperceive_argv(
-        profile,
-        &[
-            "dataset".to_string(),
-            "stream".to_string(),
-            "--root".to_string(),
-            cache_root.to_string(),
-            "--root".to_string(),
-            raw_root.to_string(),
-        ],
-    );
+    let mut args = vec![
+        "dataset".to_string(),
+        "stream".to_string(),
+        "--root".to_string(),
+        cache_root.to_string(),
+    ];
+    // A run whose model reads no raw data (Open predictions on a plan without a raw
+    // root) streams the prepared scenes only.
+    if !raw_root.is_empty() {
+        args.extend(["--root".to_string(), raw_root.to_string()]);
+    }
+    let remote = crate::hpc::coperceive_argv(profile, &args);
     let mut argv = vec![ssh_bin.to_string()];
     argv.extend(crate::ssh::build_ssh_command_for(target, &quote_remote_argv(&remote)));
     argv
@@ -529,6 +530,10 @@ mod tests {
         let remote = argv.last().unwrap();
         assert!(remote.contains("dataset stream --root '/r/cache dir; rm -rf ~' --root /d/opv2v"), "{remote}");
         assert!(argv[argv.len() - 2] == "cluster-b", "{argv:?}");
+        // No raw root: the prepared scenes only, never an empty --root.
+        let scenes_only = stream_argv("/usr/bin/ssh", &target, &profile(), "/r/cache", "");
+        let remote = scenes_only.last().unwrap();
+        assert!(remote.ends_with("dataset stream --root /r/cache"), "{remote}");
     }
 
     #[test]

@@ -45,6 +45,11 @@ pub struct JobWatchStatus {
     pub time_left: Option<String>,
     #[serde(default)]
     pub node: Option<String>,
+    /// The job's exit code from accounting once it ended (sacct `ExitCode`, e.g. `5:0`
+    /// → 5); None while live or when accounting did not say. A scored run's job exits
+    /// 5 when the model completed but scoring failed (docs/spec/model-plugin.md).
+    #[serde(default)]
+    pub exit_code: Option<i32>,
 }
 
 /// A bounded tail of one of the run's log files.
@@ -167,7 +172,16 @@ fn parse_status_line(
         } else {
             Some(node.to_string())
         },
+        exit_code: None,
     })
+}
+
+/// sacct's `ExitCode` (`<code>:<signal>`) as the job's exit code; None for anything
+/// else (an empty column, an older fixture without it).
+fn parse_exit_code(raw: &str) -> Option<i32> {
+    let (code, signal) = raw.trim().split_once(':')?;
+    signal.parse::<i32>().ok()?;
+    code.parse::<i32>().ok()
 }
 
 fn status_from_accounting(
@@ -201,6 +215,7 @@ fn status_from_accounting(
         },
         time_left: None,
         node: None,
+        exit_code: fields.get(5).and_then(|raw| parse_exit_code(raw)),
     }))
 }
 
@@ -245,7 +260,7 @@ pub fn watch_named(
         }
     }
     let sacct = format!(
-        "sacct -j {job_id} -n -X -o JobName%256,State%20,Elapsed%20,TimeLimit%20,User%32 2>/dev/null"
+        "sacct -j {job_id} -n -X -o JobName%256,State%20,Elapsed%20,TimeLimit%20,User%32,ExitCode%12 2>/dev/null"
     );
     if let Ok(result) = runner.run(&sacct, STATUS_TIMEOUT, None) {
         if result.success {
@@ -663,6 +678,34 @@ mod tests {
             calls.iter().any(|(command, _)| command.contains("JobName%256")),
             "{calls:?}"
         );
+    }
+
+    #[test]
+    fn an_ended_job_reports_its_exit_code_from_accounting() {
+        // A scored run whose scoring failed: the model completed, the job exited 5.
+        for (line, state, code) in [
+            ("FAILED 00:10:00 04:00:00 bob 5:0", JobState::Failed, Some(5)),
+            ("COMPLETED 00:10:00 04:00:00 bob 0:0", JobState::Completed, Some(0)),
+            ("FAILED 00:10:00 04:00:00 bob 3:0", JobState::Failed, Some(3)),
+            // The code part only (a signal kill reads 0:9); without the column, None.
+            ("CANCELLED 00:10:00 04:00:00 bob 0:9", JobState::Cancelled, Some(0)),
+            ("COMPLETED 00:10:00 04:00:00 bob", JobState::Completed, None),
+        ] {
+            let runner = FakeRunner::default()
+                .without("squeue -h -j 424242")
+                .with("sacct -j 424242", &format!("{} {line}\n", expected_name()));
+            let status = watch_status(&runner, &profile(), plan_id(), "424242").expect(line);
+            assert_eq!((status.state, status.exit_code), (state, code), "{line}");
+            let calls = runner.calls();
+            assert!(calls.lock().unwrap().iter().any(|(command, _)| command.contains("ExitCode%12")));
+        }
+        // A live job has no exit code.
+        let runner = FakeRunner::default().with(
+            "squeue -h -j 424242",
+            &format!("{}|RUNNING|None|00:01:00|03:00:00|node1|bob\n", expected_name()),
+        );
+        let live = watch_status(&runner, &profile(), plan_id(), "424242").expect("squeue");
+        assert_eq!(live.exit_code, None);
     }
 
     #[test]

@@ -95,7 +95,7 @@ pub fn quote_remote_argv(argv: &[String]) -> String {
 }
 
 /// Ensures `~/.coperceive` exists so ssh ControlMaster can create its socket.
-fn ensure_control_dir() {
+pub(crate) fn ensure_control_dir() {
     if let Some(home) = std::env::var_os("HOME") {
         let dir = PathBuf::from(home).join(".coperceive");
         let _ = std::fs::create_dir_all(&dir);

@@ -180,7 +180,7 @@ usage: coperceive serve [-h] [--host HOST] [--port PORT] --root ROOT [--token TO
        PATH] [--root-path ROOT_PATH] [--maps MAPS] [--predictions PREDICTIONS] [--static STATIC]
        [--media-root DIR] [--allow-origin ALLOW_ORIGIN] [--bundle-info PATH] [--remote-stream-argv
        REMOTE_STREAM_ARGV] [--remote-cache-dir REMOTE_CACHE_DIR] [--remote-cache-bytes
-       REMOTE_CACHE_BYTES]
+       REMOTE_CACHE_BYTES] [--heartbeat-file PATH]
 
 options:
   -h, --help  show this help message and exit
@@ -211,6 +211,11 @@ options:
                         Local disk cache for --remote-stream-argv.
   --remote-cache-bytes REMOTE_CACHE_BYTES
                         Cap of the local disk cache (bytes).
+  --heartbeat-file PATH
+                        The viewer job's lease file (coperceive remote start passes it). The
+                        server touches it at most every 10 s while it answers authenticated /api
+                        requests (/api/health does not count) and never recreates it, so an idle
+                        job still ends when its lease expires.
 ```
 
 ## `coperceive scene`
@@ -764,6 +769,13 @@ options:
 ```text
 usage: coperceive remote [-h] {start,status,stop,token,list,heartbeat,scan} ...
 
+Manage remote coperceive serve sessions on Slurm clusters. A session's job holds a lease: it ends
+when the lease is COPERCEIVE_HEARTBEAT_TIMEOUT seconds old (default 600; 0 turns the lease off),
+or at its --time, whichever comes first. The served viewer renews the lease itself, at most every
+10 s, while it answers authenticated /api requests; /api/health probes (remote status) do not
+count. An idle viewer is not renewed, so an abandoned job ends one lease after its last request.
+remote heartbeat renews it by hand.
+
 positional arguments:
   {start,status,stop,token,list,heartbeat,scan}
     start               Submit and start a remote serve Slurm job.
@@ -862,6 +874,9 @@ options:
 
 ```text
 usage: coperceive remote heartbeat [-h] [--uuid OPT_UUID] [uuid]
+
+Renew a session's lease by hand. Not needed while the viewer is in use: the served viewer renews
+its own lease while it answers requests.
 
 positional arguments:
   uuid             Session UUID.

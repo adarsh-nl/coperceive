@@ -5,7 +5,15 @@
  * never runs in a tight loop (10 s while pending/running).
  */
 import { useEffect, useRef, useState } from "react";
-import { cancelRunJob, jobWatchLogs, jobWatchStatus, openPredictions, predictionStream, runMetrics } from "./local";
+import {
+  cancelRunJob,
+  jobWatchLogs,
+  jobWatchStatus,
+  openPredictions,
+  predictionStream,
+  runEvaluation,
+  runMetrics,
+} from "./local";
 import {
   failureNextAction,
   isJobActive,
@@ -13,6 +21,8 @@ import {
   evalProtocolLabel,
   metricsRows,
   progressLabel,
+  scoringSummary,
+  type EvaluationRecord,
   type JobLogTail,
   type JobSubmitOutcome,
   type JobWatchStatus,
@@ -64,12 +74,18 @@ export default function JobWatch({
   planId,
   initialOutcome,
   evalProtocol,
+  builtin = false,
+  evaluate = false,
 }: {
   profileId: string;
   planId: string;
   initialOutcome: JobSubmitOutcome;
   /** The protocol the saved plan records; shown with the job's result. */
   evalProtocol?: string;
+  /** A built-in model run (`coperceive model run`): it writes no pipeline metrics.json. */
+  builtin?: boolean;
+  /** The job scores the run after the model (the plan's "Score the run after it finishes"). */
+  evaluate?: boolean;
 }) {
   const [status, setStatus] = useState<JobWatchStatus | null>(null);
   const [error, setError] = useState("");
@@ -84,6 +100,7 @@ export default function JobWatch({
   const [liveNote, setLiveNote] = useState("");
   const [metrics, setMetrics] = useState<MetricsReport | null | undefined>(undefined);
   const [failureTail, setFailureTail] = useState("");
+  const [evaluation, setEvaluation] = useState<EvaluationRecord | null | undefined>(undefined);
   const [opening, setOpening] = useState(false);
   const [opened, setOpened] = useState("");
   const offsetRef = useRef(0);
@@ -162,11 +179,25 @@ export default function JobWatch({
     if (!status || isJobActive(status.state)) return;
     let stopped = false;
     void (async () => {
-      try {
-        const report = await runMetrics(profileId, planId);
-        if (!stopped && alive.current) setMetrics(report);
-      } catch (e) {
-        if (!stopped && alive.current) setLiveNote(errorText(e));
+      // A built-in run writes no pipeline metrics.json; a scored one writes evaluation.json.
+      if (!builtin) {
+        try {
+          const report = await runMetrics(profileId, planId);
+          if (!stopped && alive.current) setMetrics(report);
+        } catch (e) {
+          if (!stopped && alive.current) setLiveNote(errorText(e));
+        }
+      }
+      if (evaluate) {
+        try {
+          const record = await runEvaluation(profileId, planId);
+          if (!stopped && alive.current) setEvaluation(record);
+        } catch (e) {
+          if (!stopped && alive.current) {
+            setEvaluation(null);
+            setLiveNote(errorText(e));
+          }
+        }
       }
       if (status.state === "failed") {
         try {
@@ -180,7 +211,7 @@ export default function JobWatch({
     return () => {
       stopped = true;
     };
-  }, [profileId, planId, status?.state, initialOutcome.job_id]);
+  }, [profileId, planId, status?.state, initialOutcome.job_id, builtin, evaluate]);
 
   const refreshNow = async () => {
     setBusy("refresh");
@@ -249,6 +280,7 @@ export default function JobWatch({
     ? jobWatchLabel(status)
     : initialOutcome.state.toUpperCase() + (initialOutcome.queue_reason ? ` — ${initialOutcome.queue_reason}` : "");
   const active = isJobActive(state);
+  const scoring = scoringSummary({ evaluate, state, exitCode: status?.exit_code, record: evaluation });
 
   return (
     <div style={panel} aria-label="Job watch">
@@ -313,9 +345,24 @@ export default function JobWatch({
           {log.text.trim() ? <pre style={logBox}>{log.text}</pre> : null}
         </div>
       ) : null}
+      {!active && scoring ? (
+        <div style={{ marginTop: "0.6rem" }} role="status" aria-label="Scoring">
+          <strong style={scoring.failed ? { color: "#ff7b72" } : undefined}>{scoring.headline}</strong>
+          {scoring.detail.map((line) => (
+            <div key={line} style={{ opacity: 0.85 }}>
+              {line}
+            </div>
+          ))}
+        </div>
+      ) : null}
       {!active ? (
         <div style={{ marginTop: "0.6rem" }}>
-          {state === "failed" ? (
+          {state === "failed" && scoring?.modelFinished ? (
+            <div>
+              <strong>The model run itself completed.</strong>
+              {failureTail.trim() ? <pre style={logBox}>{failureTail}</pre> : null}
+            </div>
+          ) : state === "failed" ? (
             <div>
               <strong>Run failed.</strong>
               {failureTail.trim() ? (
@@ -327,6 +374,12 @@ export default function JobWatch({
                 Next action: {failureNextAction()}
               </div>
             </div>
+          ) : builtin ? (
+            evaluate ? null : (
+              <div style={{ opacity: 0.85 }}>
+                Run finished. Not scored in the job: score it with coperceive eval run on the cluster.
+              </div>
+            )
           ) : (
             <div>
               <strong>Run report</strong>
