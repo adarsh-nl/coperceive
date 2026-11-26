@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+# pyright: basic
+# pyright: reportMissingImports=false
 """Strict-load the OpenCOOD checkpoints at named paths, running no code from the files.
 
 A diagnostic job for the OpenCOOD model zoo (v0.1.3), run by ``zoo_strict_load.sbatch`` on a
@@ -54,6 +56,7 @@ import sys
 import time
 import traceback
 import zipfile
+from typing import Any
 
 WEIGHTS_SUFFIXES = (".pth", ".pt", ".ckpt")
 CONFIG_NAMES = ("config.yaml", "config.yml")
@@ -472,11 +475,19 @@ def _listed(keys: list) -> dict:
     }
 
 
-def check_one(entry: dict, stage: str, repo: str, package: str, relaxed_ordered_dict: bool) -> dict:
+def _section(config: dict[str, Any], key: str) -> dict[str, Any]:
+    """``config[key]`` when it is a mapping, else an empty one."""
+    value = config.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def check_one(
+    entry: dict, stage: str, repo: str, package: str, relaxed_ordered_dict: bool
+) -> dict[str, Any]:
     """Read config, build model, read weights, strict-load; every step recorded in ``entry``."""
     import torch
 
-    result = dict(entry)
+    result: dict[str, Any] = dict(entry)
     result["codebase_package"] = package
     staged = os.path.join(stage, "files", entry["container"])
     work = os.path.join(stage, "work", str(entry["index"]))
@@ -493,7 +504,7 @@ def check_one(entry: dict, stage: str, repo: str, package: str, relaxed_ordered_
     else:
         config_path = os.path.join(os.path.dirname(staged), entry["config"])
 
-    config = None
+    config: Any = None
     if config_path:
         cfgmod = _load_plugin_config_module(repo)
         yaml_utils = importlib.import_module(package + ".hypes_yaml.yaml_utils")
@@ -520,10 +531,10 @@ def check_one(entry: dict, stage: str, repo: str, package: str, relaxed_ordered_
         result["core_hint"] = _core_hint(config_path)
 
     if isinstance(config, dict):
-        model_cfg = config.get("model") if isinstance(config.get("model"), dict) else {}
-        fusion = config.get("fusion") if isinstance(config.get("fusion"), dict) else {}
-        post = config.get("postprocess") if isinstance(config.get("postprocess"), dict) else {}
-        pre = config.get("preprocess") if isinstance(config.get("preprocess"), dict) else {}
+        model_cfg = _section(config, "model")
+        fusion = _section(config, "fusion")
+        post = _section(config, "postprocess")
+        pre = _section(config, "preprocess")
         result["config_facts"] = {
             "name": config.get("name"),
             "model.core_method": model_cfg.get("core_method"),
@@ -662,10 +673,10 @@ def _git_head(path: str) -> dict:
         return {"path": path, "error": _short_error(exc)}
 
 
-def _environment(repo: str, primary_src: str) -> dict:
+def _environment(repo: str, primary_src: str) -> dict[str, Any]:
     import torch
 
-    env = {
+    env: dict[str, Any] = {
         "python": sys.version.split()[0],
         "executable": sys.executable,
         "host": platform.node(),
@@ -712,7 +723,7 @@ def _parse_codebases(values: list) -> list:
     return out
 
 
-def _run_child(args, entry: dict, codebase: dict) -> dict:  # noqa: ANN001
+def _run_child(args, entry: dict, codebase: dict) -> dict[str, Any]:  # noqa: ANN001
     env = dict(os.environ)
     env["PYTHONPATH"] = codebase["src"] + (
         os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
@@ -760,6 +771,7 @@ def _run_child(args, entry: dict, codebase: dict) -> dict:  # noqa: ANN001
 
 def child_main(args) -> int:  # noqa: ANN001
     entry = json.loads(args.child)
+    result: dict[str, Any]
     try:
         pkg = importlib.import_module(args.package)
         pkg_file = os.path.realpath(getattr(pkg, "__file__", "") or "")
@@ -827,7 +839,7 @@ def _detail_lines(r: dict, indent: str = "      ") -> list:
 
 
 def main(argv=None) -> int:  # noqa: ANN001
-    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
     parser.add_argument("--root", help="checkpoint root, read only")
     parser.add_argument(
         "--include",
@@ -862,7 +874,7 @@ def main(argv=None) -> int:  # noqa: ANN001
     codebases = _parse_codebases(args.codebase)
 
     started = time.time()
-    report = {
+    report: dict[str, Any] = {
         "schema": REPORT_SCHEMA,
         "started_unix": started,
         "root": root,
@@ -923,6 +935,7 @@ def main(argv=None) -> int:  # noqa: ANN001
     write_report(False)
     for entry in entries:
         t0 = time.time()
+        result: dict[str, Any]
         try:
             result = check_one(
                 entry, args.stage, args.repo, args.package, args.relaxed_ordered_dict

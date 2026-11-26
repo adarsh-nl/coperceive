@@ -134,7 +134,7 @@ def test_reads_a_plain_tensor_state_dict_and_shares_storages() -> None:
     )
     raw = _torch_zip(pkl, {"0": _floats(1, 2, 3, 4, 5, 6), "1": struct.pack("<q", 7)})
     obj, info = _read(raw)
-    assert isinstance(obj, collections.OrderedDict)
+    assert obj.__class__ is collections.OrderedDict
     assert list(obj) == ["conv.weight", "conv.bias", "bn.num_batches_tracked"]
     assert obj["conv.weight"] == {"dtype": "float32", "offset": 0, "size": (2, 3), "stride": (3, 1)}
     assert obj["conv.bias"]["offset"] == 4
