@@ -102,7 +102,11 @@ preflight() {
 }
 
 build_once() {
-  ( cd web && npm run tauri build -- --target "${TARGET}" --verbose ) 2>&1 | tee -a "$LOG"
+  if [ -n "${COPERCEIVE_TAURI_FEATURES:-}" ]; then
+    ( cd web && npm run tauri build -- --target "${TARGET}" --features "${COPERCEIVE_TAURI_FEATURES}" --verbose ) 2>&1 | tee -a "$LOG"
+  else
+    ( cd web && npm run tauri build -- --target "${TARGET}" --verbose ) 2>&1 | tee -a "$LOG"
+  fi
 }
 
 status=1

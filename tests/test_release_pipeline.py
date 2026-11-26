@@ -257,3 +257,20 @@ def test_the_release_builds_run_install_and_smoke_checks_on_all_three_oses() -> 
     assert "scripts/desktop/smoke_test_linux.sh" in linux
     assert "dpkg -r" in linux
     assert linux.index("smoke_test_linux.sh") < linux.index("actions/upload-artifact@v4")
+
+
+def test_the_release_builds_never_enable_test_updater_overrides() -> None:
+    """Release builds must not compile in test-only updater endpoints or insecure HTTP."""
+    workflow = RELEASE_YML.read_text()
+    assert "test-updater-override" not in workflow
+    assert "COPERCEIVE_UPDATE_URL" not in workflow
+    assert "COPERCEIVE_TEST_REAL_UPDATE_INSTALL" not in workflow
+    assert "dangerousInsecureTransportProtocol" not in workflow
+
+    conf = json.loads(TAURI_CONF.read_text())
+    updater = conf["plugins"]["updater"]
+    assert not updater.get("dangerousInsecureTransportProtocol")
+
+    cargo_toml = (ROOT / "src-tauri" / "Cargo.toml").read_text()
+    assert "default = []" in cargo_toml
+    assert "test-updater-override = []" in cargo_toml
