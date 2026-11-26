@@ -4,6 +4,78 @@ export type Speed = (typeof SPEEDS)[number];
 
 const FALLBACK_GAP_MS = 100;
 
+/**
+ * Hold duration before showing "Buffering…" during a genuine stream stall.
+ * Exceeds one 10 Hz frame interval (100 ms) and typical local point/draw
+ * jitter so cached local playback does not falsely show "Buffering…".
+ */
+export const PLAYBACK_BUFFERING_AFTER_MS = 250;
+
+export type SyncRedrawDeps = {
+  sceneId: string;
+  summarySceneId: string | null;
+  hidden: unknown;
+  appearance: unknown;
+};
+
+/**
+ * Decide whether the viewer's synchronous pre-async stage redraw should run.
+ * Only needed when visibility (`hidden`) or layer/display settings (`appearance`)
+ * changed within the same scene; plain playback `frameIndex` advances must skip
+ * it so the previous frame is not rendered synchronously before the new sample.
+ */
+export function shouldRunSyncStageRedraw(
+  prev: SyncRedrawDeps | null,
+  next: SyncRedrawDeps,
+): boolean {
+  if (!prev) {
+    return false;
+  }
+  return (
+    prev.sceneId === next.sceneId &&
+    prev.summarySceneId === next.summarySceneId &&
+    (prev.hidden !== next.hidden || prev.appearance !== next.appearance)
+  );
+}
+
+export type DrawnHoldInput = {
+  nowMs: number;
+  waitingSinceMs: number | null;
+  stalled: boolean;
+  bufferingAfterMs?: number;
+};
+
+export type DrawnHoldDecision = {
+  waitingSinceMs: number;
+  showBuffering: boolean;
+  resetOrigin: boolean;
+};
+
+/**
+ * Decide how playback timing and "Buffering…" respond while waiting for the
+ * target sample to finish drawing. Transient local draw delays keep the wall
+ * clock anchored and never trigger "Buffering…"; only an active stream stall
+ * exceeding `bufferingAfterMs` displays "Buffering…" and pins `origin`.
+ */
+export function stepDrawnHoldWait(input: DrawnHoldInput): DrawnHoldDecision {
+  const waitingSinceMs = input.waitingSinceMs ?? input.nowMs;
+  const thresholdMs = input.bufferingAfterMs ?? PLAYBACK_BUFFERING_AFTER_MS;
+  const stalledOverThreshold = input.stalled && input.nowMs - waitingSinceMs > thresholdMs;
+  return {
+    waitingSinceMs,
+    showBuffering: stalledOverThreshold,
+    resetOrigin: stalledOverThreshold,
+  };
+}
+
+/**
+ * Clear "Buffering…" as soon as the held frame finishes drawing unless playback
+ * is currently paused by the stream-buffer underrun guard.
+ */
+export function shouldClearBufferingOnDraw(stallPaused: boolean): boolean {
+  return !stallPaused;
+}
+
 export function frameDelayMs(times: readonly number[], index: number, speed: number): number | null {
   if (index < 0 || index >= times.length - 1) {
     return null;

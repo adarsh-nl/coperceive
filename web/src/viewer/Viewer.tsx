@@ -47,7 +47,19 @@ import {
 import { getRevealLabel, getModifierKey } from "../desktop/platform";
 import PaperExportPanel from "./PaperExportPanel";
 import { defaultPaperOptions, paperRequestBody, paperSavedNote, type PaperOptions } from "./paperExport";
-import { formatClock, indexAfter, isEndZone, neighborSpeed, stepIndex, type Speed } from "./playback";
+import {
+  formatClock,
+  indexAfter,
+  isEndZone,
+  neighborSpeed,
+  PLAYBACK_BUFFERING_AFTER_MS,
+  shouldClearBufferingOnDraw,
+  shouldRunSyncStageRedraw,
+  stepDrawnHoldWait,
+  stepIndex,
+  type Speed,
+  type SyncRedrawDeps,
+} from "./playback";
 import {
   clampLeft,
   clampRight,
@@ -312,10 +324,10 @@ const VIEWPOINTS: { id: Viewpoint; label: string; shortcut: string }[] = [
  */
 const PREDICTION_PREFETCH_FRAMES = 4;
 /**
- * A playback hold longer than this shows "Buffering…". It stays up until a sample
- * advances on time again, so a slow link reads as one steady state, not a flicker.
+ * Stream underrun hold threshold before showing "Buffering…" in `tick()`, imported
+ * from `./playback` (`PLAYBACK_BUFFERING_AFTER_MS` = 250 ms).
  */
-const BUFFERING_AFTER_MS = 60;
+const _PLAYBACK_BUFFERING_AFTER_MS = PLAYBACK_BUFFERING_AFTER_MS;
 /**
  * An underrun has to persist this long before playback pauses for the buffer:
  * a single slow frame should hold the clock (the drawn-hold logic above) but not
@@ -1968,6 +1980,7 @@ export default function Viewer({
   // "scene|time" of the sample whose points and boxes are on screen. Playback waits
   // for it before moving on, so the clock never runs ahead of what is drawn.
   const drawnRef = useRef<string | null>(null);
+  const syncRedrawDepsRef = useRef<SyncRedrawDeps | null>(null);
   const [buffering, setBuffering] = useState(false);
   // The time-based stream buffer's last report (samples ready ahead, stall state).
   const [bufferProgress, setBufferProgress] = useState<StreamProgress>(EMPTY_STREAM_PROGRESS);
@@ -3022,22 +3035,29 @@ export default function Viewer({
         origin = performance.now();
       }
       // Hold on a sample until its points and boxes are drawn: never show points
-      // from another time than the boxes. The clock restarts from here once it is.
+      // from another time than the boxes. Keep the wall clock anchored unless an
+      // active stream stall exceeds `_PLAYBACK_BUFFERING_AFTER_MS`.
       if (drawnRef.current !== `${sceneKey}|${times[cursor]}`) {
         const now = performance.now();
-        waitingSince ??= now;
-        if (now - waitingSince > BUFFERING_AFTER_MS) {
+        const hold = stepDrawnHoldWait({
+          nowMs: now,
+          waitingSinceMs: waitingSince,
+          stalled: streamProgressRef.current.stalled,
+          bufferingAfterMs: _PLAYBACK_BUFFERING_AFTER_MS,
+        });
+        waitingSince = hold.waitingSinceMs;
+        if (hold.showBuffering) {
           setBuffering(true);
         }
-        originIndex = cursor;
-        origin = now;
+        if (hold.resetOrigin) {
+          originIndex = cursor;
+          origin = now;
+        }
         timeoutId = window.setTimeout(tick, 16);
         return;
       }
-      if (waitingSince !== null) {
-        // Held, now drawn: keep the label until a sample comes in on time.
-        waitingSince = null;
-      } else {
+      waitingSince = null;
+      if (shouldClearBufferingOnDraw(stallPausedRef.current)) {
         setBuffering(false);
       }
       let place = indexAfter(times, originIndex, performance.now() - origin, speed, loopRef.current);
@@ -3426,8 +3446,18 @@ export default function Viewer({
       setStatus(`${summary.scene_id} at ${time} µs. ${mapNote}`);
     }
 
-    // Immediately remove hidden agents' objects and trigger immediate redraw when WebGL stage exists
-    if (stage && latestRef.current) {
+    const nextRedrawDeps: SyncRedrawDeps = {
+      sceneId,
+      summarySceneId: summary.scene_id,
+      hidden,
+      appearance,
+    };
+    const runSyncRedraw = shouldRunSyncStageRedraw(syncRedrawDepsRef.current, nextRedrawDeps);
+    syncRedrawDepsRef.current = nextRedrawDeps;
+
+    // Immediately remove hidden agents' objects and trigger immediate redraw only
+    // when visibility/appearance changed; skip on plain playback frameIndex ticks.
+    if (runSyncRedraw && stage && latestRef.current) {
       const { frame: curFrame, types: curTypes } = latestRef.current;
       drawBoxes(stage, curFrame, curTypes, hidden, appearance, dimmedRef.current);
 
