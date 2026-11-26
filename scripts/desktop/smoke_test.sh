@@ -934,7 +934,8 @@ else
         --port "${DEMO_CTRL_PORT}" \
         --secret "${DEMO_CTRL_SECRET}" \
         --polls 25 \
-        --interval 0.2 || exit 26
+        --interval 0.2 \
+        --warmup-polls 2 || exit 26
 fi
 
 DEMO_OUTCOME_LINE=$(grep "COPERCEIVE_DEMO_OUTCOME:" "${DEMO_STDOUT}" | tail -n 1 || echo "")

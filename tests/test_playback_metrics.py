@@ -207,3 +207,83 @@ def test_poll_subcommand_against_real_http_controller() -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_poll_prefers_in_page_now_ms_over_skewed_host_clock() -> None:
+    frames = iter([10, 12, 14, 16, 18])
+    now_ms_iter = iter([200.0, 400.0, 600.0, 800.0, 1000.0])
+    # Simulate a +1.1 s controller HTTP tail latency on the last poll.
+    host_clock_t = iter([0.2, 0.4, 0.6, 0.8, 1.9])
+
+    samples, buffering = poll_playback_samples(
+        lambda: {
+            "result": {
+                "frameIndex": next(frames),
+                "samples": 100,
+                "playing": True,
+                "buffering": False,
+                "nowMs": next(now_ms_iter),
+            }
+        },
+        polls=5,
+        interval_s=0.2,
+        clock_fn=lambda: next(host_clock_t),
+        sleep_fn=lambda _: None,
+    )
+    assert buffering is False
+    total, elapsed, ratio, _, passed = evaluate_playback_samples(samples)
+    assert total == 8
+    assert elapsed == pytest.approx(0.8)
+    assert ratio == pytest.approx(1.0)
+    assert passed is True
+
+
+def test_poll_warmup_polls_excludes_initial_cold_frames() -> None:
+    def row(frame_idx: int, now_ms: float) -> dict[str, object]:
+        return {
+            "result": {
+                "frameIndex": frame_idx,
+                "samples": 100,
+                "playing": True,
+                "buffering": False,
+                "nowMs": now_ms,
+            }
+        }
+
+    payloads = [
+        # Two cold warm-up polls stalled at frame 0 (e.g. cold WebGL shader compile).
+        row(0, 200.0),
+        row(0, 400.0),
+        # Steady-state 10 Hz playback thereafter.
+        row(2, 600.0),
+        row(4, 800.0),
+        row(6, 1000.0),
+        row(8, 1200.0),
+        row(10, 1400.0),
+    ]
+    it_no_warmup = iter(payloads)
+    unfiltered, _ = poll_playback_samples(
+        lambda: next(it_no_warmup),
+        polls=len(payloads),
+        interval_s=0.2,
+        sleep_fn=lambda _: None,
+        warmup_polls=0,
+    )
+    _, _, raw_ratio, _, raw_passed = evaluate_playback_samples(unfiltered)
+    assert raw_ratio < 0.90
+    assert raw_passed is False
+
+    it_warmup = iter(payloads)
+    steady, _ = poll_playback_samples(
+        lambda: next(it_warmup),
+        polls=len(payloads),
+        interval_s=0.2,
+        sleep_fn=lambda _: None,
+        warmup_polls=2,
+    )
+    assert len(steady) == 5
+    frames, elapsed, ratio, _, passed = evaluate_playback_samples(steady)
+    assert frames == 8
+    assert elapsed == pytest.approx(0.8)
+    assert ratio == pytest.approx(1.0)
+    assert passed is True
