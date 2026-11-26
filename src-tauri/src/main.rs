@@ -50,6 +50,9 @@ pub struct AppState {
     /// What the local sidecar serves when it reads a cluster dataset over SSH
     /// (see `dataset_open`); None for a local folder.
     pub stream_key: Mutex<Option<String>>,
+    /// The profile, prepared scenes and raw root the stream session reads, so Open
+    /// predictions can import a custom pipeline's run against the open dataset.
+    pub stream_dataset: Mutex<Option<(String, String, String)>>,
     pub current_root: Mutex<Option<String>>,
     pub startup_instant: Instant,
     /// One viewer window. A second open focuses the existing window.
@@ -77,6 +80,7 @@ impl Default for AppState {
             remote_key: Mutex::new(None),
             dataset_scenes: Arc::new(Mutex::new(serde_json::Value::Null)),
             stream_key: Mutex::new(None),
+            stream_dataset: Mutex::new(None),
             current_root: Mutex::new(None),
             startup_instant: Instant::now(),
             viewer_build: Mutex::new(()),
@@ -3319,7 +3323,29 @@ async fn run_metrics(
     .map_err(|error| format!("Could not read the metrics report: {error}"))?
 }
 
-/// Imports the run's predictions as a stored run and opens the viewer on it.
+/// A scored built-in run's `evaluation.json` (None when it was not scored, or not yet).
+#[tauri::command]
+async fn run_evaluation(
+    profile_id: String,
+    plan_id: String,
+) -> Result<Option<job_report::EvaluationRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        let plan = job_submit::load_saved_plan(&runner, &entry.profile, &plan_id)?;
+        job_report::read_evaluation(&runner, &entry.profile, &plan.output_dir, &plan.id)
+    })
+    .await
+    .map_err(|error| format!("Could not read the scoring record: {error}"))?
+}
+
+/// Job watch's and Run history's "Open predictions": opens the run's predictions in
+/// the app's stream viewer, the server `dataset_open` uses (same reuse, same token,
+/// no remote viewer session). A built-in model's run is already a prediction store
+/// (`<output_dir>/<plan>`) on the scenes its run line read. A custom pipeline's
+/// `predictions.jsonl` is first imported on the cluster against the open dataset into
+/// `<output_dir>/viewer-predictions`. The run's viewer files are then copied into the
+/// server's local predictions root and the viewer opens on the run's first scene.
 #[tauri::command]
 async fn open_predictions(
     app: tauri::AppHandle,
@@ -3327,45 +3353,99 @@ async fn open_predictions(
     profile_id: String,
     plan_id: String,
 ) -> Result<ImportedPredictions, String> {
-    // The remote session owns the data root the viewer/server are using; copy
-    // what the blocking import needs, then open the window on this thread.
-    let (origin, token, data_root) = {
-        let lock = state.remote.lock().map_err(|e| e.to_string())?;
-        let mgr = lock.as_ref().ok_or_else(|| {
-            "Open predictions needs an active remote session; connect to the server first."
-                .to_string()
-        })?;
-        (mgr.origin(), mgr.token.clone(), mgr.data_root.clone())
+    use coperceive_desktop::run_predictions::{self, RunSource};
+    let entry = find_server_entry(&profile_id)?;
+    // The dataset the live stream server reads, for a custom pipeline's run: only
+    // while that server is alive and still serves it (a local folder or another
+    // dataset may have replaced it since).
+    let open_dataset = {
+        let current_key = state.stream_key.lock().ok().and_then(|key| key.clone());
+        let alive = state
+            .sidecar
+            .lock()
+            .ok()
+            .map(|mut lock| lock.as_mut().map(|session| session.is_alive()).unwrap_or(false))
+            .unwrap_or(false);
+        state
+            .stream_dataset
+            .lock()
+            .ok()
+            .and_then(|current| current.clone())
+            .filter(|(profile, cache, raw)| {
+                profile == &profile_id
+                    && alive
+                    && current_key.as_deref() == Some(stream_session_key(profile, cache, raw).as_str())
+            })
     };
-    let ctrl_port = state.ctrl_port.lock().ok().and_then(|port| *port).unwrap_or(0);
-    let import_root = data_root.clone();
-    let imported = tauri::async_runtime::spawn_blocking(move || {
-        let entry = find_server_entry(&profile_id)?;
-        let runner = plan_runner(&entry)?;
-        let plan = job_submit::load_saved_plan(&runner, &entry.profile, &plan_id)?;
-        job_report::import_predictions(
-            &runner,
-            &entry.profile,
-            &plan_id,
-            &plan.output_dir,
-            &import_root,
+    // Read the saved plan; for a custom pipeline, import against the open dataset.
+    let (cache, raw_root, store) = {
+        let entry = entry.clone();
+        let plan_id = plan_id.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<(String, String, String), String> {
+            let runner = plan_runner(&entry)?;
+            let plan = job_submit::load_saved_plan(&runner, &entry.profile, &plan_id)?;
+            match run_predictions::run_source(&plan, &entry.profile)? {
+                RunSource::Builtin { dataset, store } => Ok((dataset.scenes, dataset.raw_root, store)),
+                RunSource::Custom { output_dir } => {
+                    let (_, cache, raw_root) = open_dataset.ok_or_else(|| {
+                        "This run is from a custom pipeline, whose plan does not record the \
+                         dataset it ran on. Open that dataset in Datasets first, then Open \
+                         predictions again."
+                            .to_string()
+                    })?;
+                    let cache = run_predictions::check_stream_root(&entry.profile, &cache, "dataset")?;
+                    let store = job_report::viewer_predictions_root(&entry.profile, &output_dir)?;
+                    job_report::import_predictions_into(
+                        &runner,
+                        &entry.profile,
+                        &plan_id,
+                        &output_dir,
+                        &cache,
+                        &store,
+                    )?;
+                    Ok((cache, raw_root, store))
+                }
+            }
+        })
+        .await
+        .map_err(|error| format!("Could not read the run: {error}"))??
+    };
+    // Copy the run into the stream server's predictions root before touching any
+    // running viewer, so a run without predictions changes nothing.
+    let local_root = stream_predictions_dir(&stream_session_key(&profile_id, &cache, &raw_root));
+    let scenes = {
+        let runner = run_predictions::SshBulkRunner { ssh_bin: ssh_bin(), target: entry.ssh_target()? };
+        let store = store.clone();
+        let plan_id = plan_id.clone();
+        let local_root = local_root.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            run_predictions::copy_run(&runner, &store, &plan_id, &local_root)
+        })
+        .await
+        .map_err(|error| format!("Could not copy the predictions: {error}"))??
+    };
+    let scene = scenes.first().cloned().ok_or_else(|| {
+        format!(
+            "Run {plan_id} at {}/{plan_id} has no scene with predictions (no boxes.parquet).",
+            store.trim_end_matches('/')
         )
+    })?;
+    let mut session = ensure_stream_session(&app, state.inner(), &profile_id, &entry, &cache, &raw_root)?;
+    let ctrl_port = state.ctrl_port.lock().ok().and_then(|port| *port).unwrap_or(0);
+    let query = format!(
+        "predictions={}&scene={}",
+        urlencoding_component(&plan_id),
+        urlencoding_component(&scene)
+    );
+    if session.started.is_some() || !show_predictions_in_viewer(&app, state.inner(), &session.origin, &query) {
+        finish_stream_session(&app, state.inner(), &mut session, &cache, ctrl_port, Some(&query))?;
+    }
+    Ok(ImportedPredictions {
+        run_id: plan_id,
+        scenes,
+        predictions_root: session.predictions.to_string_lossy().into_owned(),
+        url: format!("{}/#/viewer?{query}", session.origin),
     })
-    .await
-    .map_err(|error| format!("Could not import the predictions: {error}"))??;
-    let mut imported = imported;
-    imported.url = format!("{}/#/viewer?predictions={}", origin, imported.run_id);
-    let query = format!("predictions={}", imported.run_id);
-    open_viewer_window(
-        &app,
-        &origin,
-        &token,
-        &data_root,
-        ctrl_port,
-        state.inner(),
-        Some(&query),
-    )?;
-    Ok(imported)
 }
 
 /// Build a repro card for one finished run. The card is the same JSON
@@ -3839,11 +3919,157 @@ async fn dataset_open(
         split.as_deref(),
         &cache_relative,
     )?;
-    let target = entry.ssh_target()?;
-    let key = format!("stream|{profile_id}|{cache}|{raw_root}");
     let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
     let query = scene_id.as_deref().map(|scene| format!("scene={}", urlencoding_component(scene)));
+    {
+        let mut persistent = state::load_state();
+        persistent.last_scene_id = scene_id.clone();
+        persistent.last_sample_index = None;
+        persistent.last_timestamp_us = None;
+        persistent._legacy_timestamp_ns = None;
+        persistent.agent_visibility = None;
+        let _ = state::save_state(&persistent);
+    }
+    let mut session = ensure_stream_session(&app, state.inner(), &profile_id, &entry, &cache, &raw_root)?;
+    if session.started.is_some()
+        || !show_scene_in_viewer(&app, state.inner(), &session.origin, scene_id.as_deref())
+    {
+        finish_stream_session(&app, state.inner(), &mut session, &cache, ctrl_port, query.as_deref())?;
+    }
+    Ok(SessionPayload {
+        origin: session.origin,
+        token: session.token,
+        server_version: "0.0.0".to_string(),
+        data_root: cache,
+        target_type: "stream".to_string(),
+    })
+}
 
+/// What `ensure_stream_session` serves: the local server's origin and token, and the
+/// local predictions root it was started with.
+struct StreamSession {
+    origin: String,
+    token: String,
+    predictions: PathBuf,
+    /// A server this call started, not yet kept in AppState: it is kept only once
+    /// its viewer window is open (`finish_stream_session`), because closing an
+    /// earlier viewer window stops whatever server AppState holds.
+    started: Option<StartedServer>,
+}
+
+struct StartedServer {
+    session: SidecarSession,
+    key: String,
+    dataset: (String, String, String),
+}
+
+/// Opens the viewer window for a server `ensure_stream_session` just started and
+/// keeps that server; on failure the new server is stopped. A reused server needs
+/// neither: the caller points its open viewer at the scene.
+fn finish_stream_session(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    session: &mut StreamSession,
+    cache: &str,
+    ctrl_port: u16,
+    query: Option<&str>,
+) -> Result<(), String> {
+    let Some(started) = session.started.take() else {
+        return open_viewer_window(app, &session.origin, &session.token, cache, ctrl_port, state, query);
+    };
+    if let Err(error) = open_viewer_window(app, &session.origin, &session.token, cache, ctrl_port, state, query) {
+        let mut server = started.session;
+        let _ = server.stop();
+        return Err(error);
+    }
+    if let Ok(mut lock) = state.sidecar.lock() {
+        *lock = Some(started.session);
+    }
+    if let Ok(mut current) = state.stream_key.lock() {
+        *current = Some(started.key);
+    }
+    if let Ok(mut current) = state.stream_dataset.lock() {
+        *current = Some(started.dataset);
+    }
+    Ok(())
+}
+
+/// Points an open viewer of `origin` at `query` (`predictions=…&scene=…`) and reloads
+/// it, as `show_scene_in_viewer` does for a scene: the window, and so its server,
+/// stay. The viewer reads `predictions=` when the page loads. False when no viewer
+/// of that origin is open.
+fn show_predictions_in_viewer(app: &tauri::AppHandle, state: &AppState, origin: &str, query: &str) -> bool {
+    use tauri::Manager;
+    let same_origin = state
+        .viewer_origin
+        .lock()
+        .ok()
+        .and_then(|lock| lock.clone())
+        .is_some_and(|current| current == origin);
+    let Some(viewer) = app.get_webview_window("viewer").filter(|_| same_origin) else {
+        return false;
+    };
+    let hash = serde_json::to_string(&format!("#/viewer?{query}")).unwrap_or_else(|_| "\"#/viewer\"".to_string());
+    let _ = viewer.eval(&format!("window.location.hash = {hash}; window.location.reload();"));
+    let _ = viewer.show();
+    let _ = viewer.set_focus();
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
+    }
+    true
+}
+
+fn stream_session_key(profile_id: &str, cache: &str, raw_root: &str) -> String {
+    format!("stream|{profile_id}|{cache}|{raw_root}")
+}
+
+/// The local mirror of one streamed dataset (per session key), and its predictions
+/// root: the server is always started with `--predictions <mirror>/predictions`, so
+/// Open predictions adds runs there without a restart (the server lists runs per
+/// request, `coperceive/evalview.py` `runs_for_scene`).
+fn stream_mirror_dir(key: &str) -> PathBuf {
+    remote_view_cache_dir().join("mirror").join(format!("{:016x}", {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut hasher);
+        hasher.finish()
+    }))
+}
+
+fn stream_predictions_dir(key: &str) -> PathBuf {
+    stream_mirror_dir(key).join("predictions")
+}
+
+/// Stops the stream session's local server and forgets what it served.
+fn stop_stream_session(state: &AppState) {
+    if let Ok(mut lock) = state.sidecar.lock() {
+        if let Some(mut existing) = lock.take() {
+            let _ = existing.stop();
+        }
+    }
+    if let Ok(mut current) = state.stream_key.lock() {
+        *current = None;
+    }
+    if let Ok(mut current) = state.stream_dataset.lock() {
+        *current = None;
+    }
+}
+
+/// The app's local viewer server reading `cache` (and `raw_root`) of a cluster over
+/// SSH (`coperceive dataset stream`, no Slurm job): the running one when it already
+/// serves this profile and dataset, else a new one. The dataset view's Open and Open
+/// predictions share it, its token and its SSH connection settings.
+fn ensure_stream_session(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    profile_id: &str,
+    entry: &ServerEntry,
+    cache: &str,
+    raw_root: &str,
+) -> Result<StreamSession, String> {
+    let target = entry.ssh_target()?;
+    let key = stream_session_key(profile_id, cache, raw_root);
+    let predictions = stream_predictions_dir(&key);
     let reusable = {
         let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
         let current = state.stream_key.lock().ok().and_then(|lock| lock.clone());
@@ -3854,38 +4080,12 @@ async fn dataset_open(
             _ => None,
         }
     };
-    {
-        let mut persistent = state::load_state();
-        persistent.last_scene_id = scene_id.clone();
-        persistent.last_sample_index = None;
-        persistent.last_timestamp_us = None;
-        persistent._legacy_timestamp_ns = None;
-        persistent.agent_visibility = None;
-        let _ = state::save_state(&persistent);
-    }
     if let Some((origin, token)) = reusable {
-        if !show_scene_in_viewer(&app, state.inner(), &origin, scene_id.as_deref()) {
-            open_viewer_window(&app, &origin, &token, &cache, ctrl_port, state.inner(), query.as_deref())?;
-        }
-        return Ok(SessionPayload {
-            origin,
-            token,
-            server_version: "0.0.0".to_string(),
-            data_root: cache,
-            target_type: "stream".to_string(),
-        });
+        return Ok(StreamSession { origin, token, predictions, started: None });
     }
 
     // Anything else stops: the previous local server and any viewer job.
-    {
-        let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
-        if let Some(mut existing) = lock.take() {
-            let _ = existing.stop();
-        }
-        if let Ok(mut current) = state.stream_key.lock() {
-            *current = None;
-        }
-    }
+    stop_stream_session(state);
     {
         let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
         if let Some(mut existing) = lock.take() {
@@ -3900,17 +4100,12 @@ async fn dataset_open(
         &ssh_bin(),
         &target,
         &entry.profile,
-        &cache,
-        &raw_root,
+        cache,
+        raw_root,
     );
     let cache_dir = remote_view_cache_dir();
-    let mirror = cache_dir.join("mirror").join(format!("{:016x}", {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        key.hash(&mut hasher);
-        hasher.finish()
-    }));
-    fs::create_dir_all(&mirror).map_err(|error| format!("Could not create the viewing cache: {error}"))?;
+    let mirror = stream_mirror_dir(&key);
+    fs::create_dir_all(&predictions).map_err(|error| format!("Could not create the viewing cache: {error}"))?;
     let extra = vec![
         "--remote-stream-argv".to_string(),
         serde_json::to_string(&stream).map_err(|error| error.to_string())?,
@@ -3918,8 +4113,10 @@ async fn dataset_open(
         cache_dir.join("blocks").to_string_lossy().into_owned(),
         "--remote-cache-bytes".to_string(),
         state::load_state().remote_view_cache_bytes.to_string(),
+        "--predictions".to_string(),
+        predictions.to_string_lossy().into_owned(),
     ];
-    let python_bin = resolve_python_binary(&app);
+    let python_bin = resolve_python_binary(app);
     let mut session = SidecarSession::spawn_with_args(&python_bin, &mirror, None, None, &extra)
         .map_err(|e| format!("Could not start the viewer: {e}"))?;
     let origin = format!("http://127.0.0.1:{}", session.port);
@@ -3941,23 +4138,12 @@ async fn dataset_open(
         return Err(format!("The viewer did not start: {error}\n\n{tail}"));
     }
     eprintln!("[viewer] reading {cache} over SSH, no Slurm job");
-    if let Err(error) = open_viewer_window(&app, &origin, &token, &cache, ctrl_port, state.inner(), query.as_deref()) {
-        let _ = session.stop();
-        return Err(error);
-    }
-    {
-        let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
-        *lock = Some(session);
-    }
-    if let Ok(mut current) = state.stream_key.lock() {
-        *current = Some(key);
-    }
-    Ok(SessionPayload {
+    let dataset = (profile_id.to_string(), cache.to_string(), raw_root.to_string());
+    Ok(StreamSession {
         origin,
         token,
-        server_version: "0.0.0".to_string(),
-        data_root: cache,
-        target_type: "stream".to_string(),
+        predictions,
+        started: Some(StartedServer { session, key, dataset }),
     })
 }
 
@@ -4109,6 +4295,16 @@ fn run_dataset_flow_probe(
                     optional_text(&args, "split"),
                     arg_text(&args, "cacheRelative")?,
                     optional_text(&args, "sceneId"),
+                ))
+                .and_then(|payload| {
+                    serde_json::to_value(payload).map_err(|error| error.to_string())
+                }),
+                // Job watch's and Run history's "Open predictions" (the same command).
+                "open_predictions" => tauri::async_runtime::block_on(open_predictions(
+                    app.clone(),
+                    state,
+                    arg_text(&args, "profileId")?,
+                    arg_text(&args, "planId")?,
                 ))
                 .and_then(|payload| {
                     serde_json::to_value(payload).map_err(|error| error.to_string())
@@ -4551,6 +4747,7 @@ fn main() {
             cancel_run_job,
             prediction_stream,
             run_metrics,
+            run_evaluation,
             open_predictions,
             list_run_history,
             preview_repro_card,

@@ -274,6 +274,8 @@ fn render(cases: &Value, case: &Value, entry: &ServerEntry) -> Result<String, St
         // The plugin's interpreter as New evaluation sends it; none leaves the manifest's.
         plugin_python: case["plugin_python"].as_str().unwrap_or("").to_string(),
         environment_override: None,
+        // New evaluation's "Score the run after it finishes".
+        evaluate: case["evaluate"].as_bool().unwrap_or(false),
     };
     let plan = build_run_plan(&cluster, entry, &request).map_err(|e| format!("build_run_plan: {e}"))?;
     let saved = save_run_plan(&cluster, entry, &plan, &request).map_err(|e| format!("save_run_plan: {e}"))?;

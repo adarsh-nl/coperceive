@@ -213,6 +213,11 @@ pub struct RunPlanRequest {
     pub plugin_python: String,
     #[serde(default)]
     pub environment_override: Option<EnvironmentSetup>,
+    /// New evaluation's "Score the run after it finishes" (built-in models): the job
+    /// runs `coperceive eval run` on the run after the model, as the CLI's
+    /// `model run --evaluate --slurm` job does. Absent (an older client) = off.
+    #[serde(default)]
+    pub evaluate: bool,
 }
 
 /// A path recorded in the plan, with the sha256 read over SSH when it is a file.
@@ -313,6 +318,10 @@ pub struct RunPlan {
     /// `coperceive eval run` uses it. A plan saved before this field is `default`.
     #[serde(default = "default_eval_protocol")]
     pub eval_protocol: String,
+    /// Score the run in the same job after the model (`eval run`, exit 5 when the model
+    /// completed but scoring failed). Built-in models only; false on older plans.
+    #[serde(default)]
+    pub evaluate: bool,
     /// The plugin's interpreter the run line passes as `--plugin-python`, exactly as
     /// given; empty when the manifest's `environment` decides (and on older plans).
     #[serde(default)]
@@ -2875,6 +2884,7 @@ pub fn build_run_plan(
         eval_protocol: if builtin { request.eval_protocol.trim().to_string() } else { DEFAULT_EVAL_PROTOCOL.to_string() },
         plugin_python,
         work_dir: if builtin { WORK_IN_SCRATCH.to_string() } else { String::new() },
+        evaluate: builtin && request.evaluate,
         staging_seconds: None,
         output_dir,
         scratch_dir: profile.scratch_template.clone(),
@@ -3985,6 +3995,7 @@ pub fn save_run_plan(
     } else {
         DEFAULT_EVAL_PROTOCOL.to_string()
     };
+    validated.evaluate = save_pipeline.source == "builtin" && request.evaluate;
     validated.plugin_python = plugin_python;
     validated.work_dir = if save_pipeline.source == "builtin" {
         WORK_IN_SCRATCH.to_string()
@@ -4293,6 +4304,7 @@ mod tests {
             eval_protocol: "default".to_string(),
             plugin_python: String::new(),
             environment_override: None,
+            evaluate: false,
         }
     }
 

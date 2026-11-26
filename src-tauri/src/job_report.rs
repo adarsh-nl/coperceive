@@ -230,6 +230,88 @@ pub fn tail_predictions(
     })
 }
 
+/// What a scored built-in run's `<run>/evaluation.json` says (docs/spec/predictions.md
+/// `## evaluation.json`): that scoring ran, how, and how it went. The AP numbers are
+/// not here; they stay in each scene's `metrics.json`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EvaluationRecord {
+    /// `ok`, `errors` (some scenes failed to score) or `failed` (scoring stopped).
+    pub status: String,
+    pub error: Option<String>,
+    /// The protocol line `eval report` prints, e.g. `default (ranking per_frame, GT connected_union)`.
+    pub protocol: Option<String>,
+    pub config_sha256: Option<String>,
+    pub created_utc: Option<String>,
+    pub command: Option<String>,
+    pub evaluated: Vec<String>,
+    pub skipped: Vec<String>,
+    /// One line per scene that failed to score.
+    pub errors: Vec<String>,
+}
+
+const EVALUATION_STATUSES: [&str; 3] = ["ok", "errors", "failed"];
+
+/// Reads `<output_dir>/<plan_id>/evaluation.json` (bounded, like `metrics.json`), or
+/// `None` when the run was not scored (yet). A file that is not a format-1 record is an
+/// error, never shown as a score.
+pub fn read_evaluation(
+    runner: &dyn RemoteRunner,
+    profile: &ServerProfile,
+    output_dir: &str,
+    plan_id: &str,
+) -> Result<Option<EvaluationRecord>, String> {
+    crate::run_plan::validate_plan_id(plan_id)?;
+    let path = output_path(profile, output_dir, &format!("{plan_id}/evaluation.json"))?;
+    let command = format!(
+        "sh -c 'head -c {MAX_METRICS_BYTES} -- \"$1\"' sh {path}",
+        path = shell_quote(&path)
+    );
+    let result = runner
+        .run(&command, READ_TIMEOUT, None)
+        .map_err(|error| format!("Could not read evaluation.json: {error}"))?;
+    if !result.success || result.stdout.trim().is_empty() {
+        return Ok(None);
+    }
+    let value: Value = serde_json::from_str(&result.stdout)
+        .map_err(|error| format!("evaluation.json is not valid JSON: {error}"))?;
+    if value.get("format").and_then(Value::as_str) != Some("coperceive-evaluation")
+        || value.get("format_version").and_then(Value::as_u64) != Some(1)
+    {
+        return Err("evaluation.json is not a coperceive-evaluation format 1 record.".to_string());
+    }
+    let status = value.get("status").and_then(Value::as_str).unwrap_or("");
+    if !EVALUATION_STATUSES.contains(&status) {
+        return Err(format!("evaluation.json has an unknown status {status:?}."));
+    }
+    let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_string);
+    let list = |key: &str| -> Vec<String> {
+        value
+            .get(key)
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| match item {
+                        Value::String(text) => text.clone(),
+                        other => other.to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    Ok(Some(EvaluationRecord {
+        status: status.to_string(),
+        error: text("error"),
+        protocol: text("protocol"),
+        config_sha256: text("config_sha256"),
+        created_utc: text("created_utc"),
+        command: text("command"),
+        evaluated: list("evaluated"),
+        skipped: list("skipped"),
+        errors: list("errors"),
+    }))
+}
+
 /// Reads and validates the pipeline's `metrics.json`, or `None` when it does not
 /// exist yet (the run is still going, or it failed before the end).
 pub fn read_metrics(
@@ -326,12 +408,36 @@ pub fn import_predictions(
 ) -> Result<ImportedPredictions, String> {
     crate::run_plan::validate_plan_id(plan_id)?;
     let data_root = validate_data_root(profile, data_root)?;
-    let predictions_file = output_path(profile, output_dir, "predictions.jsonl")?;
     let predictions_root = format!("{}/predictions", data_root.trim_end_matches('/'));
     let predictions_root = normalise_path(&predictions_root, "predictions root")?;
     if !is_under(&predictions_root, &data_root) {
         return Err("The predictions root escapes the data root.".to_string());
     }
+    import_predictions_into(runner, profile, plan_id, output_dir, &data_root, &predictions_root)
+}
+
+/// The run's predictions store for a custom pipeline viewed over the stream path:
+/// `<output_dir>/viewer-predictions`, inside the run's own output (under results_root),
+/// so an import never writes into a dataset root.
+pub fn viewer_predictions_root(profile: &ServerProfile, output_dir: &str) -> Result<String, String> {
+    output_path(profile, output_dir, "viewer-predictions")
+}
+
+/// [`import_predictions`] with the scenes root and the predictions store chosen by the
+/// caller, which has validated both: `predictions import <run output>/predictions.jsonl
+/// --run <plan> --root <scenes_root> --predictions <predictions_root>`.
+pub fn import_predictions_into(
+    runner: &dyn RemoteRunner,
+    profile: &ServerProfile,
+    plan_id: &str,
+    output_dir: &str,
+    scenes_root: &str,
+    predictions_root: &str,
+) -> Result<ImportedPredictions, String> {
+    crate::run_plan::validate_plan_id(plan_id)?;
+    let data_root = scenes_root.to_string();
+    let predictions_root = predictions_root.to_string();
+    let predictions_file = output_path(profile, output_dir, "predictions.jsonl")?;
     let nonempty = runner
         .run(
             &format!("test -s -- {}", shell_quote(&predictions_file)),
@@ -567,6 +673,42 @@ mod tests {
     }
 
     #[test]
+    fn a_scored_runs_evaluation_record_is_read_and_checked() {
+        let out = "/data/results/runs/plan-1793222864-c5af819dbd2b";
+        let failed = r#"{"format":"coperceive-evaluation","format_version":1,"run_id":"plan-1793222864-c5af819dbd2b","command":"eval run","created_utc":"2026-11-23T12:00:00Z","status":"failed","error":"KeyError: 'ap'","protocol":"default (ranking per_frame, GT connected_union)","ranking_scope":"per_frame","gt_scope":"connected_union","config_sha256":"ab12","config_file":null,"config_file_sha256":null,"evaluated":[],"skipped":["coop"],"errors":[]}"#;
+        let runner = FakeRunner::default().with("evaluation.json", failed);
+        let record = read_evaluation(&runner, &profile(), out, PLAN_ID).expect("read").expect("some");
+        assert_eq!(record.status, "failed");
+        assert_eq!(record.error.as_deref(), Some("KeyError: 'ap'"));
+        assert_eq!(record.protocol.as_deref(), Some("default (ranking per_frame, GT connected_union)"));
+        assert_eq!(record.skipped, ["coop"]);
+        // The record is the run directory's, read bounded and quoted.
+        let calls = runner.calls();
+        let calls = calls.lock().unwrap();
+        assert!(calls[0].starts_with("sh -c 'head -c "), "{calls:?}");
+        assert!(calls[0].ends_with(&format!("{out}/{PLAN_ID}/evaluation.json")), "{calls:?}");
+        drop(calls);
+
+        // Not scored (yet): none.
+        let runner = FakeRunner::default().fail("evaluation.json");
+        assert!(read_evaluation(&runner, &profile(), out, PLAN_ID).expect("none").is_none());
+        // Anything else is an error, never shown as a score.
+        for bad in [
+            r#"{"format":"coperceive-evaluation","format_version":2,"status":"ok"}"#,
+            r#"{"format":"other","format_version":1,"status":"ok"}"#,
+            r#"{"format":"coperceive-evaluation","format_version":1,"status":"maybe"}"#,
+            "not json",
+        ] {
+            let runner = FakeRunner::default().with("evaluation.json", bad);
+            assert!(read_evaluation(&runner, &profile(), out, PLAN_ID).is_err(), "{bad}");
+        }
+        // The plan id is checked before it becomes part of a path.
+        let runner = FakeRunner::default();
+        assert!(read_evaluation(&runner, &profile(), out, "../x").is_err());
+        assert!(runner.calls().lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn metrics_are_validated_and_absent_metrics_are_none() {
         let good = r#"{"schema":"coperceive-pipeline-metrics","version":1,"run":{"model":"bev","scenes":["Town03-000"]},"outputs":[],"metrics":{"latency_ms_per_frame":41.2}}"#;
         let runner = FakeRunner::default().with("metrics.json", good);
@@ -612,6 +754,28 @@ mod tests {
         assert!(command.contains("--predictions /data/scenes/predictions"), "{command}");
         assert!(command.contains("--run plan-1"), "{command}");
         assert!(!command.contains("--scene"), "scene_id rows need no --scene: {command}");
+    }
+
+    #[test]
+    fn a_custom_run_viewed_over_the_stream_is_imported_into_its_own_output() {
+        // Open predictions on a custom pipeline: scenes from the open dataset (a cache
+        // under results_root), the store inside the run's output, never a data root.
+        let output = "/data/results/runs/plan-1793222864-c5af819dbd2b";
+        let store = viewer_predictions_root(&profile(), output).expect("store");
+        assert_eq!(store, format!("{output}/viewer-predictions"));
+        assert!(viewer_predictions_root(&profile(), "/data/scenes/x").is_err());
+        let runner = FakeRunner::default()
+            .with("test -s", "")
+            .with("head -n 1", r#"{"source":"bev","scene_id":"Town03-000"}"#)
+            .with("metrics.json", r#"{"schema":"coperceive-pipeline-metrics","version":1,"run":{"scenes":["Town03-000"]},"outputs":[],"metrics":{}}"#)
+            .with("predictions import", "");
+        let cache = "/data/results/coperceive-cache/opv2v/0123456789ab/test";
+        let imported = import_predictions_into(&runner, &profile(), PLAN_ID, output, cache, &store).expect("import");
+        assert_eq!(imported.predictions_root, store);
+        let calls = runner.calls();
+        let calls = calls.lock().unwrap();
+        let command = calls.iter().find(|cmd| cmd.contains("predictions import")).expect("import call");
+        assert!(command.contains(&format!("--root {cache} --predictions {store}")), "{command}");
     }
 
     #[test]

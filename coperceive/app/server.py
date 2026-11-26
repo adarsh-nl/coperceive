@@ -37,6 +37,8 @@ from coperceive.app.jobs import (
     open_db,
     run_job,
 )
+from coperceive.app.lease import ViewerLease
+from coperceive.app.lease import renews as lease_renews
 from coperceive.camera_images import served_candidates
 from coperceive.errors import CoperceiveError
 from coperceive.evaluation.predictions import predictions_root
@@ -230,6 +232,35 @@ class _AuthAndCsrfMiddleware:
             await _json_error(403, f"missing {CSRF_HEADER}: 1")(scope, receive, send)
             return
         await self.app(scope, receive, send)  # type: ignore[operator]
+
+
+class _LeaseMiddleware:
+    """Renews the viewer job's lease (:mod:`coperceive.app.lease`) on each ``/api``
+    request that counts as use, when it arrives and when it has been answered (a long
+    read still renews at its end).
+
+    ``create_app`` adds it before the auth guard. Starlette makes the last-added
+    middleware the outermost, so this one runs inside the guard and sees only
+    requests that passed authentication: a stranger's 401 never renews the lease.
+    """
+
+    def __init__(self, app: object, lease: ViewerLease) -> None:
+        self.app = app
+        self.lease = lease
+
+    async def __call__(self, scope: dict[str, object], receive: object, send: object) -> None:
+        if (
+            scope.get("type") != "http"
+            or scope.get("method") == "OPTIONS"
+            or not lease_renews(_route_path(scope))
+        ):
+            await self.app(scope, receive, send)  # type: ignore[operator]
+            return
+        self.lease.renew()
+        try:
+            await self.app(scope, receive, send)  # type: ignore[operator]
+        finally:
+            self.lease.renew()
 
 
 class _StreamHttpStats:
@@ -435,6 +466,7 @@ def create_app(
     remote: RemoteScenes | None = None,
     loopback_port: int | None = None,
     bundle_info: str | Path | None = None,
+    lease: ViewerLease | None = None,
 ) -> FastAPI:
     """The app over ``root``.
 
@@ -450,6 +482,9 @@ def create_app(
     ``bundle_info`` is an opened result bundle's ``open.json``: its per-scene
     sensor decision (included, from the recipient's local copy, or omitted with
     the dataset-licence note) is added to the scene summary, and the viewer says so.
+    ``lease`` is the viewer job's lease (``coperceive serve --heartbeat-file``): renewed
+    while authenticated ``/api`` requests arrive, so the job's watchdog ends it only
+    once the viewer is idle.
     """
     root_path_obj = Path(root).resolve()
     root_path_obj.mkdir(parents=True, exist_ok=True)
@@ -511,6 +546,9 @@ def create_app(
     # no token this app is the loopback-only mode (`coperceive serve` refuses a
     # non-loopback host without a token, and passes loopback_port so a foreign
     # Host is refused too), and the guard still enforces CSRF.
+    if lease is not None:
+        # Added before the guard, so it runs inside it (see _LeaseMiddleware).
+        app.add_middleware(_LeaseMiddleware, lease=lease)
     app.add_middleware(
         _AuthAndCsrfMiddleware,
         token=token,

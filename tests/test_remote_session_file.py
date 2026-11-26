@@ -254,6 +254,29 @@ def test_job_passes_media_roots_and_viewer_page_as_separate_arguments(tmp_path: 
 
 
 @needs_bash
+@pytest.mark.parametrize(("timeout", "renewed"), [("600", True), ("0", False)])
+def test_job_lets_the_served_viewer_renew_its_lease(
+    tmp_path: Path, timeout: str, renewed: bool
+) -> None:
+    # Before v0.1.2 nothing renewed the lease, so the job ended ~600 s after it
+    # started whatever --time said. With the lease off (0) there is nothing to renew.
+    data_root = tmp_path / "scenes"
+    data_root.mkdir()
+    env, capture = _job_env(tmp_path, str(data_root), "55bef61ccf2f60b8")
+    env["COPERCEIVE_HEARTBEAT_TIMEOUT"] = timeout
+
+    done = _run_job(env)
+
+    assert done.returncode == 0, done.stderr
+    argv: list[str] = json.loads((capture / "serve_argv.json").read_text(encoding="utf-8"))
+    lease = Path(env["HOME"]) / ".coperceive" / "sessions" / "55bef61ccf2f60b8.heartbeat"
+    if renewed:
+        assert argv[argv.index("--heartbeat-file") + 1] == str(lease)
+    else:
+        assert "--heartbeat-file" not in argv
+
+
+@needs_bash
 @pytest.mark.parametrize("variable", ["COPERCEIVE_REMOTE_MEDIA_ROOTS", "COPERCEIVE_REMOTE_STATIC"])
 def test_job_refuses_media_and_page_paths_with_control_characters(
     tmp_path: Path, variable: str
