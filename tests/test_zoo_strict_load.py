@@ -11,7 +11,11 @@ from __future__ import annotations
 import collections
 import importlib.util
 import io
+import json
+import os
 import struct
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -262,6 +266,18 @@ def test_discovery_reads_only_the_included_paths(tmp_path: Path) -> None:
     assert all("dataset" not in e["container"] for e in found)
 
 
+def test_the_routing_hint_reads_tags_as_nothing(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "noise: !!python/object/apply:collections.OrderedDict\n- - [add_noise, false]\n"
+        "evil: !!python/object/apply:os.system [touch pwned]\n"
+        "model:\n  core_method: point_pillar_comm_multiscale\n"
+    )
+    assert zoo._core_hint(str(config)) == "point_pillar_comm_multiscale"
+    config.write_text("model:\n  core_method: ../../os\n")
+    assert zoo._core_hint(str(config)) == ""
+
+
 def test_the_driver_refuses_to_write_under_the_checkpoint_root(tmp_path: Path) -> None:
     root = tmp_path / "ckpts"
     root.mkdir()
@@ -273,3 +289,252 @@ def test_the_driver_refuses_to_write_under_the_checkpoint_root(tmp_path: Path) -
             zoo.main([*argv, "--include", "x", "--repo", str(tmp_path)])
         assert exc.value.code == 2
     assert list(root.iterdir()) == []
+
+
+# --------------------------------------------------------------------------------------------
+# End to end: main() on a synthetic tree, with a stub torch and two stub codebases.
+# --------------------------------------------------------------------------------------------
+
+REPO = Path(__file__).resolve().parents[1]
+
+STUB_TORCH = """
+__version__ = "0.0+stub"
+
+
+class _Version:
+    cuda = None
+
+
+version = _Version()
+
+
+class _Cuda:
+    @staticmethod
+    def is_available():
+        return False
+
+    @staticmethod
+    def get_device_name(index):
+        return ""
+
+
+cuda = _Cuda()
+for _name in ("float32", "float64", "float16", "bfloat16", "int64", "int32", "int16",
+              "int8", "uint8", "bool"):
+    globals()[_name] = _name
+
+
+class Tensor:
+    def __init__(self, shape):
+        self.shape = tuple(shape)
+
+    def numel(self):
+        count = 1
+        for dim in self.shape:
+            count *= dim
+        return count
+
+
+def frombuffer(buffer, dtype):
+    return ("storage", dtype, len(buffer))
+
+
+def empty(count, dtype=None):
+    return ("storage", dtype, 0)
+
+
+def as_strided(storage, size, stride, offset):
+    return Tensor(size)
+"""
+
+STUB_TRAIN_UTILS = """
+import importlib
+
+
+def create_model(hypes):
+    name = hypes["model"]["core_method"]
+    lib = importlib.import_module(__package__.rsplit(".", 1)[0] + ".models." + name)
+    model = None
+    for attr, cls in lib.__dict__.items():
+        if attr.lower() == name.replace("_", "").lower():
+            model = cls
+    if model is None:
+        print("backbone not found")
+        exit(0)
+    return model(hypes["model"]["args"])
+"""
+
+STUB_MODEL = """
+import os
+from collections import OrderedDict
+
+import torch
+
+
+class {cls}:
+    def __init__(self, args):
+        report = os.environ.get("ZOO_TEST_REPORT", "")
+        if report and not os.path.exists(report):
+            raise RuntimeError("the report was not written before the first model was built")
+        self.shapes = OrderedDict((k, tuple(v)) for k, v in args["shapes"].items())
+
+    def state_dict(self):
+        return OrderedDict((k, torch.Tensor(s)) for k, s in self.shapes.items())
+
+    def load_state_dict(self, state, strict=True):
+        given = OrderedDict((k, tuple(v.shape)) for k, v in state.items())
+        if strict and dict(given) != dict(self.shapes):
+            raise RuntimeError("Error(s) in loading state_dict for {cls}")
+"""
+
+
+def _stub_codebase(src: Path, package: str, models: dict[str, str]) -> None:
+    for sub in ("", "hypes_yaml", "tools", "models"):
+        folder = src / package / sub
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "__init__.py").write_text("")
+    (src / package / "hypes_yaml" / "yaml_utils.py").write_text(
+        "def load_test_params(param):\n    param['parsed'] = True\n    return param\n"
+    )
+    (src / package / "tools" / "train_utils.py").write_text(STUB_TRAIN_UTILS)
+    for module, cls in models.items():
+        (src / package / "models" / f"{module}.py").write_text(STUB_MODEL.replace("{cls}", cls))
+
+
+def _config(name: str, core: str, shapes: str) -> str:
+    return (
+        f"name: {name}\nyaml_parser: load_test_params\n"
+        f"model:\n  core_method: {core}\n  args:\n    shapes: {shapes}\n"
+    )
+
+
+def _weights(items: list[tuple[str, int, tuple[int, ...]]]) -> bytes:
+    pickled: list[tuple[str, bytes]] = []
+    records: dict[str, bytes] = {}
+    for index, (name, numel, size) in enumerate(items):
+        stride = (size[1], 1) if len(size) == 2 else (1,)
+        pickled.append((name, _tensor(str(index), numel, size, stride)))
+        records[str(index)] = _floats(*([0.0] * numel))
+    return _torch_zip(_state_pickle(pickled), records)
+
+
+def _zoo_tree(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    stub = tmp_path / "stub"
+    (stub / "torch").mkdir(parents=True)
+    (stub / "torch" / "__init__.py").write_text(STUB_TORCH)
+    primary, other = tmp_path / "primary", tmp_path / "other"
+    _stub_codebase(primary, "fakecood", {"net_a": "NetA"})
+    _stub_codebase(other, "fakecood2", {"net_b": "NetB"})
+
+    root = tmp_path / "ckpts"
+    (root / "ck" / "other").mkdir(parents=True)
+    with zipfile.ZipFile(root / "ck" / "ok.zip", "w") as bundle:
+        bundle.writestr("a/config.yaml", _config("a", "net_a", "{w: [2, 3], b: [2]}"))
+        bundle.writestr("a/net_epoch1.pth", _weights([("w", 6, (2, 3)), ("b", 2, (2,))]))
+    with zipfile.ZipFile(root / "ck" / "bad.zip", "w") as bundle:
+        bundle.writestr("bad/config.yaml", _config("bad", "net_a", "{w: [2, 3], b: [2]}"))
+        bundle.writestr("bad/latest.pth", _weights([("w", 6, (3, 2)), ("extra", 1, (1,))]))
+    (root / "ck" / "other" / "config.yaml").write_text(_config("o", "net_b", "{v: [4]}"))
+    (root / "ck" / "other" / "net_epoch2.pth").write_bytes(_weights([("v", 4, (4,))]))
+    (root / "dataset").mkdir()
+    (root / "dataset" / "net_epoch9.pth").write_bytes(b"never read")
+    return stub, primary, other, root
+
+
+def _run_zoo(
+    tmp_path: Path, stub: Path, primary: Path, other: Path, root: Path, primary_src: Path
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    out = tmp_path / "out" / "report.json"
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join([str(stub), str(primary)])
+    env["ZOO_TEST_REPORT"] = str(out)
+    cmd = [
+        sys.executable,
+        "-B",
+        str(SCRIPT),
+        "--root",
+        str(root),
+        "--include",
+        "ck",
+        "--stage",
+        str(tmp_path / "stage"),
+        "--out",
+        str(out),
+        "--repo",
+        str(REPO),
+        "--primary-src",
+        str(primary_src),
+        "--package",
+        "fakecood",
+        "--expect-count",
+        "3",
+        "--codebase",
+        f"other={other}:fakecood2:{sys.executable}",
+    ]
+    done = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+    return done, out
+
+
+def _tree_state(root: Path) -> dict[str, tuple[int, int]]:
+    return {
+        str(path.relative_to(root)): (path.stat().st_size, path.stat().st_mtime_ns)
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def test_the_driver_end_to_end_on_a_synthetic_zoo(tmp_path: Path) -> None:
+    stub, primary, other, root = _zoo_tree(tmp_path)
+    before = _tree_state(root)
+    done, out = _run_zoo(tmp_path, stub, primary, other, root, primary)
+    assert done.returncode == 0, done.stdout + done.stderr
+    report: Any = json.loads(out.read_text())
+    assert report["complete"] is True
+    assert report["discovered"] == 3
+    assert report["includes"] == ["ck"]
+    rows: dict[str, Any] = {r["container"]: r for r in report["checkpoints"]}
+    assert sorted(rows) == ["ck/bad.zip", "ck/ok.zip", "ck/other/net_epoch2.pth"]
+
+    ok = rows["ck/ok.zip"]
+    assert ok["config_status"] == "ok"
+    assert ok["config_facts"]["model.core_method"] == "net_a"
+    assert ok["reader_status"] == "ok"
+    assert ok["tensors"] == 2
+    assert ok["model_status"] == "built"
+    assert ok["strict_load"] == "ok"
+    assert len(ok["container_hash"]["md5"]) == 32
+
+    bad = rows["ck/bad.zip"]
+    assert bad["strict_load"] == "failed"
+    assert bad["missing_keys"]["keys"] == ["b"]
+    assert bad["unexpected_keys"]["keys"] == ["extra"]
+    assert bad["shape_mismatches"]["items"] == [{"key": "w", "model": [2, 3], "checkpoint": [3, 2]}]
+
+    moved = rows["ck/other/net_epoch2.pth"]
+    assert moved["model_status"] == "module not found"
+    assert moved["strict_load"] == "not run"
+    (retry,) = moved["other_codebases"]
+    assert retry["codebase"] == "other"
+    assert retry["model_status"] == "built"
+    assert retry["strict_load"] == "ok"
+    assert retry["codebase_package"] == "fakecood2"
+
+    assert report["strict_load_counts"] == {"ok": 1, "failed": 1, "not run": 1}
+    assert "missing_keys (1):" in done.stdout
+    assert "unexpected_keys (1):" in done.stdout
+    assert "w: model [2, 3] checkpoint [3, 2]" in done.stdout
+    assert "in other: ok" in done.stdout
+    assert _tree_state(root) == before
+    assert not (tmp_path / "stage" / "work").exists()
+
+
+def test_the_driver_stops_when_the_package_is_not_from_the_pinned_checkout(
+    tmp_path: Path,
+) -> None:
+    stub, primary, other, root = _zoo_tree(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    done, out = _run_zoo(tmp_path, stub, primary, other, root, elsewhere)
+    assert done.returncode == 3, done.stdout + done.stderr
+    assert "not from --primary-src" in done.stderr
+    assert not out.exists()

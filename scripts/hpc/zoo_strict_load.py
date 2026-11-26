@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Strict-load every OpenCOOD checkpoint under a root, running no code from the files.
+"""Strict-load the OpenCOOD checkpoints at named paths, running no code from the files.
 
 A diagnostic job for the OpenCOOD model zoo (v0.1.3), run by ``zoo_strict_load.sbatch`` on a
 compute node, never on the login node (importing torch there takes minutes). For every weights
-file (``.pth``/``.pt``/``.ckpt``) found under ``--root``, in a ``.zip`` or as a plain file:
+file (``.pth``/``.pt``/``.ckpt``) in the ``--include`` paths (folders or files relative to
+``--root``; nothing else under the root is read), in a ``.zip`` or as a plain file:
 
 1. the file holding it is copied to ``--stage`` (node-local scratch) and hashed (MD5, the
    protocol's checkpoint digest, and SHA-256);
@@ -18,14 +19,18 @@ file (``.pth``/``.pt``/``.ckpt``) found under ``--root``, in a ``.zip`` or as a 
 5. missing, unexpected and shape-mismatched keys are listed, then
    ``model.load_state_dict(state, strict=True)`` is called and its outcome recorded.
 
-One JSON report is written to ``--out``. Nothing is written under ``--root``: ``--stage`` and
-``--out`` are refused if they resolve inside it, and the root is only opened for reading.
-No dataset is opened and no forward pass runs.
+One JSON report is written to ``--out``, rewritten after every checkpoint (``complete`` is
+true only at the end), and the job log lists each checkpoint's keys. Nothing is written under
+``--root``: ``--stage`` and ``--out`` are refused if they resolve inside it, and the root is
+only opened for reading. No dataset is opened and no forward pass runs. The primary package
+must import from ``--primary-src`` (exit 3 otherwise), so the commit the job script checks is
+the code that runs.
 
-A model whose module is not in the primary codebase (``opencood``) is retried, in a child
-process, in each ``--codebase NAME=SRC_ROOT:PACKAGE`` that has ``PACKAGE/models/<module>.py``;
-the report labels those results with the codebase, so a non-OpenCOOD build is never reported
-as an OpenCOOD one.
+A model whose module is not in the primary codebase (``opencood``), or whose config the
+primary codebase cannot read, is retried in a child process in each
+``--codebase NAME=SRC_ROOT:PACKAGE[:PYTHON]`` that has ``PACKAGE/models/<module>.py`` (with
+that interpreter, if given); the report labels those results with the codebase, so a
+non-OpenCOOD build is never reported as an OpenCOOD one.
 
 Python 3.7 compatible: the opencood-official environment is Python 3.7.16, torch 1.12.1.
 """
@@ -427,6 +432,27 @@ def _ordered_dict_loader(cfgmod):  # noqa: ANN001, ANN202
     return load
 
 
+def _core_hint(path: str) -> str:
+    """``model.core_method`` from a config no reader accepted, for routing only.
+
+    Every tag is read as ``None`` (nothing is built, imported or called); the result only
+    decides which ``--codebase`` child gets to read the config with its own code.
+    """
+    import yaml
+
+    class Lenient(yaml.SafeLoader):
+        pass
+
+    Lenient.add_multi_constructor("", lambda loader, suffix, node: None)
+    try:
+        with open(path, "rb") as handle:
+            data = yaml.load(handle, Loader=Lenient)  # noqa: S506 - a SafeLoader subclass
+        core = data["model"]["core_method"]
+    except Exception:  # noqa: BLE001 - no hint is a valid answer
+        return ""
+    return core if isinstance(core, str) and core.replace("_", "").isalnum() else ""
+
+
 def _short_error(exc: BaseException, limit: int = 4000) -> str:
     text = f"{type(exc).__name__}: {exc}"
     return text if len(text) <= limit else text[:limit] + f" ... [{len(text) - limit} more chars]"
@@ -489,6 +515,9 @@ def check_one(entry: dict, stage: str, repo: str, package: str, relaxed_ordered_
         except Exception as exc:  # noqa: BLE001
             result["config_status"] = "error"
             result["config_error"] = _short_error(exc)
+
+    if config_path and not isinstance(config, dict):
+        result["core_hint"] = _core_hint(config_path)
 
     if isinstance(config, dict):
         model_cfg = config.get("model") if isinstance(config.get("model"), dict) else {}
@@ -906,7 +935,11 @@ def main(argv=None) -> int:  # noqa: ANN001
                 driver_traceback=_tail(),
             )
         core = (result.get("config_facts") or {}).get("model.core_method") or ""
-        if result.get("model_status") == "module not found" and core:
+        not_here = result.get("model_status") == "module not found"
+        if not core and result.get("core_hint"):
+            # This codebase could not read the config; a codebase that has the model may.
+            core, not_here = result["core_hint"], True
+        if not_here and core:
             others = []
             for cb in codebases:
                 module_file = os.path.join(
