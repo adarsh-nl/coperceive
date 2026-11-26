@@ -1,6 +1,6 @@
 # ADR 0020 — The viewer at real dataset scale
 
-Status: proposed on 2026-11-16, revised on 2026-11-24 for `release/v0.1.3` (PR #174).
+Status: proposed on 2026-11-16, revised on 2026-11-26 for `release/v0.1.3` (PR #174).
 Code is cited from `release/v0.1.3` at `17b4ea0`. Sizes below are arithmetic from the
 formats unless they say measured. No viewer behaviour changes until this is approved.
 
@@ -73,16 +73,19 @@ before and after. A change that moves no budgeted number is dropped.
   machine record.
 - **Baseline:** the first measured numbers go into the PR before any phase 1 change. None
   are recorded yet; see DECISION (Adarsh) 1.
-- **DECISION (Adarsh) 1: where phase 0 is measured.**
-  - (a) A report-only step in the CI `e2e` job runs `viewer_bench.py --quick` (4 × 160k × 16
-    × 30) and prints the table to the job summary. That is GitHub's Linux runner and
-    SwiftShader, so render numbers measure the CPU. It needs a `ci.yml` change. It also
-    lists `tests/test_scale_fixture.py` there, so the bench test stops skipping in CI.
-  - (b) A CPU job on the cluster that you submit, with the fixture in `/local`. This is
+- **DECISION (Adarsh) 1: where the real-scale numbers come from.**
+  - (a) **CI on every PR:** a report-only step in the `e2e` job runs `viewer_bench.py
+    --quick` (4 × 160k × 16 × 30) and prints the table to the job summary. That is
+    GitHub's Linux runner and SwiftShader, so render numbers measure the CPU. It also
+    lists `tests/test_scale_fixture.py` there, so the bench test stops skipping in CI. It
+    adds CI time to every PR (not measured).
+  - (b) **Once on your Mac, plus a manual-trigger workflow** (`workflow_dispatch`) that runs
+    the same `--quick` bench on demand. The Mac run gives the hardware number; whether
+    headless Chromium gets hardware WebGL there is unverified, and the report's renderer
+    string shows it (`--headed` if not). The PM recommends this.
+  - (c) **A cluster job** that you submit: a CPU job with the fixture in `/local`. This is
     also SwiftShader.
-  - (c) A run on your Mac. Whether headless Chromium gets hardware WebGL there is
-    unverified; the report's renderer string shows it (`--headed` if not).
-  - Recommended: (a) for every PR, and (c) once for the hardware number.
+  - No CI step or workflow is added until you decide.
 - **DECISION (Adarsh) 2: measurement-only hooks in agy's files.**
   - Timing marks in `Viewer.tsx` would split the points wait, colour fill and buffer copy
     in `draw`, and the upload in `render`.
