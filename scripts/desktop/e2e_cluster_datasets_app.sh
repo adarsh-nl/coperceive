@@ -836,6 +836,39 @@ print(f"Step CD-18 verified: while prepare job {job_id} ran (others {sorted(set(
       "the job then finished")
 PY
 
+# --- Flow L: open, close the viewer, open again (feature C phase 0) -------------
+# One running app: Open a ready scene, close the viewer window, Open it again.
+# It asserts what reopening costs today (a new viewer server and a new ssh
+# stream each time, no job) and prints the timings. They measure the mechanism
+# with a local fake ssh and a warm cache, not the cluster. The driver reads the
+# token from dataset_open and never prints it. Runs before Flow F, which is the
+# first flow to set a saved data root (start_local).
+REOPEN_MARKER="${TMP_DIR}/reopen-marker.txt"
+REOPEN_SSH_LOG="${TMP_DIR}/reopen-ssh.txt"
+rm -f "${REOPEN_MARKER}" "${REOPEN_SSH_LOG}"
+COPERCEIVE_TEST_ENV=1 \
+COPERCEIVE_E2E_REQUIRE_PREFIX=1 \
+COPERCEIVE_STATE_DIR="${TMP_DIR}/state" \
+COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
+FAKE_REMOTE_HOME="${REMOTE_HOME}" \
+FAKE_CLUSTER_PYTHON="${PYTHON}" \
+FAKE_SSH_LOG="${REOPEN_SSH_LOG}" \
+COPERCEIVE_REMOTE_VIEW_CACHE="${TMP_DIR}/remote-view" \
+COPERCEIVE_TEST_MARKER_FILE="${REOPEN_MARKER}" \
+"${APP_EXE}" >"${TMP_DIR}/reopen.stdout.log" 2>"${TMP_DIR}/reopen.stderr.log" &
+APP_PID=$!
+REOPEN_STATUS=0
+"${PYTHON}" "${ROOT_DIR}/scripts/desktop/e2e_reopen_flow.py" \
+    --marker "${REOPEN_MARKER}" \
+    --dataset-args "${DATASET_ARGS}" \
+    --ssh-log "${REOPEN_SSH_LOG}" \
+    --scene scene_0000 --scene scene_0001 --scene scene_0002 || REOPEN_STATUS=$?
+kill -TERM "${APP_PID}" 2>/dev/null || true
+wait "${APP_PID}" 2>/dev/null || true
+APP_PID=""
+stop_fake_cluster
+[ "${REOPEN_STATUS}" -eq 0 ] || fail "open -> close -> reopen (CD-20) failed (ssh log: $(tr '\n' ',' < "${REOPEN_SSH_LOG}" 2>/dev/null))"
+
 # --- Flow F: remote session followed by local scene clears streaming header ---
 # Must run before Flow E (`old` overwrites the saved profile in state with fake_old_python.sh).
 # In the SAME running app process: open a remote fake-SSH scene (dataset_open),
