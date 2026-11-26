@@ -44,6 +44,8 @@ pub struct ControllerConfig {
     /// the window the request names (`"window": "main"`).
     pub eval_dispatcher: Option<EvalDispatcher>,
     pub window_closer: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    /// Triggers a clean app exit (test mode only).
+    pub app_quitter: Option<Arc<dyn Fn() + Send + Sync>>,
     /// Shows and focuses the main window on its Library; returns whether it is visible.
     pub library_shower: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     pub export_picker: Option<ExportPicker>,
@@ -75,6 +77,7 @@ impl ControllerConfig {
             eval_counter: Arc::new(Mutex::new(0)),
             eval_dispatcher: None,
             window_closer: None,
+            app_quitter: None,
             library_shower: None,
             export_picker: None,
             export_saver: None,
@@ -328,6 +331,15 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             closer("viewer");
         }
         write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"closed\":true}")?;
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/quit" {
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"quitting\":true}")?;
+        let _ = writer.flush();
+        if let Some(ref quitter) = config.app_quitter {
+            quitter();
+        }
         return Ok(());
     }
 
@@ -1783,5 +1795,38 @@ pub mod tests {
             open_fn.contains("controller::sync_viewer_origin("),
             "open_viewer_window must call controller::sync_viewer_origin so remote_connect and other callers update controller allowed_origin"
         );
+    }
+
+    #[test]
+    fn test_quit_endpoint_requires_auth_and_calls_quitter() {
+        let mut config = make_test_config();
+        let quit_calls = Arc::new(Mutex::new(0));
+        let counter = quit_calls.clone();
+        config.app_quitter = Some(Arc::new(move || {
+            *counter.lock().unwrap() += 1;
+        }));
+        let request = |auth: &str| {
+            format!(
+                "POST /quit HTTP/1.1\r\n\
+                 Host: 127.0.0.1:51234\r\n\
+                 Origin: http://127.0.0.1:8000\r\n\
+                 Authorization: Bearer {auth}\r\n\
+                 Content-Length: 0\r\n\r\n"
+            )
+        };
+
+        let mut writer = Vec::new();
+        let mut reader = Cursor::new(request("wrong").into_bytes());
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        assert!(String::from_utf8(writer).unwrap().starts_with("HTTP/1.1 401"));
+        assert_eq!(*quit_calls.lock().unwrap(), 0);
+
+        let mut writer = Vec::new();
+        let mut reader = Cursor::new(request("secret-token-test-123").into_bytes());
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "{resp}");
+        assert!(resp.ends_with(r#"{"quitting":true}"#), "{resp}");
+        assert_eq!(*quit_calls.lock().unwrap(), 1);
     }
 }

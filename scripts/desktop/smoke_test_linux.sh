@@ -68,27 +68,38 @@ export WEBKIT_FORCE_SANDBOX=0
 export LIBGL_ALWAYS_SOFTWARE=1
 export APPIMAGE_EXTRACT_AND_RUN=1
 
-# Require bundled Python in installed package; never fall back to repo or system python
-PYTHON_BIN=""
-for candidate in \
-    "/usr/lib/Coperceive/resources/python/bin/python3" \
-    "/usr/lib/coperceive-desktop/resources/python/bin/python3" \
-    "/usr/lib/coperceive/resources/python/bin/python3" \
-    "$(dirname "${APP_EXE}")/../lib/Coperceive/resources/python/bin/python3" \
-    "$(dirname "${APP_EXE}")/../lib/coperceive-desktop/resources/python/bin/python3"; do
-    if [ -x "${candidate}" ]; then
-        PYTHON_BIN="$(readlink -f "${candidate}")"
-        break
+# Require bundled Python in installed package; never fall back to repo or system python.
+# AppImage extracts its bundled Python at runtime into /tmp/.mount_*, verified below via COPERCEIVE_DEMO_OUTCOME.
+IS_APPIMAGE=0
+case "${APP_EXE}" in
+    *.AppImage)
+        IS_APPIMAGE=1
+        echo "AppImage mode: bundled Python will be verified from mounted AppImage runtime."
+        ;;
+esac
+
+if [ "${IS_APPIMAGE}" -eq 0 ]; then
+    PYTHON_BIN=""
+    for candidate in \
+        "/usr/lib/Coperceive/resources/python/bin/python3" \
+        "/usr/lib/coperceive-desktop/resources/python/bin/python3" \
+        "/usr/lib/coperceive/resources/python/bin/python3" \
+        "$(dirname "${APP_EXE}")/../lib/Coperceive/resources/python/bin/python3" \
+        "$(dirname "${APP_EXE}")/../lib/coperceive-desktop/resources/python/bin/python3"; do
+        if [ -x "${candidate}" ]; then
+            PYTHON_BIN="$(readlink -f "${candidate}")"
+            break
+        fi
+    done
+
+    if [ -z "${PYTHON_BIN}" ]; then
+        echo "Error: Bundled Python interpreter not found in installed package or resources!" >&2
+        exit 2
     fi
-done
 
-if [ -z "${PYTHON_BIN}" ]; then
-    echo "Error: Bundled Python interpreter not found in installed package or resources!" >&2
-    exit 2
+    echo "Found bundled Python: ${PYTHON_BIN}"
+    echo "Python version: $("${PYTHON_BIN}" --version)"
 fi
-
-echo "Found bundled Python: ${PYTHON_BIN}"
-echo "Python version: $("${PYTHON_BIN}" --version)"
 unset COPERCEIVE_PYTHON
 
 echo ""
@@ -499,6 +510,20 @@ fi
 echo "Verified predictions/evaluation view: ${LAST_COMPARE_STATE}"
 capture_screenshot "demo_viewer"
 
+echo "Verifying demo 1x playback advances frames smoothly without 'Buffering'..."
+PLAYBACK_START_RESP=$(curl -s -f -X POST \
+    -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d '{"window":"viewer","script":"(() => { const s0 = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (s0 && !s0.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? null; })()"}' \
+    "http://127.0.0.1:${DEMO_CTRL_PORT}/eval")
+echo "Playback started: ${PLAYBACK_START_RESP}"
+
+python3 "${ROOT_DIR}/scripts/desktop/playback_metrics.py" poll \
+    --port "${DEMO_CTRL_PORT}" \
+    --secret "${DEMO_CTRL_SECRET}" \
+    --polls 25 \
+    --interval 0.2 || exit 26
+
 DEMO_OUTCOME_LINE=$(grep "COPERCEIVE_DEMO_OUTCOME:" "${DEMO_STDOUT}" | tail -n 1 || echo "")
 if [ -z "${DEMO_OUTCOME_LINE}" ]; then
     echo "Error: COPERCEIVE_DEMO_OUTCOME log line not found in app stdout!" >&2
@@ -507,18 +532,33 @@ if [ -z "${DEMO_OUTCOME_LINE}" ]; then
 fi
 echo "${DEMO_OUTCOME_LINE}"
 OUTCOME_PYTHON=$(echo "${DEMO_OUTCOME_LINE}" | sed -n 's/.*python=\([^ ]*\).*/\1/p')
-case "${OUTCOME_PYTHON}" in
-    /usr/lib/Coperceive/resources/python/*|/usr/lib/coperceive-desktop/resources/python/*|/usr/lib/coperceive/resources/python/*)
-        if [ ! -x "${OUTCOME_PYTHON}" ]; then
-            echo "Error: Outcome python is not executable: ${OUTCOME_PYTHON}" >&2
+if [ "${IS_APPIMAGE}" -eq 1 ]; then
+    case "${OUTCOME_PYTHON}" in
+        /tmp/.mount_*/usr/lib/Coperceive/resources/python/*|/tmp/.mount_*/usr/lib/coperceive-desktop/resources/python/*|/tmp/.mount_*/usr/lib/coperceive/resources/python/*|/tmp/appimage_extracted_*/usr/lib/Coperceive/resources/python/*|/tmp/appimage_extracted_*/usr/lib/coperceive-desktop/resources/python/*|/tmp/appimage_extracted_*/usr/lib/coperceive/resources/python/*)
+            if [ ! -x "${OUTCOME_PYTHON}" ]; then
+                echo "Error: AppImage outcome python is not executable: ${OUTCOME_PYTHON}" >&2
+                exit 25
+            fi
+            ;;
+        *)
+            echo "Error: AppImage demo did not run with embedded AppImage Python! Got '${OUTCOME_PYTHON}'" >&2
             exit 25
-        fi
-        ;;
-    *)
-        echo "Error: Demo did not run with the installed package's bundled Python! Expected under /usr/lib/Coperceive/resources/python/, got '${OUTCOME_PYTHON}'" >&2
-        exit 25
-        ;;
-esac
+            ;;
+    esac
+else
+    case "${OUTCOME_PYTHON}" in
+        /usr/lib/Coperceive/resources/python/*|/usr/lib/coperceive-desktop/resources/python/*|/usr/lib/coperceive/resources/python/*)
+            if [ ! -x "${OUTCOME_PYTHON}" ]; then
+                echo "Error: Outcome python is not executable: ${OUTCOME_PYTHON}" >&2
+                exit 25
+            fi
+            ;;
+        *)
+            echo "Error: Demo did not run with the installed package's bundled Python! Expected under /usr/lib/Coperceive/resources/python/, got '${OUTCOME_PYTHON}'" >&2
+            exit 25
+            ;;
+    esac
+fi
 echo "Verified: Demo ran with bundled Python inside installed package: ${OUTCOME_PYTHON}"
 echo "DEMO_SMOKE_VERIFIED: os=linux viewer=${LAST_VIEWER_STATE} predictions=${LAST_COMPARE_STATE} outcome=\"${DEMO_OUTCOME_LINE}\""
 

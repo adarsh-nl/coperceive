@@ -26,6 +26,7 @@ import {
   type SubmitOptions,
 } from "./runPlan";
 import { errorText } from "./errors";
+import { getRevealLabel } from "./platform";
 import BundlePanel from "./BundlePanel";
 import { openBundleViewer, pickBundleFile } from "./local";
 import {
@@ -460,7 +461,7 @@ export default function RunHistory() {
         <p role="status" className="c-page-note" style={{ color: "var(--ok)" }}>
           Saved the repro card.{" "}
           <button type="button" className="c-secondary" onClick={() => void revealInFinder(savedCard)}>
-            Show in Finder
+            {getRevealLabel()}
           </button>
         </p>
       ) : null}

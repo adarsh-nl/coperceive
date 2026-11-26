@@ -35,7 +35,7 @@ fi
 case "${source_path}" in
     */.)
         mkdir -p "${destination}"
-        cp -R "${source_path%/.}/" "${destination}/"
+        cp -R "${source_path}" "${destination}/"
         ;;
     *)
         [ -e "${source_path}" ] || { echo "scp: ${paths[0]}: No such file or directory" >&2; exit 1; }

@@ -15,7 +15,7 @@ assert spec and spec.loader
 verify_e2e_steps: Any = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verify_e2e_steps)
 
-SAMPLE_PASSING_LOG = (
+SHARED_LOG_BODY = (
     "Step 1 UI interactions verified successfully.\n"
     'Step 1 verified state.json content: {"viewpoint": "chase"}\n'
     "Step 1b verified: Still exported successfully and non-empty PNG asserted.\n"
@@ -40,7 +40,16 @@ SAMPLE_PASSING_LOG = (
     "and updated state.json.\n"
     "Step 5g verified: Library badge ran in the background and its answer is cached.\n"
     "Step 5j verified: Export repro card showed missing fields and saved the card.\n"
-    "Real-App macOS E2E Test PASSED Successfully!\n"
+)
+
+SAMPLE_PASSING_LOG = SHARED_LOG_BODY + "Real-App macOS E2E Test PASSED Successfully!\n"
+
+SAMPLE_LINUX_PASSING_LOG = (
+    SHARED_LOG_BODY
+    + "Step 5h skipped-with-reason (Linux): macOS-only osascript/pbpaste/Cmd+ Edit-menu "
+    "and auto-capitalization checks do not apply on Linux; DOM input attributes "
+    "(autocapitalize/autocorrect/spellcheck/autocomplete) were verified.\n"
+    "Real-App Linux E2E Test PASSED Successfully!\n"
 )
 
 
@@ -49,32 +58,48 @@ def test_verify_e2e_log_all_present() -> None:
     assert missing == []
 
 
+def test_verify_e2e_log_linux_all_present() -> None:
+    missing: list[str] = verify_e2e_steps.verify_e2e_log(SAMPLE_LINUX_PASSING_LOG, platform="linux")
+    assert missing == []
+
+
+def test_verify_e2e_log_linux_requires_explicit_5h_skip_reason() -> None:
+    no_5h = SHARED_LOG_BODY + "Real-App Linux E2E Test PASSED Successfully!\n"
+    missing: list[str] = verify_e2e_steps.verify_e2e_log(no_5h, platform="linux")
+    assert missing == [verify_e2e_steps.LINUX_SKIP_5H_MARKER]
+
+
 def test_verify_e2e_log_detects_missing_step() -> None:
     # Remove Step 3b
-    truncated = "\n".join(
-        line for line in SAMPLE_PASSING_LOG.splitlines() if "Step 3b verified" not in line
-    )
-    missing: list[str] = verify_e2e_steps.verify_e2e_log(truncated)
-    assert len(missing) == 1
-    assert "Step 3b verified" in missing[0]
+    for platform, sample in (("macos", SAMPLE_PASSING_LOG), ("linux", SAMPLE_LINUX_PASSING_LOG)):
+        truncated = "\n".join(
+            line for line in sample.splitlines() if "Step 3b verified" not in line
+        )
+        missing: list[str] = verify_e2e_steps.verify_e2e_log(truncated, platform=platform)
+        assert len(missing) == 1
+        assert "Step 3b verified" in missing[0]
 
 
 def test_verify_e2e_log_detects_missing_playback_requirement() -> None:
     # Remove Playback requirement (c) verified
     marker = "Playback requirement (c) verified"
-    truncated = "\n".join(line for line in SAMPLE_PASSING_LOG.splitlines() if marker not in line)
-    missing: list[str] = verify_e2e_steps.verify_e2e_log(truncated)
-    assert len(missing) == 1
-    assert marker in missing[0]
+    for platform, sample in (("macos", SAMPLE_PASSING_LOG), ("linux", SAMPLE_LINUX_PASSING_LOG)):
+        truncated = "\n".join(line for line in sample.splitlines() if marker not in line)
+        missing: list[str] = verify_e2e_steps.verify_e2e_log(truncated, platform=platform)
+        assert len(missing) == 1
+        assert marker in missing[0]
 
 
 def test_verify_e2e_log_detects_missing_passed() -> None:
     # Remove final PASSED line
-    marker = "Real-App macOS E2E Test PASSED"
-    truncated = "\n".join(line for line in SAMPLE_PASSING_LOG.splitlines() if marker not in line)
-    missing: list[str] = verify_e2e_steps.verify_e2e_log(truncated)
-    assert len(missing) == 1
-    assert marker in missing[0]
+    for platform, sample, marker in (
+        ("macos", SAMPLE_PASSING_LOG, "Real-App macOS E2E Test PASSED"),
+        ("linux", SAMPLE_LINUX_PASSING_LOG, "Real-App Linux E2E Test PASSED"),
+    ):
+        truncated = "\n".join(line for line in sample.splitlines() if marker not in line)
+        missing: list[str] = verify_e2e_steps.verify_e2e_log(truncated, platform=platform)
+        assert len(missing) == 1
+        assert marker in missing[0]
 
 
 def test_lab_profile_marker_is_required_for_that_log() -> None:
@@ -97,7 +122,15 @@ def test_main_cli_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     failing_lines = [line for line in SAMPLE_PASSING_LOG.splitlines() if "Step 5f" not in line]
     failing_file.write_text("\n".join(failing_lines), encoding="utf-8")
 
+    linux_passing_file = tmp_path / "linux_passing.log"
+    linux_passing_file.write_text(SAMPLE_LINUX_PASSING_LOG, encoding="utf-8")
+
     monkeypatch.setattr("sys.argv", ["verify_e2e_steps.py", str(passing_file)])
+    assert verify_e2e_steps.main() == 0
+
+    monkeypatch.setattr(
+        "sys.argv", ["verify_e2e_steps.py", "--os", "linux", str(linux_passing_file)]
+    )
     assert verify_e2e_steps.main() == 0
 
     monkeypatch.setattr("sys.argv", ["verify_e2e_steps.py", str(failing_file)])

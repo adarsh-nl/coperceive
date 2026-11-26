@@ -1037,18 +1037,50 @@ async fn diagnostics_save_zip(
 }
 
 /// Bring the main window forward on its Library. The viewer window stays the
-/// one viewer (opening a scene from the Library replaces it); it never renders
-/// the Library itself, because it has no Tauri IPC.
+/// Poll briefly until a window reports visible after `show()`. On Linux/GTK (`tao`),
+/// `show()` queues `WindowRequest::Visible(true)` asynchronously, so an immediate
+/// `set_focus()` / `is_visible()` sees stale `false` until the main loop drains it.
+fn wait_until_window_visible<F>(mut is_visible: F, max_attempts: usize, delay: Duration) -> bool
+where
+    F: FnMut() -> bool,
+{
+    if is_visible() {
+        return true;
+    }
+    for _ in 0..max_attempts {
+        std::thread::sleep(delay);
+        if is_visible() {
+            return true;
+        }
+    }
+    false
+}
+
+fn present_main_window(main: &tauri::WebviewWindow) -> bool {
+    let _ = main.unminimize();
+    let _ = main.show();
+    let visible = wait_until_window_visible(
+        || main.is_visible().unwrap_or(false),
+        25,
+        Duration::from_millis(20),
+    );
+    let _ = main.set_focus();
+    visible
+}
+
+/// Shows and focuses the main Connect/Library window and tells it to switch to
+/// its Library tab. Called from the viewer window's wordmark button (and from the
+/// controller's `/show-library` endpoint in E2E tests). The viewer itself stays
+/// open because desktop only permits one viewer (opening a scene from the Library
+/// replaces it); it never renders the Library itself, because it has no Tauri IPC.
 fn show_library_window(app: &tauri::AppHandle) -> bool {
     use tauri::{Emitter, Manager};
     let Some(main) = app.get_webview_window("main") else {
         return false;
     };
-    let _ = main.unminimize();
-    let _ = main.show();
-    let _ = main.set_focus();
+    let shown = present_main_window(&main);
     let _ = main.emit("navigate-library", ());
-    main.is_visible().unwrap_or(false)
+    shown
 }
 
 fn viewer_session_status(state: &AppState) -> serde_json::Value {
@@ -1101,11 +1133,9 @@ fn prepare_scene_in_main_window(app: &tauri::AppHandle, scene_id: &str) -> Resul
     let Some(main) = app.get_webview_window("main") else {
         return Ok(false);
     };
-    let _ = main.unminimize();
-    let _ = main.show();
-    let _ = main.set_focus();
+    let shown = present_main_window(&main);
     let _ = main.emit("prepare-scene", serde_json::json!({ "scene_id": scene_id }));
-    Ok(main.is_visible().unwrap_or(false))
+    Ok(shown)
 }
 
 fn reveal_last_export_inner(state: &AppState) -> Result<(), String> {
@@ -1354,22 +1384,26 @@ mod viewer_bridge {
     }
 
     #[tauri::command]
-    pub fn viewer_prepare_scene(
+    pub async fn viewer_prepare_scene(
         window: tauri::WebviewWindow,
         app: tauri::AppHandle,
         scene_id: String,
     ) -> Result<bool, String> {
         ensure_viewer_window(&window)?;
-        prepare_scene_in_main_window(&app, &scene_id)
+        tauri::async_runtime::spawn_blocking(move || prepare_scene_in_main_window(&app, &scene_id))
+            .await
+            .map_err(|e| e.to_string())?
     }
 
     #[tauri::command]
-    pub fn viewer_show_library(
+    pub async fn viewer_show_library(
         window: tauri::WebviewWindow,
         app: tauri::AppHandle,
     ) -> Result<bool, String> {
         ensure_viewer_window(&window)?;
-        let shown = show_library_window(&app);
+        let shown = tauri::async_runtime::spawn_blocking(move || show_library_window(&app))
+            .await
+            .map_err(|e| e.to_string())?;
         eprintln!("[viewer] show-library -> shown={shown} (ipc)");
         Ok(shown)
     }
@@ -1552,6 +1586,10 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
         if let Some(w) = handle_close.get_webview_window(label) {
             let _ = w.close();
         }
+    }));
+    let handle_quit = app_handle.clone();
+    cfg.app_quitter = Some(Arc::new(move || {
+        handle_quit.exit(0);
     }));
 
     let picker_handle = app_handle.clone();
@@ -5885,5 +5923,41 @@ fn main() {
             _ => {}
         }
     });
+}
+
+#[cfg(test)]
+mod show_window_tests {
+    use super::wait_until_window_visible;
+    use std::time::Duration;
+
+    #[test]
+    fn wait_until_window_visible_succeeds_after_async_show() {
+        let mut checks = 0usize;
+        let visible = wait_until_window_visible(
+            || {
+                checks += 1;
+                checks >= 3
+            },
+            5,
+            Duration::from_millis(1),
+        );
+        assert!(visible);
+        assert_eq!(checks, 3);
+    }
+
+    #[test]
+    fn wait_until_window_visible_returns_false_when_never_shown() {
+        let mut checks = 0usize;
+        let visible = wait_until_window_visible(
+            || {
+                checks += 1;
+                false
+            },
+            3,
+            Duration::from_millis(1),
+        );
+        assert!(!visible);
+        assert_eq!(checks, 4);
+    }
 }
 

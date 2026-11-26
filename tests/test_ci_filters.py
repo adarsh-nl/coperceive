@@ -280,3 +280,32 @@ def test_all_workflow_pip_installs_are_constrained_by_uv_lock() -> None:
                     checked_workflows.add(wf_path.name)
 
     assert {"ci.yml", "release.yml", "pages.yml"}.issubset(checked_workflows)
+
+
+def test_desktop_linux_runs_real_app_e2e_and_appimage_smoke() -> None:
+    """Verify desktop-linux exercises installed .deb E2E suites and built AppImage smoke."""
+    data = _load_ci_workflow()
+    jobs = cast(dict[str, Any], data.get("jobs", {}))
+    assert "desktop-linux" in jobs, "Workflow must include a 'desktop-linux' job"
+    linux_job = cast(dict[str, Any], jobs["desktop-linux"])
+    steps = cast(list[dict[str, Any]], linux_job.get("steps", []))
+    run_cmds = "\n".join(str(s.get("run", "")) for s in steps)
+
+    for required in (
+        "apt-get install -y",
+        "xvfb-run",
+        "dbus-run-session",
+        'INSTALLED_BIN="/usr/bin/coperceive-desktop"',
+        'scripts/desktop/smoke_test_linux.sh "${INSTALLED_BIN}"',
+        "scripts/desktop/e2e_linux.sh /usr/bin/coperceive-desktop",
+        "scripts/desktop/verify_e2e_steps.py --os linux",
+        "scripts/desktop/e2e_hpc_fake_ssh.sh /usr/bin/coperceive-desktop",
+        "scripts/desktop/e2e_cluster_datasets.sh",
+        "scripts/desktop/e2e_cluster_datasets_app.sh /usr/bin/coperceive-desktop",
+        "dpkg -r",
+        'scripts/desktop/smoke_test_linux.sh "${APPIMAGE_ABS}"',
+    ):
+        assert required in run_cmds, f"desktop-linux missing expected E2E wiring: {required!r}"
+
+    # Verify .deb is removed before the AppImage smoke test so PATH/system resources don't leak.
+    assert run_cmds.index("sudo dpkg -r") < run_cmds.index('smoke_test_linux.sh "${APPIMAGE_ABS}"')
