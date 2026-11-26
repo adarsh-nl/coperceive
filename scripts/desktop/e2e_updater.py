@@ -498,21 +498,21 @@ def run_e2e_updater(
     )
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="coperceive-e2e-updater-"))
+    marker_file = tmp_dir / "test_marker.txt"
+    ctrl_info_file = tmp_dir / "ctrl_info.txt"
     proc: subprocess.Popen[bytes] | None = None
     try:
         state_dir, library_dir, seeded_state, lib_snapshot = seed_state_and_library(
             tmp_dir, fixture_dir
         )
-        marker_file = tmp_dir / "test_marker.txt"
-        ctrl_info_file = tmp_dir / "ctrl_info.txt"
         stdout_log = tmp_dir / "app_stdout.log"
         stderr_log = tmp_dir / "app_stderr.log"
 
         env = build_launch_env(state_dir, marker_file, ctrl_info_file, update_url)
         launch_args = [str(app_path)]
-        if sys.platform == "darwin":
-            # macOS Tauri restart (`open -n <app> --args ...`) forwards CLI args
-            # through LaunchServices without inheriting parent process env vars.
+        if sys.platform == "darwin" or os.name == "nt":
+            # macOS (`open -n <app> --args ...`) and Windows NSIS (`/UPDATE /R /ARGS ...`)
+            # forward CLI args across restart without reliably preserving parent env vars.
             env_json_file = tmp_dir / "e2e_updater_env.json"
             coperceive_env = {k: v for k, v in env.items() if k.startswith("COPERCEIVE_")}
             env_json_file.write_text(json.dumps(coperceive_env), encoding="utf-8")
@@ -631,6 +631,31 @@ def run_e2e_updater(
             flush=True,
         )
     except Exception:
+        print(
+            f"[e2e-updater] failure diagnostics: marker_exists={marker_file.is_file()} "
+            f"ctrl_info_exists={ctrl_info_file.is_file()}",
+            file=sys.stderr,
+        )
+        if os.name == "nt":
+            diag = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-Item $env:COPERCEIVE_DIAG_APP | "
+                    "Select-Object FullName,Length,LastWriteTimeUtc,"
+                    "@{N='ProductVersion';E={$_.VersionInfo.ProductVersion}} | Format-List; "
+                    "Get-CimInstance Win32_Process | "
+                    "Where-Object { $_.Name -match 'coperceive|setup|nsis' } | "
+                    "Select-Object ProcessId,Name,CommandLine | Format-Table -AutoSize",
+                ],
+                env={**os.environ, "COPERCEIVE_DIAG_APP": str(app_path)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if diag.stdout:
+                print(diag.stdout, file=sys.stderr)
         for log_name in ("app_stdout.log", "app_stderr.log"):
             log_path = tmp_dir / log_name
             if log_path.is_file():
