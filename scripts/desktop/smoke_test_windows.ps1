@@ -201,7 +201,7 @@ $ctrlSecret = if ($lines.Count -ge 5) { $lines[4] } else { "" }
 Write-Host "Auto-connected to origin: $origin"
 
 $headers = @{ "Authorization" = "Bearer $token" }
-$response = Invoke-RestMethod -Uri "$origin/api/scenes" -Headers $headers -Method Get
+$response = Invoke-RestMethod -Uri "$origin/api/scenes" -Headers $headers -Method Get -TimeoutSec 10
 $sceneCount = @($response).Count
 if ($sceneCount -lt 1) {
     Stop-AppTree $proc.Id
@@ -212,7 +212,7 @@ if ($sceneCount -lt 1) {
 Write-Host "Verified: /api/scenes returned $sceneCount scene(s) with HTTP 200 OK."
 
 Write-Host "Checking GET $origin/api/health..."
-$healthResp = Invoke-RestMethod -Uri "$origin/api/health" -Headers $headers -Method Get
+$healthResp = Invoke-RestMethod -Uri "$origin/api/health" -Headers $headers -Method Get -TimeoutSec 10
 if ($healthResp.status -ne "ok") {
     Stop-AppTree $proc.Id
     Write-Error "Unexpected /api/health response: $($healthResp | ConvertTo-Json -Compress)"
@@ -257,7 +257,7 @@ $waited = 0
 while ($waited -lt 50) {
     try {
         $evalBody = @{ script = "Boolean(window.__COPERCEIVE_DESKTOP__)" } | ConvertTo-Json
-        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/eval" -Method Post -Headers $ctrlHeaders -Body $evalBody
+        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/eval" -Method Post -Headers $ctrlHeaders -Body $evalBody -TimeoutSec 10
         if ($resp.result -eq $true) {
             $viewerReady = $true
             break
@@ -274,12 +274,12 @@ if (-not $viewerReady) {
 Capture-ScreenShot "viewer.png"
 
 Write-Host "Navigating to Dataset View and capturing screenshot..."
-$null = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/show-library" -Method Post -Headers $ctrlHeaders -Body "{}"
+$null = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/show-library" -Method Post -Headers $ctrlHeaders -Body "{}" -TimeoutSec 10
 $evalBody = @{
     window = "main"
     script = "window.location.hash = '#/connect?tab=hpc'; true;"
 } | ConvertTo-Json
-$null = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/eval" -Method Post -Headers $ctrlHeaders -Body $evalBody
+$null = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/eval" -Method Post -Headers $ctrlHeaders -Body $evalBody -TimeoutSec 10
 
 $hpcReady = $false
 $waited = 0
@@ -289,7 +289,7 @@ while ($waited -lt 30) {
             window = "main"
             script = "Boolean(window.location.hash.includes('hpc'))"
         } | ConvertTo-Json
-        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/eval" -Method Post -Headers $ctrlHeaders -Body $checkBody
+        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/eval" -Method Post -Headers $ctrlHeaders -Body $checkBody -TimeoutSec 10
         if ($resp.result -eq $true) {
             $hpcReady = $true
             break
@@ -369,7 +369,7 @@ for ($i = 0; $i -lt 120; $i++) {
             window = "main"
             script = "Boolean(Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').includes('Use default')))"
         } | ConvertTo-Json
-        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $checkBody
+        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $checkBody -TimeoutSec 10
         if ($resp.result -eq $true) {
             $promptReady = $true
             break
@@ -385,7 +385,7 @@ if (-not $promptReady) {
             window = "main"
             script = "document.body ? document.body.innerText : '<no body>'"
         } | ConvertTo-Json
-        $dumpResp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $dumpBody
+        $dumpResp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $dumpBody -TimeoutSec 10
         $pageText = $dumpResp.result
     } catch {}
     Stop-AppTree $demoAppProc.Id
@@ -399,7 +399,7 @@ $useDefaultBody = @{
     window = "main"
     script = "(() => { const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').includes('Use default')); if (!btn) return 'missing'; btn.click(); return 'clicked'; })()"
 } | ConvertTo-Json
-$useDefaultResp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $useDefaultBody
+$useDefaultResp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $useDefaultBody -TimeoutSec 10
 if ($useDefaultResp.result -ne "clicked") {
     Stop-AppTree $demoAppProc.Id
     Write-Error "Failed to click 'Use default' button: $($useDefaultResp | ConvertTo-Json -Compress)"
@@ -414,7 +414,7 @@ for ($i = 0; $i -lt 120; $i++) {
             window = "main"
             script = "Boolean(document.querySelector('.welcome-card') && document.querySelector('[data-testid=`"welcome-open-demo`"]'))"
         } | ConvertTo-Json
-        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $checkBody
+        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $checkBody -TimeoutSec 10
         if ($resp.result -eq $true) {
             $welcomeReady = $true
             break
@@ -430,7 +430,7 @@ if (-not $welcomeReady) {
             window = "main"
             script = "document.body ? document.body.innerText : '<no body>'"
         } | ConvertTo-Json
-        $dumpResp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $dumpBody
+        $dumpResp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $dumpBody -TimeoutSec 10
         $pageText = $dumpResp.result
     } catch {}
     Stop-AppTree $demoAppProc.Id
@@ -447,7 +447,7 @@ $clickBody = @{
     window = "main"
     script = "(() => { const btn = document.querySelector('[data-testid=`"welcome-open-demo`"]'); if (!btn) return 'missing'; btn.click(); return 'clicked'; })()"
 } | ConvertTo-Json
-$clickResp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $clickBody
+$clickResp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $clickBody -TimeoutSec 10
 if ($clickResp.result -ne "clicked") {
     Stop-AppTree $demoAppProc.Id
     Write-Error "Failed to click 'Open the demo' button: $($clickResp | ConvertTo-Json -Compress)"
@@ -471,7 +471,7 @@ for ($i = 0; $i -lt 480; $i++) {
         exit 23
     }
     try {
-        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $viewerBody
+        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $viewerBody -TimeoutSec 10
         if ($null -ne $resp.result) {
             $lastViewerState = ($resp.result | ConvertTo-Json -Compress)
             if ($resp.result.ready -eq $true) {
@@ -504,7 +504,7 @@ $compareOk = $false
 $lastCompareState = ""
 for ($i = 0; $i -lt 60; $i++) {
     try {
-        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $compareBody
+        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$demoCtrlPort/eval" -Method Post -Headers $demoHeaders -Body $compareBody -TimeoutSec 10
         if ($null -ne $resp.result) {
             $lastCompareState = ($resp.result | ConvertTo-Json -Compress)
             if ($resp.result.ok -eq $true) {

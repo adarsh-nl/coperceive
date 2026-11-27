@@ -504,6 +504,7 @@ jobs:
   desktop-windows:
     runs-on: windows-latest
     needs: changes
+    timeout-minutes: 30
     if: github.event_name != 'pull_request' || needs.changes.outputs.desktop == 'true'
     steps:
       - uses: actions/checkout@v4
@@ -568,51 +569,91 @@ jobs:
           $extractDir = Join-Path $env:RUNNER_TEMP "nsis-extract"
           7z x $installer.FullName -o"$extractDir"
           python scripts/check_bundle_assets.py --app $extractDir
+      - name: Run Windows fail-fast self-test
+        timeout-minutes: 2
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/desktop/test_windows_failfast.ps1
+
       - name: Run Windows Smoke Test on Installed NSIS Package
+        timeout-minutes: 15
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          . (Join-Path $PWD "scripts/desktop/windows_smoke_evidence.ps1")
           $installer = Get-ChildItem -Path src-tauri\target\release\bundle\nsis\*.exe | Select-Object -First 1
-          if (-not $installer) {
-            Write-Error "No NSIS installer found"
-            exit 1
-          }
-          Write-Host "Installing NSIS package silently: $($installer.FullName)"
-          Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait
-          Start-Sleep -Seconds 3
+          $installedExe = $null
+          $installDir = ""
+          $smokeProc = $null
+          $installerProc = $null
+          $uninstallerProc = $null
+          $evidenceLabel = "Run Windows Smoke Test on Installed NSIS Package"
+          try {
+            if (-not $installer) { throw "No NSIS installer found" }
+            Write-Host "Installing NSIS package silently: $($installer.FullName)"
+            $installerProc = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -PassThru
+            if (-not (Wait-SmokeChild -Process $installerProc -TimeoutSeconds 120)) {
+              $evidenceLabel = "Run Windows Smoke Test on Installed NSIS Package: installer timeout (120 s)"
+              throw "The NSIS installer did not exit within 120 s."
+            }
+            Start-Sleep -Seconds 3
 
-          $installedExe = Get-ChildItem -Path $env:LOCALAPPDATA -Filter "coperceive-desktop.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $installedExe) {
-            $installedExe = Get-ChildItem -Path $env:LOCALAPPDATA -Filter "Coperceive.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          }
-          if (-not $installedExe) {
-            Write-Host "Falling back to search across LOCALAPPDATA and PROGRAMFILES..."
-            $installedExe = Get-ChildItem -Path @($env:LOCALAPPDATA, $env:ProgramFiles) -Filter "*coperceive*.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "uninstall" } | Select-Object -First 1
-          }
-          if (-not $installedExe) {
-            Write-Error "Could not locate installed coperceive executable after silent install"
-            exit 1
-          }
-          Write-Host "Found installed application at $($installedExe.FullName)"
-          $installDir = $installedExe.DirectoryName
+            $installedExe = Get-ChildItem -Path $env:LOCALAPPDATA -Filter "coperceive-desktop.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $installedExe) {
+              $installedExe = Get-ChildItem -Path $env:LOCALAPPDATA -Filter "Coperceive.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+            if (-not $installedExe) {
+              Write-Host "Falling back to search across LOCALAPPDATA and PROGRAMFILES..."
+              $installedExe = Get-ChildItem -Path @($env:LOCALAPPDATA, $env:ProgramFiles) -Filter "*coperceive*.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "uninstall" } | Select-Object -First 1
+            }
+            if (-not $installedExe) { throw "Could not locate installed coperceive executable after silent install" }
+            Write-Host "Found installed application at $($installedExe.FullName)"
+            $installDir = $installedExe.DirectoryName
 
-          # Run smoke test against the INSTALLED executable
-          pwsh scripts/desktop/smoke_test_windows.ps1 $installedExe.FullName
+            Write-Host "Running the installed smoke test with an 8-minute watchdog..."
+            $smokeProc = Start-Process -FilePath "pwsh" -ArgumentList @("-NoProfile", "-File", "scripts/desktop/smoke_test_windows.ps1", $installedExe.FullName) -PassThru -NoNewWindow
+            if (-not (Wait-SmokeChild -Process $smokeProc -TimeoutSeconds 480)) {
+              $evidenceLabel = "Run Windows Smoke Test on Installed NSIS Package: smoke timeout (8 min)"
+              throw "The installed smoke test did not finish within 8 minutes."
+            }
+            if ($smokeProc.ExitCode -ne 0) {
+              $evidenceLabel = "Run Windows Smoke Test on Installed NSIS Package: smoke failed (exit $($smokeProc.ExitCode))"
+              throw "The installed smoke test failed with exit code $($smokeProc.ExitCode)."
+            }
 
-          # Silent uninstall
-          $uninstaller = Get-ChildItem -Path $installDir -Filter "*uninstall*.exe" | Select-Object -First 1
-          if (-not $uninstaller) {
-            Write-Error "Could not find uninstaller in $installDir"
-            exit 1
-          }
-          Write-Host "Uninstalling silently: $($uninstaller.FullName)"
-          Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S _?=$installDir" -Wait
-          Start-Sleep -Seconds 3
+            $uninstaller = Get-ChildItem -Path $installDir -Filter "*uninstall*.exe" | Select-Object -First 1
+            if (-not $uninstaller) { throw "Could not find uninstaller in $installDir" }
+            Write-Host "Uninstalling silently: $($uninstaller.FullName)"
+            $uninstallerProc = Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S _?=$installDir" -PassThru
+            if (-not (Wait-SmokeChild -Process $uninstallerProc -TimeoutSeconds 120)) {
+              $evidenceLabel = "Run Windows Smoke Test on Installed NSIS Package: uninstaller timeout (120 s)"
+              throw "The NSIS uninstaller did not exit within 120 s."
+            }
+            Start-Sleep -Seconds 3
 
-          if (Test-Path $installedExe.FullName) {
-            Write-Error "Installed exe $($installedExe.FullName) still exists after silent uninstall!"
-            exit 1
+            if (Test-Path $installedExe.FullName) {
+              throw "Installed exe $($installedExe.FullName) still exists after silent uninstall!"
+            }
+            Write-Host "Uninstall verified: $installDir is removed."
           }
-          Write-Host "Uninstall verified: $installDir is removed."
+          finally {
+            try {
+              Write-SmokeEvidence -Label $evidenceLabel -AppExe $(if ($installedExe) { $installedExe.FullName } else { "" }) -InstallDir $installDir | Out-Null
+            } catch {
+              Write-Warning "Could not write Windows smoke evidence: $($_.Exception.Message)"
+            }
+            if ($smokeProc -and -not $smokeProc.HasExited) { Stop-SmokeProcessTree -RootPid $smokeProc.Id }
+            if ($installerProc -and -not $installerProc.HasExited) { Stop-SmokeProcessTree -RootPid $installerProc.Id }
+            if ($uninstallerProc -and -not $uninstallerProc.HasExited) { Stop-SmokeProcessTree -RootPid $uninstallerProc.Id }
+          }
+
+      - name: Upload Windows smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows-smoke-evidence
+          path: ${{ runner.temp }}/windows-smoke-evidence
+          if-no-files-found: warn
+          retention-days: 7
       - name: Locate Built Windows Installer
         shell: pwsh
         run: |
