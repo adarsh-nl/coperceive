@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isEndZone } from "./playback.ts";
+import {
+  indexAfter,
+  isEndZone,
+  PLAYBACK_BUFFERING_AFTER_MS,
+  shouldClearBufferingOnDraw,
+  shouldRunSyncStageRedraw,
+  stepDrawnHoldWait,
+} from "./playback.ts";
 import { createFrameCache } from "./cache.ts";
 
 test("isEndZone with 2-second threshold being larger (short 150-sample scene at 10Hz)", () => {
@@ -81,4 +88,73 @@ test("FrameCache retains all 150 frames of a local scene after telemetry scan so
     g.window = prevWindow;
     g.document = prevDocument;
   }
+});
+
+test("shouldRunSyncStageRedraw skips sync stage redraw on frameIndex playback ticks and runs on hidden/appearance toggles", () => {
+  const hiddenA = { ego: false };
+  const appearanceA = { boxes: true, points: true };
+  const initial = { sceneId: "demo-junction", summarySceneId: "demo-junction", hidden: hiddenA, appearance: appearanceA };
+
+  assert.equal(shouldRunSyncStageRedraw(null, initial), false);
+  // Plain playback tick: only frameIndex changed, so scene/hidden/appearance refs are identical.
+  assert.equal(shouldRunSyncStageRedraw(initial, { ...initial }), false);
+  // Scene switch: never synchronously redraw the previous scene's latestRef.
+  assert.equal(
+    shouldRunSyncStageRedraw(initial, { sceneId: "Town03-000", summarySceneId: "Town03-000", hidden: hiddenA, appearance: appearanceA }),
+    false,
+  );
+  // Agent visibility or appearance toggle within the same scene requires immediate redraw.
+  assert.equal(
+    shouldRunSyncStageRedraw(initial, { ...initial, hidden: { ego: true } }),
+    true,
+  );
+  assert.equal(
+    shouldRunSyncStageRedraw(initial, { ...initial, appearance: { boxes: false, points: true } }),
+    true,
+  );
+});
+
+test("stepDrawnHoldWait ignores transient local draw spikes and shouldClearBufferingOnDraw avoids sticky 1-frame hold", () => {
+  assert.ok(PLAYBACK_BUFFERING_AFTER_MS >= 250, "buffering threshold must exceed a 10 Hz frame interval and local jitter");
+
+  // Local 1x playback (stalled=false) with a 137 ms draw spike (like CI job 137719013538):
+  // previously BUFFERING_AFTER_MS=60 fired setBuffering(true) and skipped clearing on draw.
+  const firstPoll = stepDrawnHoldWait({ nowMs: 200, waitingSinceMs: null, stalled: false });
+  assert.equal(firstPoll.waitingSinceMs, 200);
+  assert.equal(firstPoll.showBuffering, false);
+
+  const spikePoll = stepDrawnHoldWait({ nowMs: 337, waitingSinceMs: firstPoll.waitingSinceMs, stalled: false });
+  assert.equal(spikePoll.showBuffering, false);
+
+  // Genuine stream stall only triggers after exceeding PLAYBACK_BUFFERING_AFTER_MS.
+  const earlyStall = stepDrawnHoldWait({ nowMs: 380, waitingSinceMs: 200, stalled: true });
+  assert.equal(earlyStall.showBuffering, false);
+
+  const realStall = stepDrawnHoldWait({ nowMs: 460, waitingSinceMs: 200, stalled: true });
+  assert.equal(realStall.showBuffering, true);
+
+  // Once the held frame finishes drawing, Buffering clears immediately unless stall-paused.
+  assert.equal(shouldClearBufferingOnDraw(false), true);
+  assert.equal(shouldClearBufferingOnDraw(true), false);
+});
+
+test("stepDrawnHoldWait keeps wall-clock origin anchored during transient draw waits so 1x playback catches up", () => {
+  const times = Array.from({ length: 10 }, (_, i) => i * 100_000);
+  const originMs = 1000;
+  let waitingSinceMs: number | null = null;
+
+  // Frame 1 takes 160 ms to load/draw locally (stalled=false); tick polls at +200..+248 ms.
+  for (const nowMs of [1200, 1216, 1232, 1248]) {
+    const hold = stepDrawnHoldWait({ nowMs, waitingSinceMs, stalled: false });
+    waitingSinceMs = hold.waitingSinceMs;
+    assert.equal(hold.resetOrigin, false, "transient local draw wait must not slip origin forward");
+  }
+
+  // At 1264 ms frame 1 is drawn; anchored at originMs=1000, clock reaches index 2 (1.00x pace).
+  const place = indexAfter(times, 0, 1264 - originMs, 1, true);
+  assert.equal(place.index, 2);
+
+  // Only a prolonged genuine stream stall resets/pins the origin so it won't skip unbuffered frames.
+  const realStall = stepDrawnHoldWait({ nowMs: 1460, waitingSinceMs, stalled: true });
+  assert.equal(realStall.resetOrigin, true);
 });
