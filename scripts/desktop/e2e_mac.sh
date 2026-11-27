@@ -926,12 +926,22 @@ assert pb_c_loop is not None and pb_c_loop["loop"] == True, f"Expected loop to b
 
 eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 120)")
 
+# Start gap recording and click Play in one /eval round-trip so cross-process
+# IPC dispatch latency is never folded into the first frame interval. The first
+# two frame-change transitions after Play (startup commit + cold warm-up,
+# matching tests/test_viewer_browser.py's [2:] slice) are excluded from the
+# steady-state 300 ms assertion and reported separately.
 eval_js("""
 (() => {
+    const st0 = window.__COPERCEIVE_PLAYBACK_STATE__ ? window.__COPERCEIVE_PLAYBACK_STATE__() : null;
     window.__RECORD_GAPS__ = {
-        lastFrame: null,
+        lastFrame: st0 ? st0.frameIndex : null,
         lastChange: performance.now(),
         maxGapMs: 0,
+        rawMaxGapMs: 0,
+        warmupGapsMs: [],
+        warmupSkipped: 0,
+        measuredIntervals: 0,
         wraps: 0,
         framesSeen: 0
     };
@@ -940,25 +950,34 @@ eval_js("""
         const st = window.__COPERCEIVE_PLAYBACK_STATE__ ? window.__COPERCEIVE_PLAYBACK_STATE__() : null;
         if (!st) return;
         const now = performance.now();
-        if (st.frameIndex !== window.__RECORD_GAPS__.lastFrame) {
-            if (window.__RECORD_GAPS__.lastFrame !== null) {
-                const gap = now - window.__RECORD_GAPS__.lastChange;
-                if (gap > window.__RECORD_GAPS__.maxGapMs) {
-                    window.__RECORD_GAPS__.maxGapMs = gap;
+        const rec = window.__RECORD_GAPS__;
+        if (st.frameIndex !== rec.lastFrame) {
+            if (rec.lastFrame !== null) {
+                const gap = now - rec.lastChange;
+                if (gap > rec.rawMaxGapMs) {
+                    rec.rawMaxGapMs = gap;
                 }
-                if (window.__RECORD_GAPS__.lastFrame > 140 && st.frameIndex < 10) {
-                    window.__RECORD_GAPS__.wraps++;
+                if (rec.warmupSkipped < 2) {
+                    rec.warmupGapsMs.push(gap);
+                    rec.warmupSkipped++;
+                } else {
+                    rec.measuredIntervals++;
+                    if (gap > rec.maxGapMs) {
+                        rec.maxGapMs = gap;
+                    }
+                }
+                if (rec.lastFrame > 140 && st.frameIndex < 10) {
+                    rec.wraps++;
                 }
             }
-            window.__RECORD_GAPS__.lastFrame = st.frameIndex;
-            window.__RECORD_GAPS__.lastChange = now;
-            window.__RECORD_GAPS__.framesSeen++;
+            rec.lastFrame = st.frameIndex;
+            rec.lastChange = now;
+            rec.framesSeen++;
         }
     }, 10);
+    document.querySelector('button.icon.primary')?.click();
 })()
 """)
-
-eval_js("document.querySelector('button.icon.primary')?.click()")
 
 time.sleep(15.5)
 
@@ -973,7 +992,15 @@ except Exception as e:
     print(f"E2E_NOTE step=2-clear-gap-recorder {type(e).__name__}: {e}", flush=True)
 
 report = eval_retry("2-read-gaps", "window.__RECORD_GAPS__")
-print(f"Playback requirement (c) verified: max frame gap = {report['maxGapMs']:.1f}ms, loop wraps observed = {report['wraps']}, frames seen = {report['framesSeen']}")
+warmup_list = [round(g, 1) for g in report.get("warmupGapsMs", [])]
+print(
+    f"Playback requirement (c) verified: max frame gap = {report['maxGapMs']:.1f}ms "
+    f"(steady-state over {report.get('measuredIntervals', 0)} intervals; "
+    f"excluded first {report.get('warmupSkipped', 0)} warm-up transitions {warmup_list}; "
+    f"raw max = {report.get('rawMaxGapMs', report['maxGapMs']):.1f}ms), "
+    f"loop wraps observed = {report['wraps']}, frames seen = {report['framesSeen']}"
+)
+assert report.get("measuredIntervals", 0) >= 1, f"Expected steady-state frame intervals, got {report}"
 assert report["wraps"] >= 1, f"Expected at least 1 loop wrap over 15s, got {report['wraps']}"
 assert report["maxGapMs"] <= 300.0, f"Frame change gap exceeded 300ms: {report['maxGapMs']:.1f}ms"
 

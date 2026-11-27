@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import math
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -17,7 +18,8 @@ PLAYBACK_POLL_SCRIPT = (
     "(() => { const st = window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? {}; "
     'const txt = document.body ? document.body.innerText : ""; '
     "return { frameIndex: st.frameIndex ?? -1, samples: st.samples ?? 0, "
-    'playing: Boolean(st.playing), buffering: txt.includes("Buffering") }; })()'
+    'playing: Boolean(st.playing), buffering: txt.includes("Buffering"), '
+    "nowMs: performance.now() }; })()"
 )
 
 
@@ -117,14 +119,24 @@ def poll_playback_samples(
     interval_s: float = 0.2,
     clock_fn: Callable[[], float] = time.monotonic,
     sleep_fn: Callable[[float], None] = time.sleep,
+    warmup_polls: int = 0,
 ) -> tuple[list[PlaybackSample], bool]:
-    """Collect playback samples in-process so polling does not contend for CPU."""
+    """Collect playback samples in-process so polling does not contend for CPU.
+
+    Uses the browser's own ``nowMs`` (``performance.now() / 1000``) when
+    available so cross-process controller HTTP round-trip jitter does not skew
+    ``elapsed_s``, falling back to ``clock_fn()`` otherwise. Optional
+    ``warmup_polls`` skips the first N polls after Play toggle so cold first-frame
+    shader compilation is not folded into the steady-state 1x playback rate.
+    """
     collected: list[PlaybackSample] = []
     buffering_seen = False
-    for _ in range(polls):
+    for poll_idx in range(polls):
         sleep_fn(interval_s)
         payload = fetch_fn()
-        wall_s = clock_fn()
+        host_wall_s = clock_fn()
+        if poll_idx < warmup_polls:
+            continue
         if not isinstance(payload, dict):
             continue
         raw_res: object = payload.get("result")
@@ -133,6 +145,15 @@ def poll_playback_samples(
         res = cast(dict[str, object], raw_res)
         if res.get("buffering") is True:
             buffering_seen = True
+        raw_now_ms: object = res.get("nowMs")
+        if (
+            isinstance(raw_now_ms, (int, float))
+            and not isinstance(raw_now_ms, bool)
+            and math.isfinite(float(raw_now_ms))
+        ):
+            wall_s = float(raw_now_ms) / 1000.0
+        else:
+            wall_s = host_wall_s
         idx = res.get("frameIndex", -1)
         count = res.get("samples", 0)
         if (
@@ -193,11 +214,17 @@ def main(argv: list[str]) -> int:
         parser.add_argument("--window", default="viewer")
         parser.add_argument("--polls", type=int, default=25)
         parser.add_argument("--interval", type=float, default=0.2)
+        parser.add_argument("--warmup-polls", type=int, default=0)
         ns = parser.parse_args(argv[2:])
         samples, buffering_seen = poll_playback_samples(
             lambda: eval_controller(ns.port, ns.secret, window=ns.window),
             polls=ns.polls,
             interval_s=ns.interval,
+            warmup_polls=ns.warmup_polls,
+        )
+        print(
+            f"Demo 1x playback config: polls={ns.polls} warmup_polls={ns.warmup_polls} "
+            f"interval={ns.interval:.2f}s measured_samples={len(samples)}"
         )
         perf = eval_controller(
             ns.port,
