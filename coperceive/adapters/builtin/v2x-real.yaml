@@ -1,0 +1,167 @@
+# SPDX-License-Identifier: Apache-2.0
+# V2X-Real (Xiang et al., ECCV 2024, arXiv:2403.16034), the OpenCOOD-style release layout.
+# Layout and loader conventions are taken from the official codebase
+# (https://github.com/ucla-mobility/V2X-Real) and its maintained successor
+# (https://github.com/ucla-mobility/QuantV2X):
+#   <split>/<scenario>/<agent>/<frame>.yaml + <frame>.bin
+# Negative agent IDs (-1, -2) are smart infrastructure (RSUs); non-negative IDs
+# (e.g. 1, 2) are connected autonomous vehicles.
+# The official loader reads lidar_pose [x, y, z, roll, yaw, pitch] in degrees via
+# x_to_world (opencood/utils/transformation_utils.py) and applies no reflection.
+# Whether the released coordinates are CARLA-left-handed is UNVERIFIED; the
+# provisional y-reflection here matches the OPV2V/V2V4Real convention and must be
+# checked against a real extracted scene (docs/datasets/v2x-real.md).
+adapter: v2x-real
+spec_version: 1
+
+licence:
+  status: unknown
+  notice: >-
+    No data licence is stated. The V2X-Real repository README
+    (https://github.com/ucla-mobility/V2X-Real) links the paper and project page
+    (https://mobility-lab.seas.ucla.edu/v2x-real/), and the repository LICENSE
+    (https://github.com/ucla-mobility/V2X-Real/blob/main/LICENSE) is an Academic
+    Software License for the code, not a grant for the data. Cite Xiang et al.,
+    V2X-Real, ECCV 2024, arXiv:2403.16034. No dataset frames, point clouds,
+    images or derived scene files may be committed to this repository.
+  links:
+    - https://github.com/ucla-mobility/V2X-Real
+    - https://mobility-lab.seas.ucla.edu/v2x-real/
+    - https://arxiv.org/abs/2403.16034
+
+params:
+  split:
+    allowed: [train, validate, test]
+
+world_frame: v2x-real-world  # source handedness remains unverified; see docs/datasets/v2x-real.md
+
+clock:
+  from: frame
+  unit: frame
+  scale_us: 100000
+  scale_note: >-
+    time_us = stem * 100000. The V2X-Real paper (ECCV 2024, arXiv:2403.16034)
+    samples synchronized LiDAR and camera frames at 10 Hz, and the official
+    loader (basedataset.py: time_delay // 100) uses 100 ms per frame step.
+    That stems increment by 1 per 10 Hz frame is unverified against an
+    extracted release; the files hold no wall clock.
+
+scenes:
+  glob:
+    path: "{split}/{scene}/"
+    sample_source: poses
+    platform:
+      split: {param: split}
+
+agents:
+  discover:
+    glob: "{split}/{scene}/{agent}/"
+    type: vehicle
+    types:
+      "-1": infrastructure
+      "-2": infrastructure
+
+conventions:
+  length_unit: m
+  angle_unit: deg
+  source_handedness: left
+  reflect_axis: y
+  body_axes: FLU
+  camera_axes: FLU  # unverified: QuantV2X converts UE4 camera cords to OpenCV RDF; kept FLU as in OPV2V/V2V4Real
+
+streams:
+  poses:
+    reader: yaml_record
+    path: "{agent_root}/{frame:06d}.yaml"
+    missing: skip
+    translation: [lidar_pose.0, lidar_pose.1, lidar_pose.2]
+    rotation:
+      # The YAML order is [roll, yaw, pitch]; euler fields are (about x, about y, about z).
+      euler: {fields: [lidar_pose.3, lidar_pose.5, lidar_pose.4], order: zyx, frame: intrinsic}
+
+  sensors:
+    # V2X-Real's original codebase is LiDAR-only; QuantV2X reads camera poses
+    # from cam1..cam4 `cords` + `intrinsic` rather than a 4x4 `extrinsic` matrix.
+    # Keeping camera records optional lets LiDAR-only trees and trees with
+    # OpenCOOD-style camera extrinsics both load cleanly.
+    reader: yaml_record
+    path: "{agent_root}/{frame:06d}.yaml"
+    sample: first
+    records: {prefix: camera, optional: true}
+    extrinsic:
+      matrix: {field: extrinsic, shape: 4x4}
+      direction: child_to_parent
+    intrinsic: {matrix: intrinsic}
+    image_size:
+      derive: principal_point_x2
+      reason: "Unverified camera resolution; derives 2*cx, 2*cy when OpenCOOD-style camera records are present."
+    modality:
+      - {has_intrinsic: true, modality: camera}
+      - {default: camera}
+    fixed:
+      - {id: lidar, modality: lidar}
+
+  boxes:
+    reader: yaml_record
+    path: "{agent_root}/{frame:06d}.yaml"
+    missing: skip
+    # The official box_utils.py project_world_objects() docs call the input
+    # objects world-coordinate objects and convert object_pose to lidar with
+    # x1_to_x2(object_pose, lidar_pose).
+    # https://github.com/ucla-mobility/V2X-Real/blob/2b8acd5c15b22fdb47326e30b8805e172d9b1259/opencood/utils/box_utils.py#L490-L554
+    frame: world
+    records: {path: vehicles, mapping_key: track_id}
+    # angle is [roll, yaw, pitch] in degrees; obj_type carries the fine-grained class
+    # (ucla-mobility/V2X-Real opencood/utils/box_utils.py and opencood/data_utils/__init__.py).
+    fields:
+      category: obj_type
+      roll: angle.0
+      yaw: angle.1
+      pitch: angle.2
+    centre:
+      location: [location.0, location.1, location.2]
+      offset: [center.0, center.1, center.2]
+      offset_frame: box
+    size:
+      half_extents: [extent.0, extent.1, extent.2]
+    rotation:
+      euler: {fields: [roll, pitch, yaw], order: zyx, frame: intrinsic}
+    track_id_cast: int_string
+    class_map:
+      Car: car
+      LongVehicle: car
+      PoliceCar: car
+      Truck: truck
+      ConcreteTruck: truck
+      Van: van
+      Bus: bus
+      Pedestrian: pedestrian
+      Child: pedestrian
+      RoadWorker: pedestrian
+      Bicycle: bicycle
+      BicycleRider: cyclist
+      Motorcycle: motorcycle
+      MotorcyleRider: motorcyclist
+      Scooter: scooter
+      ScooterRider: rider
+      TrashCan: trash_can
+      FireHydrant: fire_hydrant
+      ConstructionCart: construction_cart
+    class_map_unknown: keep
+
+  lidar:
+    reader: bin_f32
+    sensor: lidar
+    path: "{agent_root}/{frame:06d}.bin"
+    missing: skip
+    stride: 4
+    offsets: {x: 0, y: 1, z: 2}
+    intensity:
+      fill: 0.0
+      reason: >-
+        The official V2X-Real loader reads .bin as float32 Nx4 with
+        pcd_utils.load_lidar_bin(..., zero_intensity=True) and comment
+        "hard coded, no intensity" (ucla-mobility/V2X-Real opencood/utils/pcd_utils.py).
+
+checks:
+  required_per_sample: [poses]

@@ -1,0 +1,19 @@
+# Synthetic V2X-Real fixture frame (no real dataset bytes).
+ego_speed: 0.0
+lidar_pose: [0.0, 0.0, 4.5, 0.0, 0.0, 0.0]
+true_ego_pos: [0.0, 0.0, 4.5, 0.0, 0.0, 0.0]
+vehicles:
+  101:
+    angle: [0.0, 90.0, 0.0]
+    center: [0.0, 0.0, 0.75]
+    extent: [2.4, 1.0, 0.75]
+    location: [16.0, 31.0, 0.0]
+    obj_type: Car
+    speed: 4.0
+  203:
+    angle: [0.0, 1.5, 0.0]
+    center: [0.0, 0.0, 1.5]
+    extent: [4.5, 1.3, 1.5]
+    location: [20.5, -5.0, 0.0]
+    obj_type: Truck
+    speed: 5.0

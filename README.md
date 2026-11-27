@@ -48,6 +48,7 @@ Get the latest release for your platform from [GitHub Releases](https://github.c
 | **V2XSet** | LiDAR, Camera, Poses, Boxes | Vehicle + Infrastructure (RSU) | See [dataset terms](https://github.com/DerrickXuNu/v2x-vit) | Supported |
 | **V2V4Real** | LiDAR, Poses, Boxes (LiDAR only) | Multi-Vehicle | See [dataset terms](https://github.com/ucla-mobility/V2V4Real) | Supported (LiDAR); visual orientation check pending |
 | **DAIR-V2X-C** | LiDAR, Camera, Poses, Boxes | Vehicle + Infrastructure | See [dataset terms](https://github.com/AIR-THU/DAIR-V2X) | Adapter merged; not yet tested on real sensor data |
+| **V2X-Real** | LiDAR, Poses, Multi-Class Boxes | Vehicle + Infrastructure (RSU) | See [dataset terms](https://github.com/ucla-mobility/V2X-Real) | Manifest tested on synthetic fixtures only |
 
 ---
 

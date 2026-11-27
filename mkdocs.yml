@@ -56,6 +56,7 @@ nav:
       - OPV2V: datasets/opv2v.md
       - V2XSet: datasets/v2xset.md
       - V2V4Real: datasets/v2v4real.md
+      - V2X-Real: datasets/v2x-real.md
       - DAIR-V2X-C: datasets/dair-v2x-c.md
       - Griffin: datasets/griffin.md
       - Demo: datasets/demo.md
