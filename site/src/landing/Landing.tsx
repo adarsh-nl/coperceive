@@ -40,10 +40,33 @@ const STEPS = [
 ];
 
 const CARDS = [
-  { n: "01", verb: "ingest", col: "#F58A1F", hover: "lm-card-orange", title: "Any dataset, one manifest", body: "A YAML file with units, rotations and axes written out. Griffin, OPV2V and V2XSet are built in.", cmd: "adapters ingest my.yaml" },
+  { n: "01", verb: "ingest", col: "#F58A1F", hover: "lm-card-orange", title: "Any dataset, one manifest", body: "A YAML file with units, rotations and axes written out. Griffin, OPV2V, V2XSet, V2V4Real and DAIR-V2X-C are built in.", cmd: "adapters ingest my.yaml" },
   { n: "02", verb: "validate", col: "#4CC9F0", hover: "lm-card-cyan", title: "Check before you train", body: "Time sync, pose speed, cross-agent box agreement and coverage, as JSON and Markdown.", cmd: "validate ./scenes --strict" },
-  { n: "03", verb: "view", col: "#3C8DFF", hover: "lm-card-blue", title: "Every agent in 3D", body: "Lidar, camera strips and HD-map lanes. Orbit, bird's-eye, chase, drone and camera views.", cmd: "serve --root ./scenes" },
-  { n: "04", verb: "evaluate", col: "#8E6CEF", hover: "lm-card-violet", title: "Score in the world frame", body: "Match predictions per agent, put precision and recall on the timeline, overlay a second run.", cmd: "eval compare v1 v2" },
+  { n: "03", verb: "view", col: "#3C8DFF", hover: "lm-card-blue", title: "Every agent in 3D", body: "LiDAR, camera strips and HD-map lanes. Orbit, bird's-eye, chase, drone and camera views, or stream over SSH.", cmd: "serve --root ./scenes" },
+  { n: "04", verb: "evaluate", col: "#8E6CEF", hover: "lm-card-violet", title: "Score in the world frame", body: "Per-frame OpenCOOD-style or legacy AP protocol, cooperative breakdowns, and side-by-side run comparison.", cmd: "eval compare v1 v2" },
+];
+
+const WHATS_NEW_V012 = [
+  {
+    tag: "Evaluation",
+    title: "Per-frame AP protocol & protocol guard",
+    body: "Default evaluation now uses per-frame ranking with connected-union ground truth within 70 m (--protocol legacy reproduces v0.1.1). Chosen per run in New evaluation and enforced when comparing runs.",
+  },
+  {
+    tag: "Adapters",
+    title: "Fixed dataset geometry & stale detection",
+    body: "Corrected OPV2V/V2XSet Euler tilt signs and camera extrinsics plus V2V4Real box frames. Scenes prepared with older manifests are flagged Stale automatically for Re-prepare.",
+  },
+  {
+    tag: "Streaming & Bundles",
+    title: "Concurrent SSH streaming & .cpbundle viewer",
+    body: "Protocol-2 concurrent streaming with configurable lookahead buffer and memory cap, plus read-only .cpbundle result bundles that load local or synthetic demo sensor data safely.",
+  },
+  {
+    tag: "Cluster runs",
+    title: "In-job scoring, interpreter override & Open predictions",
+    body: "Score built-in runs in the same Slurm job, stream predictions straight into the viewer, set an optional --plugin-python path per server or per run, and keep remote viewer jobs alive while active.",
+  },
 ];
 
 function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; children: ReactNode }) {
@@ -228,7 +251,7 @@ export function Landing() {
           <div ref={(el) => { capRefs.current[0] = el; }} style={{ position: "absolute", left: "var(--gx)", right: "var(--gx)", bottom: "14vh", maxWidth: 640, display: "flex", flexDirection: "column", gap: 24 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, alignSelf: "flex-start", padding: "8px 14px 8px 12px", borderRadius: 999, background: "rgba(28,28,30,0.78)", border: "1px solid rgba(255,255,255,0.14)", fontSize: 13, color: "#d2d2d7" }}>
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#E03A22" }} />
-              The Mac app is coming soon
+              Desktop app for Mac, Windows and Linux
             </div>
             <h1 style={{ margin: 0, fontSize: "clamp(56px,7.4vw,120px)", lineHeight: 0.94, letterSpacing: "-0.045em", fontWeight: 500 }}>
               Many agents.
@@ -279,6 +302,27 @@ export function Landing() {
                 <h3 style={{ margin: 0, fontSize: 24, fontWeight: 500, letterSpacing: "-0.02em" }}>{card.title}</h3>
                 <p style={{ margin: 0, fontSize: 16, lineHeight: 1.55, color: "#a1a1a6", flex: 1 }}>{card.body}</p>
                 <code style={{ fontFamily: MONO_CSS, fontSize: 12, color: "#86868b" }}>{card.cmd}</code>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section id="whats-new" data-screen-label="What's new in v0.1.2" style={{ padding: "40px var(--gx) 120px", maxWidth: 1360, margin: "0 auto", display: "flex", flexDirection: "column", gap: 40 }}>
+          <div data-reveal="0" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 32, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ fontFamily: MONO_CSS, fontSize: 13, color: "#E03A22" }}>v0.1.2</div>
+              <h2 style={{ margin: 0, fontSize: "clamp(32px,3.8vw,56px)", lineHeight: 1.04, letterSpacing: "-0.035em", fontWeight: 500, maxWidth: 720 }}>What’s new in v0.1.2</h2>
+            </div>
+            <a href={`${DOCS.replace("/tree/main/docs", "/blob/release/v0.1.2/docs/release/v0.1.2-notes.md")}`} className="lm-link" style={{ fontFamily: MONO_CSS, fontSize: 13, color: "#c7c7cc" }}>
+              Read v0.1.2 release notes →
+            </a>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(260px,100%),1fr))", gap: 16 }}>
+            {WHATS_NEW_V012.map((item, i) => (
+              <div key={item.title} data-reveal={i + 1} className="lm-card">
+                <span style={{ fontFamily: MONO_CSS, fontSize: 12, color: "#E03A22" }}>{item.tag}</span>
+                <h3 style={{ margin: 0, fontSize: 20, fontWeight: 500, letterSpacing: "-0.02em", color: "#f5f5f7" }}>{item.title}</h3>
+                <p style={{ margin: 0, fontSize: 15, lineHeight: 1.55, color: "#c7c7cc" }}>{item.body}</p>
               </div>
             ))}
           </div>

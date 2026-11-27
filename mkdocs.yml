@@ -72,6 +72,7 @@ nav:
       - View a scene: guides/view-a-scene.md
       - Open a dataset on a cluster: guides/cluster.md
       - Evaluate predictions: guides/evaluate.md
+      - Evaluate a model on the HPC from the app: guides/evaluate-on-hpc.md
       - Robustness sweeps: guides/robustness.md
       - Run a model: guides/run-a-model.md
       - Result bundles: guides/bundles.md
@@ -107,6 +108,8 @@ nav:
       - "OpenCOOD's AP, read by room A": notes/opencood-ap-behaviour.md
       - Security review: security/review-2026-11.md
       - Updates: desktop/updates.md
+      - Desktop settings: desktop/settings.md
+      - Desktop HPC and viewer: desktop/hpc-and-viewer.md
       - Decisions:
           - Data model: adr/0001-data-model.md
           - On-disk format: adr/0002-on-disk-format.md
