@@ -2,8 +2,9 @@
 //! Remote HPC and SSH session manager for Coperceive Desktop.
 
 use std::io::Read;
+use std::net::{SocketAddr, TcpStream};
 use std::process::{Child, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -433,6 +434,42 @@ pub struct SshTunnel {
     pub alias: String,
 }
 
+fn tunnel_exit_error(child: &mut Child) -> SshErrorKind {
+    let mut stderr = String::new();
+    if let Some(mut err_pipe) = child.stderr.take() {
+        let _ = err_pipe.read_to_string(&mut stderr);
+    }
+    classify_ssh_error(&stderr)
+}
+
+fn wait_for_tunnel_ready(
+    child: &mut Child,
+    local_port: u16,
+    ready_wait: Duration,
+) -> Result<(), SshErrorKind> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], local_port));
+    let deadline = Instant::now() + ready_wait;
+    loop {
+        if let Ok(Some(_status)) = child.try_wait() {
+            return Err(tunnel_exit_error(child));
+        }
+        if TcpStream::connect_timeout(&addr, TUNNEL_CONNECT_TIMEOUT).is_ok() {
+            if let Ok(Some(_status)) = child.try_wait() {
+                return Err(tunnel_exit_error(child));
+            }
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Ok(());
+        }
+        std::thread::sleep(TUNNEL_POLL_INTERVAL);
+    }
+}
+
+const TUNNEL_READY_WAIT: Duration = Duration::from_secs(4);
+const TUNNEL_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_millis(50);
+
 impl SshTunnel {
     pub fn open(
         alias: &str,
@@ -440,6 +477,27 @@ impl SshTunnel {
         remote_ip: &str,
         remote_port: u16,
         ssh_bin: Option<&str>,
+    ) -> Result<Self, SshErrorKind> {
+        Self::open_with_wait(
+            alias,
+            local_port,
+            remote_ip,
+            remote_port,
+            ssh_bin,
+            TUNNEL_READY_WAIT,
+        )
+    }
+
+    /// Spawn `ssh -N -L` and wait until the local forwarded socket accepts TCP
+    /// connections or the child exits early. Falls through after `ready_wait`
+    /// if the tunnel child stays alive without binding (for non-socket test mocks).
+    fn open_with_wait(
+        alias: &str,
+        local_port: u16,
+        remote_ip: &str,
+        remote_port: u16,
+        ssh_bin: Option<&str>,
+        ready_wait: Duration,
     ) -> Result<Self, SshErrorKind> {
         let bin = ssh_bin.unwrap_or("ssh");
         let args = build_ssh_tunnel_command(alias, local_port, remote_ip, remote_port);
@@ -452,15 +510,7 @@ impl SshTunnel {
             .spawn()
             .map_err(|e| SshErrorKind::Other(format!("Failed to spawn ssh tunnel: {}", e)))?;
 
-        // Give ssh tunnel a brief moment to detect immediate handshake failures
-        std::thread::sleep(Duration::from_millis(150));
-        if let Ok(Some(_status)) = child.try_wait() {
-            let mut stderr = String::new();
-            if let Some(mut err_pipe) = child.stderr.take() {
-                let _ = err_pipe.read_to_string(&mut stderr);
-            }
-            return Err(classify_ssh_error(&stderr));
-        }
+        wait_for_tunnel_ready(&mut child, local_port, ready_wait)?;
 
         Ok(Self {
             child: Some(child),
@@ -1358,5 +1408,64 @@ mod tests {
         assert!(!pid_file.exists(), "the no-pid script must not write a pid file");
         assert_no_process_with(dir.to_str().expect("temp dir is UTF-8"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ssh_tunnel_open_waits_for_delayed_listener() {
+        let fake = FakeSshScript::create();
+        let port = find_free_loopback_port().expect("free port");
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let binder = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(250));
+            let listener = std::net::TcpListener::bind(addr).expect("bind delayed tunnel");
+            let _ = tx.send(());
+            let _ = listener.accept();
+        });
+
+        let started = Instant::now();
+        let mut tunnel = SshTunnel::open_with_wait(
+            "hpc-alias",
+            port,
+            "10.20.240.48",
+            52657,
+            fake.path.to_str(),
+            Duration::from_secs(4),
+        )
+        .expect("tunnel should wait for delayed bind and succeed");
+        let elapsed = started.elapsed();
+
+        rx.recv_timeout(Duration::from_secs(1))
+            .expect("tunnel returned before listener bound");
+        assert!(
+            elapsed >= Duration::from_millis(200) && elapsed < Duration::from_secs(3),
+            "expected wait around 250ms bind delay, got {elapsed:?}"
+        );
+        assert!(tunnel.is_alive());
+        tunnel.close().expect("close tunnel");
+        let _ = binder.join();
+    }
+
+    #[test]
+    fn ssh_tunnel_open_returns_error_on_early_exit() {
+        let fake = FakeSshScript::create();
+        let port = find_free_loopback_port().expect("free port");
+        let started = Instant::now();
+        let err = SshTunnel::open_with_wait(
+            "--fail-auth",
+            port,
+            "10.20.240.48",
+            52657,
+            fake.path.to_str(),
+            Duration::from_secs(4),
+        )
+        .err()
+        .expect("failing ssh must return error");
+        assert!(matches!(err, SshErrorKind::PublicKeyAuthRequired(_)), "{err:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "early exit should fail promptly instead of waiting full ready_wait"
+        );
     }
 }

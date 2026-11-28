@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """verify_e2e_steps.py
 
-Validates that all required 'Step N verified' lines (plus 'Real-App macOS E2E Test PASSED')
-are present in the desktop e2e log. Emits GitHub Actions notices for matched lines and fails
-with exit code 1 if any required step is missing, naming each missing step.
+Validates that all required shared 'Step N verified' lines (plus the target
+platform's 'Real-App <OS> E2E Test PASSED' line) are present in the desktop e2e
+log. Emits GitHub Actions notices for matched lines and fails with exit code 1
+if any required step is missing, naming each missing step.
 """
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from pathlib import Path
 
-# Complete list of required step verification markers emitted by scripts/desktop/e2e_mac.sh.
-REQUIRED_STEP_MARKERS: list[str] = [
+# Shared step verification markers emitted by scripts/desktop/e2e_desktop.py
+# on both macOS and Linux.
+SHARED_STEP_MARKERS: list[str] = [
     "Step 1 UI interactions verified successfully.",
     "Step 1 verified state.json content:",
     "Step 1b verified: Still exported successfully and non-empty PNG asserted.",
@@ -41,11 +44,27 @@ REQUIRED_STEP_MARKERS: list[str] = [
     ),
     "Step 5g verified: Library badge ran in the background and its answer is cached.",
     "Step 5j verified: Export repro card showed missing fields and saved the card.",
-    "Real-App macOS E2E Test PASSED",
 ]
 
-# Markers for desktop flows that are not part of the viewer e2e_mac.sh log.
-# `verify_e2e_log` stays limited to REQUIRED_STEP_MARKERS so the viewer log
+PLATFORM_PASSED_MARKERS: dict[str, str] = {
+    "macos": "Real-App macOS E2E Test PASSED",
+    "linux": "Real-App Linux E2E Test PASSED",
+}
+
+LINUX_SKIP_5H_MARKER = "Step 5h skipped-with-reason (Linux):"
+MACOS_5H_MARKER = (
+    "Step 5h verified: text inputs disable macOS auto-capitalisation, "
+    "typed lowercase values stay unchanged."
+)
+
+# Backwards-compatible default marker list (macOS).
+REQUIRED_STEP_MARKERS: list[str] = [
+    *SHARED_STEP_MARKERS,
+    PLATFORM_PASSED_MARKERS["macos"],
+]
+
+# Markers for desktop flows that are not part of the viewer e2e_mac.sh / e2e_linux.sh log.
+# `verify_e2e_log` stays limited to the viewer E2E markers so the viewer log
 # does not fail when a later HPC flow adds a marker.
 LAB_PROFILE_MARKERS: list[str] = [
     "E2E_SHARE_MARK:",
@@ -55,8 +74,9 @@ LAB_PROFILE_MARKERS: list[str] = [
 NOTICE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^Step \d[a-z]? verified.*", re.IGNORECASE),
     re.compile(r"^Step \d[a-z]? UI interactions verified.*", re.IGNORECASE),
+    re.compile(r"^Step \d[a-z]? skipped-with-reason.*", re.IGNORECASE),
     re.compile(r"^Playback requirement.*verified.*", re.IGNORECASE),
-    re.compile(r"^Real-App macOS E2E Test PASSED.*", re.IGNORECASE),
+    re.compile(r"^Real-App (?:macOS|Linux) E2E Test PASSED.*", re.IGNORECASE),
 ]
 
 ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -66,8 +86,14 @@ def strip_ansi(text: str) -> str:
     return ANSI_ESCAPE.sub("", text)
 
 
-def verify_e2e_log(log_text: str) -> list[str]:
-    """Check that all required markers exist in log_text.
+def required_markers_for_platform(platform: str) -> list[str]:
+    if platform not in PLATFORM_PASSED_MARKERS:
+        raise ValueError(f"Unsupported platform: {platform!r}")
+    return [*SHARED_STEP_MARKERS, PLATFORM_PASSED_MARKERS[platform]]
+
+
+def verify_e2e_log(log_text: str, platform: str = "macos") -> list[str]:
+    """Check that all required markers exist in log_text for the given platform.
 
     Emits ::notice lines for matched steps.
     Returns a list of missing step descriptions (empty if all passed).
@@ -75,12 +101,10 @@ def verify_e2e_log(log_text: str) -> list[str]:
     clean_lines = [strip_ansi(line).strip() for line in log_text.splitlines()]
     joined_clean = "\n".join(clean_lines)
 
-    # Emit notices for relevant progress / verification lines
     seen_notices: set[str] = set()
     for raw_line in clean_lines:
         if "grep " in raw_line or "##[notice]" in raw_line:
             continue
-        # Strip runner timestamp / job prefix if present
         line = re.sub(r"^.*?Z\s+", "", raw_line)
         for pat in NOTICE_PATTERNS:
             if pat.search(line):
@@ -89,11 +113,14 @@ def verify_e2e_log(log_text: str) -> list[str]:
                     print(f"::notice title=e2e::{line}")
                 break
 
-    # Check for all required markers
     missing: list[str] = []
-    for marker in REQUIRED_STEP_MARKERS:
+    for marker in required_markers_for_platform(platform):
         if marker not in joined_clean:
             missing.append(marker)
+
+    if platform == "linux":
+        if LINUX_SKIP_5H_MARKER not in joined_clean and MACOS_5H_MARKER not in joined_clean:
+            missing.append(LINUX_SKIP_5H_MARKER)
 
     return missing
 
@@ -104,9 +131,27 @@ def verify_lab_profile_log(log_text: str) -> list[str]:
     return [marker for marker in LAB_PROFILE_MARKERS if marker not in clean]
 
 
-def main() -> int:
-    if len(sys.argv) > 1:
-        log_path = Path(sys.argv[1])
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Verify required desktop E2E steps in log output.")
+    parser.add_argument(
+        "--os",
+        dest="platform",
+        choices=("macos", "linux"),
+        default="macos",
+        help="Target OS whose E2E log is being verified (default: macos).",
+    )
+    parser.add_argument(
+        "log_file",
+        nargs="?",
+        help="Path to the E2E log file (reads stdin if omitted).",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    ns = _parse_args(sys.argv[1:] if argv is None else argv)
+    if ns.log_file:
+        log_path = Path(ns.log_file)
         if not log_path.exists():
             print(f"Error: Log file not found: {log_path}", file=sys.stderr)
             return 2
@@ -114,7 +159,10 @@ def main() -> int:
     else:
         log_text = sys.stdin.read()
 
-    missing = verify_e2e_log(log_text)
+    missing = verify_e2e_log(log_text, platform=ns.platform)
+    expected_count = len(required_markers_for_platform(ns.platform)) + (
+        1 if ns.platform == "linux" else 0
+    )
     if missing:
         msg = f"\n[ERROR] E2E Step Gate Failed: {len(missing)} required step(s) missing from log:"
         print(msg, file=sys.stderr)
@@ -123,7 +171,9 @@ def main() -> int:
             print(f"  - MISSING: {m}", file=sys.stderr)
         return 1
 
-    print(f"\n[SUCCESS] All {len(REQUIRED_STEP_MARKERS)} required E2E steps verified successfully.")
+    print(
+        f"\n[SUCCESS] All {expected_count} required {ns.platform} E2E steps verified successfully."
+    )
     return 0
 
 

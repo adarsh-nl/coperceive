@@ -16,31 +16,35 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 FIXTURES_DIR="${ROOT_DIR}/src-tauri/tests/fixtures/hpc"
 FAKE_SSH="${FIXTURES_DIR}/fake_ssh.sh"
 
-if [ -z "${APP_BUNDLE}" ]; then
-    APP_BUNDLE="src-tauri/target/release/bundle/macos/Coperceive.app"
-fi
-if [ ! -d "${APP_BUNDLE}" ]; then
-    APP_BUNDLE=""
-    while IFS= read -r candidate; do
-        APP_BUNDLE="${candidate}"
-        break
-    done < <(find "${ROOT_DIR}" -iname "Coperceive.app" -type d 2>/dev/null)
-fi
-if [ -z "${APP_BUNDLE}" ] || [ ! -d "${APP_BUNDLE}" ]; then
-    echo "E2E_HPC_FAIL: built .app not found" >&2
-    exit 1
-fi
-APP_BUNDLE="$(cd "${APP_BUNDLE}" && pwd)"
 APP_EXE=""
-for candidate in "${APP_BUNDLE}/Contents/MacOS/"*; do
-    if [ -f "${candidate}" ] && [ -x "${candidate}" ]; then
-        APP_EXE="${candidate}"
-        break
+if [ -n "${APP_BUNDLE}" ] && [ -f "${APP_BUNDLE}" ] && [ -x "${APP_BUNDLE}" ]; then
+    APP_EXE="${APP_BUNDLE}"
+else
+    if [ -z "${APP_BUNDLE}" ]; then
+        APP_BUNDLE="src-tauri/target/release/bundle/macos/Coperceive.app"
     fi
-done
-if [ -z "${APP_EXE}" ]; then
-    echo "E2E_HPC_FAIL: no executable in ${APP_BUNDLE}/Contents/MacOS" >&2
-    exit 1
+    if [ ! -d "${APP_BUNDLE}" ]; then
+        APP_BUNDLE=""
+        while IFS= read -r candidate; do
+            APP_BUNDLE="${candidate}"
+            break
+        done < <(find "${ROOT_DIR}" -iname "Coperceive.app" -type d 2>/dev/null)
+    fi
+    if [ -z "${APP_BUNDLE}" ] || [ ! -d "${APP_BUNDLE}" ]; then
+        echo "E2E_HPC_FAIL: built .app or executable not found" >&2
+        exit 1
+    fi
+    APP_BUNDLE="$(cd "${APP_BUNDLE}" && pwd)"
+    for candidate in "${APP_BUNDLE}/Contents/MacOS/"*; do
+        if [ -f "${candidate}" ] && [ -x "${candidate}" ]; then
+            APP_EXE="${candidate}"
+            break
+        fi
+    done
+    if [ -z "${APP_EXE}" ]; then
+        echo "E2E_HPC_FAIL: no executable in ${APP_BUNDLE}/Contents/MacOS" >&2
+        exit 1
+    fi
 fi
 chmod +x "${FAKE_SSH}"
 

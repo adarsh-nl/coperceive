@@ -17,6 +17,16 @@
 # Usage: e2e_cluster_datasets_app.sh [app-executable]
 set -euo pipefail
 
+if [ "$(uname -s)" = "Linux" ]; then
+    export PYTHONUNBUFFERED=1
+    export RUST_BACKTRACE=1
+    export NO_AT_BRIDGE=1
+    export WEBKIT_DISABLE_COMPOSITING_MODE=1
+    export WEBKIT_DISABLE_DMABUF_RENDERER=1
+    export WEBKIT_FORCE_SANDBOX=0
+    export LIBGL_ALWAYS_SOFTWARE=1
+fi
+
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 HPC_FIXTURES="${ROOT_DIR}/src-tauri/tests/fixtures/hpc"
 FIXTURES_DIR="${ROOT_DIR}/src-tauri/tests/fixtures/datasets"
@@ -48,6 +58,8 @@ PYTHON="${COPERCEIVE_E2E_PYTHON:-}"
 if [ -z "${PYTHON}" ]; then
     for candidate in \
         "${APP_BUNDLE:+${APP_BUNDLE}/Contents/Resources/resources/python/bin/python3}" \
+        "/usr/lib/Coperceive/resources/python/bin/python3" \
+        "/usr/lib/coperceive-desktop/resources/python/bin/python3" \
         "${ROOT_DIR}/src-tauri/resources/python/bin/python3" \
         "${ROOT_DIR}/.venv/bin/python"; do
         if [ -n "${candidate}" ] && [ -x "${candidate}" ]; then
@@ -1059,7 +1071,11 @@ done
 [ "${REMOTE_STOPPED}" -eq 1 ] || fail "switching to local after remote_connect did not send remote-stop and clear header (ssh log: $(tr '\n' ',' < "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null))"
 
 mkdir -p /tmp/e2e-shots
-screencapture -x /tmp/e2e-shots/remote-then-local-header.png 2>/dev/null || true
+if command -v screencapture >/dev/null 2>&1; then
+    screencapture -x /tmp/e2e-shots/remote-then-local-header.png 2>/dev/null || true
+elif command -v import >/dev/null 2>&1; then
+    import -window root /tmp/e2e-shots/remote-then-local-header.png 2>/dev/null || true
+fi
 kill -TERM "${APP_PID}" 2>/dev/null || true
 wait "${APP_PID}" 2>/dev/null || true
 APP_PID=""
