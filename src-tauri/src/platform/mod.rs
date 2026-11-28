@@ -88,10 +88,14 @@ pub fn resolve_bundled_python_for_layout(
 
 /// Builds a `Command` for invoking Python with `PYTHONSAFEPATH=1` so the
 /// process's working directory cannot shadow the bundled `coperceive` package
-/// (for example when launched from a source checkout whose web bundle is unbuilt).
+/// (for example when launched from a source checkout whose web bundle is unbuilt),
+/// and strips `PYTHONHOME`/`PYTHONPATH` so AppImage wrappers (`linuxdeploy`
+/// `AppRun.wrapped`) cannot hijack the bundled interpreter's stdlib (`encodings`).
 pub fn python_command(python_bin: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     let mut cmd = std::process::Command::new(python_bin);
     cmd.env("PYTHONSAFEPATH", "1");
+    cmd.env_remove("PYTHONHOME");
+    cmd.env_remove("PYTHONPATH");
     cmd
 }
 
@@ -210,6 +214,16 @@ mod tests {
             .get_envs()
             .any(|(k, v)| k == "PYTHONSAFEPATH" && v == Some(std::ffi::OsStr::new("1")));
         assert!(has_safe_path, "python_command must set PYTHONSAFEPATH=1");
+        let removes_pythonhome = cmd
+            .get_envs()
+            .any(|(k, v)| k == "PYTHONHOME" && v.is_none());
+        let removes_pythonpath = cmd
+            .get_envs()
+            .any(|(k, v)| k == "PYTHONPATH" && v.is_none());
+        assert!(
+            removes_pythonhome && removes_pythonpath,
+            "python_command must clear inherited PYTHONHOME and PYTHONPATH"
+        );
 
         // When a Python 3.11+ interpreter is available on PATH (always true in
         // CI and bundled environments), confirm cwd packages are not shadowed.
