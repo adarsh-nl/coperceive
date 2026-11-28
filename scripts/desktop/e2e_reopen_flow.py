@@ -1,6 +1,6 @@
 """Open, close and reopen a cluster dataset in one running app, and time each step.
 
-Step CD-20 of ``e2e_cluster_datasets_app.sh`` (feature C, phase 0 of the viewer
+Step CD-21 of ``e2e_cluster_datasets_app.sh`` (feature C, phase 0 of the viewer
 lifetime design note, PR #222). It drives an app that the shell script
 started in test mode against the fake cluster, through the loopback test
 controller, and asserts what reopening does today:
@@ -295,12 +295,12 @@ def main() -> int:
             opts.marker, json.loads("{" + opts.dataset_args + "}"), opts.ssh_log, opts.scene
         )
     except FlowError as error:
-        print(f"E2E_DATASET_APP_FAIL: CD-20 {error}", file=sys.stderr)
+        print(f"E2E_DATASET_APP_FAIL: CD-21 {error}", file=sys.stderr)
         return 1
     print("E2E_REOPEN_MEASURE " + json.dumps(result, sort_keys=True))
     o, c, r = result["open"], result["close"], result["reopen"]
     print(
-        "Step CD-20 verified: open -> close -> reopen in one app. "
+        "Step CD-21 verified: open -> close -> reopen in one app. "
         f"Open: dataset_open {o['returned_ms']} ms, first frame {o['first_frame_ms']} ms. "
         f"Close: server stopped {c['server_stopped_ms']} ms, window gone {c['window_gone_ms']} ms "
         f"(to within {EVAL_RESOLUTION_S} s). "
@@ -311,7 +311,7 @@ def main() -> int:
         + ("; no WebGL, so frame = frame document" if result["webgl_missing"] else "")
         + "."
     )
-    print(f"Step CD-20 machine: {result['machine']}")
+    print(f"Step CD-21 machine: {result['machine']}")
     return 0
 
 

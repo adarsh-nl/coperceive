@@ -423,11 +423,6 @@ pub struct AppPersistentState {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub plugin_python_by_profile: HashMap<String, String>,
 
-    /// Remote viewer sessions to reattach to after a restart, by what they
-    /// serve (server, cache directory, media roots) → session id.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub viewer_sessions: HashMap<String, String>,
-
     /// At the end of a scene, move on to the next prepared one. Off by default.
     #[serde(default)]
     pub auto_next_scene: bool,
@@ -919,7 +914,6 @@ impl Default for AppPersistentState {
             camera_images_default: None,
             camera_images_by_profile: HashMap::new(),
             plugin_python_by_profile: HashMap::new(),
-            viewer_sessions: HashMap::new(),
             auto_next_scene: false,
             last_cluster_datasets: HashMap::new(),
             last_cluster_profile: None,
@@ -1335,7 +1329,6 @@ pub mod tests {
                 "cluster-a".into(),
                 "/opt/envs/opencood-official/bin/python".into(),
             )]),
-            viewer_sessions: HashMap::from([("alias|p|/r|".into(), "abc123".into())]),
             auto_next_scene: true,
             last_cluster_datasets: HashMap::from([("p".into(), serde_json::json!({"path": "/d/opv2v/test"}))]),
             last_cluster_profile: Some("p".into()),
@@ -2138,6 +2131,42 @@ pub mod tests {
         assert_eq!(loaded.remote_view_cache_bytes, 512 * 1024 * 1024);
         assert_eq!(loaded.camera_images(Some("cluster-a")).effective, "originals");
         assert_eq!(loaded.layout.as_ref().map(|l| l.left_px), Some(300.0));
+    }
+
+    /// The app no longer reattaches to viewer jobs, so `viewer_sessions` is gone
+    /// from the struct. A state.json written before that still has the key: it
+    /// must load with every other value kept, and the next save drops the key.
+    #[test]
+    fn a_state_file_with_viewer_sessions_still_loads_and_the_next_save_drops_them() {
+        let old = r#"{
+            "last_data_root": "/Users/a/coperceive-data/opv2v",
+            "last_scene_id": "Town03-000",
+            "last_viewpoint": "chase",
+            "theme_override": "dark",
+            "viewer_sessions": {"alias|p|/r|": "abc123", "alias|q|/s|": "def456"},
+            "auto_next_scene": true,
+            "dataset_grouping": "day"
+        }"#;
+        let tmp = std::env::temp_dir().join(format!("coperceive-test-state-viewer-sessions-{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp);
+        let state_path = tmp.join("state.json");
+        fs::write(&state_path, old).expect("write old state");
+
+        let loaded = load_state_from_path(&state_path);
+        assert_ne!(loaded, AppPersistentState::default(), "the file must parse, not fall back");
+        assert_eq!(loaded.last_data_root.as_deref(), Some("/Users/a/coperceive-data/opv2v"));
+        assert_eq!(loaded.last_scene_id.as_deref(), Some("Town03-000"));
+        assert_eq!(loaded.last_viewpoint.as_deref(), Some("chase"));
+        assert_eq!(loaded.theme_override.as_deref(), Some("dark"));
+        assert!(loaded.auto_next_scene);
+        assert_eq!(loaded.dataset_grouping, "day");
+
+        save_state_to_path(&loaded, &state_path).expect("save");
+        let saved = fs::read_to_string(&state_path).expect("read saved state");
+        let _ = fs::remove_dir_all(&tmp);
+        let saved: serde_json::Value = serde_json::from_str(&saved).expect("saved state is JSON");
+        assert!(saved.get("viewer_sessions").is_none(), "the next save drops viewer_sessions: {saved}");
+        assert_eq!(saved.get("last_scene_id").and_then(|v| v.as_str()), Some("Town03-000"));
     }
 
     #[test]

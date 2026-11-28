@@ -180,18 +180,6 @@ export async function updatePersistentState(patch: Record<string, unknown>): Pro
   }
 }
 
-export async function isRemoteEnabled(): Promise<boolean> {
-  if (isTauriEnvironment()) {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return await invoke<boolean>("is_remote_enabled");
-    } catch {
-      return false;
-    }
-  }
-  return false;
-}
-
 /** Hosts from the user's ~/.ssh/config (aliases only, no secrets). */
 export async function listSshConfigHosts(): Promise<string[]> {
   if (isTauriEnvironment()) {
@@ -726,27 +714,6 @@ export async function getDatasetScenes(): Promise<DatasetSceneList | null> {
   }
   const body = await controllerGet<{ dataset: DatasetSceneList | null }>("/dataset-scenes");
   return body.dataset && Array.isArray(body.dataset.scenes) ? body.dataset : null;
-}
-
-/** The Slurm job serving a cluster dataset's viewer, or null for a local scene. */
-export interface ViewerJob {
-  job_id: number | null;
-  status: string;
-  state?: string | null;
-  time_left?: string | null;
-  time_left_seconds?: number | null;
-}
-
-export async function getViewerJob(): Promise<ViewerJob | null> {
-  if (isTauriEnvironment() && isViewerWindow()) {
-    const body = await viewerInvoke<{ session: ViewerJob | null }>("viewer_get_job");
-    return body.session ?? null;
-  }
-  if (!hasDesktopController()) {
-    return null;
-  }
-  const body = await controllerGet<{ session: ViewerJob | null }>("/viewer-session");
-  return body.session ?? null;
 }
 
 /** Name the viewer window after the scene it shows. */

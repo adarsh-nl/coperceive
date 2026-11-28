@@ -51,8 +51,6 @@ pub struct ControllerConfig {
     pub finder_revealer: Option<FinderRevealer>,
     pub updater_checker: Option<UpdaterChecker>,
     pub updater_installer: Option<UpdaterInstaller>,
-    /// The remote viewer job (id, state, time left), or null without one.
-    pub viewer_session: Option<Arc<dyn Fn() -> serde_json::Value + Send + Sync>>,
     /// Every scene of the open cluster dataset with its state, as the main
     /// window last saw it, so the viewer can list scenes that are not ready.
     pub dataset_scenes: Arc<Mutex<serde_json::Value>>,
@@ -81,7 +79,6 @@ impl ControllerConfig {
             finder_revealer: None,
             updater_checker: None,
             updater_installer: None,
-            viewer_session: None,
             dataset_scenes: Arc::new(Mutex::new(serde_json::Value::Null)),
             scene_preparer: None,
             viewer_titler: None,
@@ -341,18 +338,6 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             started.elapsed().as_millis()
         );
         let payload = serde_json::to_vec(&serde_json::json!({ "shown": shown }))
-            .unwrap_or_else(|_| b"{}".to_vec());
-        write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
-        return Ok(());
-    }
-
-    if method == "GET" && path == "/viewer-session" {
-        let session = config
-            .viewer_session
-            .as_ref()
-            .map(|session| session())
-            .unwrap_or(serde_json::Value::Null);
-        let payload = serde_json::to_vec(&serde_json::json!({ "session": session }))
             .unwrap_or_else(|_| b"{}".to_vec());
         write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
         return Ok(());
@@ -829,7 +814,7 @@ pub fn ctrl_window_init_snippet(
 
 /// Synchronizes the tracked viewer origin and the test controller's allowed
 /// CORS origin whenever the viewer window opens on a new session origin
-/// (local sidecar, dataset stream, or remote SSH tunnel).
+/// (the local sidecar or a dataset stream).
 pub fn sync_viewer_origin(
     viewer_origin: &Mutex<Option<String>>,
     controller_config: &Mutex<Option<ControllerConfig>>,
@@ -1532,7 +1517,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_viewer_endpoints_report_the_session_dataset_scenes_and_ask_to_prepare() {
+    fn test_viewer_endpoints_report_the_dataset_scenes_and_ask_to_prepare() {
         let mut config = ControllerConfig::new(51234, "secret".to_string(), Some("http://127.0.0.1:8000".to_string()));
         let asked = Arc::new(Mutex::new(Vec::<String>::new()));
         let record = asked.clone();
@@ -1540,7 +1525,6 @@ pub mod tests {
             record.lock().unwrap().push(scene);
             true
         }));
-        config.viewer_session = Some(Arc::new(|| serde_json::json!({"job_id": 7, "time_left": "3:59:00"})));
         *config.dataset_scenes.lock().unwrap() = serde_json::json!({"scenes": [{"scene_id": "a", "state": "ready"}]});
         let call = |request: String| {
             let mut writer = Vec::new();
@@ -1551,8 +1535,7 @@ pub mod tests {
         let get = |path: &str, auth: &str| {
             format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:51234\r\nOrigin: http://127.0.0.1:8000\r\nAuthorization: Bearer {auth}\r\n\r\n")
         };
-        assert!(call(get("/viewer-session", "wrong")).starts_with("HTTP/1.1 401"));
-        assert!(call(get("/viewer-session", "secret")).contains("\"time_left\":\"3:59:00\""));
+        assert!(call(get("/dataset-scenes", "wrong")).starts_with("HTTP/1.1 401"));
         assert!(call(get("/dataset-scenes", "secret")).contains("\"scene_id\":\"a\""));
         let post = |body: &str| {
             format!(
@@ -1698,19 +1681,19 @@ pub mod tests {
     }
 
     #[test]
-    fn test_open_viewer_window_updates_controller_allowed_origin_for_remote_connect() {
+    fn test_open_viewer_window_updates_controller_allowed_origin_for_a_new_viewer_server() {
         let local_origin = "http://127.0.0.1:50681";
-        let remote_origin = "http://127.0.0.1:50726";
+        let new_origin = "http://127.0.0.1:50726";
         let secret = "secret-token-flow-f";
         let config = ControllerConfig::new(51234, secret.into(), Some(local_origin.to_string()));
         let viewer_origin = Mutex::new(Some(local_origin.to_string()));
         let controller_config = Mutex::new(Some(config.clone()));
 
-        // Switch from local viewer to remote SSH tunnel viewer: CORS allowed_origin must move to remote_origin.
-        sync_viewer_origin(&viewer_origin, &controller_config, remote_origin);
+        // A new viewer server (another dataset_open or start_local): CORS allowed_origin must move to new_origin.
+        sync_viewer_origin(&viewer_origin, &controller_config, new_origin);
         assert_eq!(
             viewer_origin.lock().unwrap().as_deref(),
-            Some(remote_origin)
+            Some(new_origin)
         );
 
         let preflight = |req_origin: &str| -> String {
@@ -1727,30 +1710,30 @@ pub mod tests {
             String::from_utf8(w).unwrap()
         };
 
-        let remote_preflight = preflight(remote_origin);
+        let new_preflight = preflight(new_origin);
         assert!(
-            remote_preflight.starts_with("HTTP/1.1 204 No Content"),
-            "remote viewer origin preflight must succeed, got: {remote_preflight}"
+            new_preflight.starts_with("HTTP/1.1 204 No Content"),
+            "new viewer origin preflight must succeed, got: {new_preflight}"
         );
         assert!(
-            remote_preflight.contains(&format!("Access-Control-Allow-Origin: {remote_origin}")),
-            "remote viewer origin must receive ACAO header, got: {remote_preflight}"
+            new_preflight.contains(&format!("Access-Control-Allow-Origin: {new_origin}")),
+            "new viewer origin must receive ACAO header, got: {new_preflight}"
         );
 
         let stale_local_preflight = preflight(local_origin);
         assert!(
             stale_local_preflight.starts_with("HTTP/1.1 403 Forbidden"),
-            "superseded local origin must be rejected after remote_connect, got: {stale_local_preflight}"
+            "superseded local origin must be rejected after the origin moves, got: {stale_local_preflight}"
         );
 
-        // Verify POST /eval-result from remote_origin unblocks /eval waiting callback.
+        // Verify POST /eval-result from new_origin unblocks /eval waiting callback.
         let (tx, rx) = std::sync::mpsc::channel();
         config.eval_callbacks.lock().unwrap().insert(42, tx);
         let payload = r#"{"req_id":42,"result":{"ok":true},"error":null}"#;
         let eval_result_req = format!(
             "POST /eval-result HTTP/1.1\r\n\
              Host: 127.0.0.1:51234\r\n\
-             Origin: {remote_origin}\r\n\
+             Origin: {new_origin}\r\n\
              Authorization: Bearer {secret}\r\n\
              Content-Type: application/json\r\n\
              Content-Length: {}\r\n\r\n{}",
@@ -1764,11 +1747,11 @@ pub mod tests {
         assert!(post_resp.starts_with("HTTP/1.1 200 OK"), "{post_resp}");
         let delivered = rx
             .recv_timeout(Duration::from_millis(200))
-            .expect("eval-result from remote viewer should resolve waiting /eval");
+            .expect("eval-result from the new viewer should resolve waiting /eval");
         assert_eq!(delivered.get("result").and_then(|v| v.get("ok")).and_then(|v| v.as_bool()), Some(true));
 
         // Verify main.rs open_viewer_window synchronizes both viewer_origin and controller allowed_origin
-        // so callers like remote_connect cannot leave allowed_origin stale on a prior session's port.
+        // so callers like dataset_open cannot leave allowed_origin stale on a prior session's port.
         let main = include_str!("main.rs");
         let start = main
             .find("fn open_viewer_window(")
@@ -1781,7 +1764,7 @@ pub mod tests {
         let open_fn = &main[start..end];
         assert!(
             open_fn.contains("controller::sync_viewer_origin("),
-            "open_viewer_window must call controller::sync_viewer_origin so remote_connect and other callers update controller allowed_origin"
+            "open_viewer_window must call controller::sync_viewer_origin so dataset_open and other callers update controller allowed_origin"
         );
     }
 }

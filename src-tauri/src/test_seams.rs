@@ -25,8 +25,7 @@ pub static FAKE_SSH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Writing the file that is about to be executed can leave it with a write descriptor
 /// open across a concurrent `fork`, so Linux answers `ETXTBSY` ("Text file busy") on
 /// the `exec`. The temporary file is synced and closed first, then renamed: the name
-/// that is executed is a complete, closed file. This is the same pattern as
-/// `remote_static::scp_tests::recording_scp` (the #170 fix).
+/// that is executed is a complete, closed file (the #170 fix).
 #[cfg(all(test, unix))]
 pub(crate) fn write_executable_atomically(
     path: &Path,

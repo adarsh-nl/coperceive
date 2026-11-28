@@ -128,7 +128,7 @@ def browser() -> Iterator[Browser]:
 
 
 def _controller(saved: dict[str, object]) -> Any:
-    """The desktop controller's answers: a cluster dataset on a named server, a job."""
+    """The desktop controller's answers: a cluster dataset on a named server."""
 
     def handle(route: Route) -> None:
         url = route.request.url
@@ -141,15 +141,6 @@ def _controller(saved: dict[str, object]) -> Any:
                     ],
                     "label": "Example dataset train",
                     "server": SERVER,
-                }
-            }
-        elif url.endswith("/viewer-session"):
-            body = {
-                "session": {
-                    "job_id": 4242,
-                    "status": "running",
-                    "state": "RUNNING",
-                    "time_left": "1:52:10",
                 }
             }
         elif url.endswith("/state"):

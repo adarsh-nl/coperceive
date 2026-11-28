@@ -39,9 +39,6 @@ const calls: InvokeCall[] = [];
     if (cmd === "plugin:viewer-bridge|viewer_get_dataset_scenes") {
       return { dataset: { scenes: [{ scene_id: "s1", state: "ready" }] } };
     }
-    if (cmd === "plugin:viewer-bridge|viewer_get_job") {
-      return { session: { job_id: 42, status: "running" } };
-    }
     if (cmd === "plugin:viewer-bridge|viewer_show_library" || cmd === "plugin:viewer-bridge|viewer_prepare_scene") {
       return true;
     }
@@ -106,8 +103,6 @@ test("production viewer window routes viewer actions via plugin:viewer-bridge wi
   await local.updatePersistentState({ viewer_style: "cinema" });
   const dataset = await local.getDatasetScenes();
   assert.equal(dataset?.scenes[0]?.scene_id, "s1");
-  const job = await local.getViewerJob();
-  assert.equal(job?.job_id, 42);
   await local.setViewerTitle("demo-junction");
   assert.equal(await local.prepareSceneInMainWindow("s1"), true);
   assert.equal(await local.showLibrary(), true);
@@ -122,7 +117,6 @@ test("production viewer window routes viewer actions via plugin:viewer-bridge wi
       "plugin:viewer-bridge|viewer_get_preferences",
       "plugin:viewer-bridge|viewer_update_preferences",
       "plugin:viewer-bridge|viewer_get_dataset_scenes",
-      "plugin:viewer-bridge|viewer_get_job",
       "plugin:viewer-bridge|viewer_set_title",
       "plugin:viewer-bridge|viewer_prepare_scene",
       "plugin:viewer-bridge|viewer_show_library",
