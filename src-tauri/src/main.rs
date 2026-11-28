@@ -29,22 +29,16 @@ use coperceive_desktop::job_report::{
 use coperceive_desktop::job_history::{self as job_history, RunHistoryEntry};
 use coperceive_desktop::remote_static;
 use coperceive_desktop::server_profiles::{self, ServerEntry, SshHostSettings};
-use coperceive_desktop::remote::{
-    RemoteClient, RemoteSessionManager, RemoteStartOptions, RemoteStatusResponse,
-};
 use coperceive_desktop::sidecar::SidecarSession;
 use coperceive_desktop::slurm_adapter::SshRunner;
 use coperceive_desktop::state::{self, AppPersistentState};
 
 pub struct AppState {
     pub sidecar: Mutex<Option<SidecarSession>>,
-    pub remote: Mutex<Option<RemoteSessionManager>>,
     pub ctrl_port: Mutex<Option<u16>>,
     pub ctrl_secret: Mutex<Option<String>>,
     pub controller_config: Mutex<Option<ControllerConfig>>,
     pub viewer_origin: Mutex<Option<String>>,
-    /// What the current remote session serves (see `viewer_session_key`).
-    pub remote_key: Mutex<Option<String>>,
     /// The open cluster dataset's scenes and states, for the viewer's scene list.
     pub dataset_scenes: Arc<Mutex<serde_json::Value>>,
     /// What the local sidecar serves when it reads a cluster dataset over SSH
@@ -72,12 +66,10 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             sidecar: Mutex::new(None),
-            remote: Mutex::new(None),
             ctrl_port: Mutex::new(None),
             ctrl_secret: Mutex::new(None),
             controller_config: Mutex::new(None),
             viewer_origin: Mutex::new(None),
-            remote_key: Mutex::new(None),
             dataset_scenes: Arc::new(Mutex::new(serde_json::Value::Null)),
             stream_key: Mutex::new(None),
             stream_dataset: Mutex::new(None),
@@ -115,21 +107,6 @@ fn set_auto_connect_state(
     if let Some(main) = app.get_webview_window("main") {
         let json = serde_json::to_string(&payload).unwrap_or_else(|_| "null".to_string());
         let _ = main.eval(&format!("window.__COPERCEIVE_AUTOCONNECT_STATE__ = {json};"));
-    }
-}
-
-/// Disconnects any active remote session off the `state.remote` mutex in a
-/// background thread with a bounded timeout that kills the SSH child process if
-/// teardown hangs, so switching to a local scene never blocks or leaks SSH.
-fn disconnect_remote_in_background(state: &AppState) {
-    let existing = state.remote.lock().ok().and_then(|mut lock| lock.take());
-    if let Ok(mut current) = state.remote_key.lock() {
-        *current = None;
-    }
-    if let Some(mut remote) = existing {
-        std::thread::spawn(move || {
-            let _ = remote.disconnect_with_timeout(std::time::Duration::from_secs(5));
-        });
     }
 }
 
@@ -185,11 +162,6 @@ fn resolve_python_binary(app: &tauri::AppHandle) -> PathBuf {
 #[tauri::command]
 async fn get_persistent_state() -> Result<AppPersistentState, String> {
     Ok(state::load_state())
-}
-
-#[tauri::command]
-async fn is_remote_enabled() -> Result<bool, String> {
-    Ok(std::env::var("COPERCEIVE_REMOTE").map(|v| v == "1" || v.to_lowercase() == "true").unwrap_or(false))
 }
 
 #[tauri::command]
@@ -830,7 +802,6 @@ async fn switch_data_root(
             *scenes = serde_json::Value::Null;
         }
     }
-    disconnect_remote_in_background(&state);
 
     if let Ok(lock) = state.controller_config.lock() {
         if let Some(ref cfg) = *lock {
@@ -1049,26 +1020,6 @@ fn show_library_window(app: &tauri::AppHandle) -> bool {
     let _ = main.set_focus();
     let _ = main.emit("navigate-library", ());
     main.is_visible().unwrap_or(false)
-}
-
-fn viewer_session_status(state: &AppState) -> serde_json::Value {
-    let Ok(lock) = state.remote.lock() else {
-        return serde_json::Value::Null;
-    };
-    let Some(session) = lock.as_ref() else {
-        return serde_json::Value::Null;
-    };
-    match session.job_status() {
-        Ok(status) => serde_json::json!({
-            "job_id": status.job_id.or(session.job_id),
-            "state": status.state,
-            "status": status.status,
-            "time_left": status.time_left,
-            "time_left_seconds": status.time_left_seconds,
-            "elapsed": status.elapsed,
-        }),
-        Err(_) => serde_json::json!({ "job_id": session.job_id, "status": "unknown" }),
-    }
 }
 
 fn sanitize_viewer_scene_title(scene: &str) -> Option<String> {
@@ -1334,15 +1285,6 @@ mod viewer_bridge {
     }
 
     #[tauri::command]
-    pub fn viewer_get_job(
-        window: tauri::WebviewWindow,
-        state: tauri::State<'_, Arc<AppState>>,
-    ) -> Result<serde_json::Value, String> {
-        ensure_viewer_window(&window)?;
-        Ok(serde_json::json!({ "session": viewer_session_status(&state) }))
-    }
-
-    #[tauri::command]
     pub fn viewer_set_title(
         window: tauri::WebviewWindow,
         app: tauri::AppHandle,
@@ -1495,7 +1437,6 @@ fn build_viewer_bridge_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::new("viewer-bridge")
         .invoke_handler(tauri::generate_handler![
             viewer_bridge::viewer_get_dataset_scenes,
-            viewer_bridge::viewer_get_job,
             viewer_bridge::viewer_set_title,
             viewer_bridge::viewer_prepare_scene,
             viewer_bridge::viewer_show_library,
@@ -1536,8 +1477,6 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     let handle_library = app_handle.clone();
     cfg.library_shower = Some(Arc::new(move || show_library_window(&handle_library)));
     cfg.dataset_scenes = app_state.dataset_scenes.clone();
-    let session_state = app_state.clone();
-    cfg.viewer_session = Some(Arc::new(move || viewer_session_status(&session_state)));
     let handle_title = app_handle.clone();
     cfg.viewer_titler = Some(Arc::new(move |scene: String| {
         apply_viewer_window_title(&handle_title, &scene);
@@ -1864,7 +1803,6 @@ async fn start_local_session_inner(
             *scenes = serde_json::Value::Null;
         }
     }
-    disconnect_remote_in_background(&state);
 
     let python_bin = resolve_python_binary(app);
     let maps_root = library_maps_root();
@@ -3752,8 +3690,7 @@ async fn dataset_status(
 /// viewer's scene list can show the ones that are not prepared yet.
 #[tauri::command]
 fn set_viewer_dataset_scenes(state: tauri::State<'_, Arc<AppState>>, dataset: serde_json::Value) {
-    let has_remote = state.stream_key.lock().ok().and_then(|k| k.clone()).is_some()
-        || state.remote_key.lock().ok().and_then(|k| k.clone()).is_some();
+    let has_remote = state.stream_key.lock().ok().and_then(|k| k.clone()).is_some();
     if let Ok(mut scenes) = state.dataset_scenes.lock() {
         *scenes = coperceive_desktop::remote::resolve_viewer_dataset_scenes(has_remote, dataset);
     }
@@ -4084,17 +4021,8 @@ fn ensure_stream_session(
         return Ok(StreamSession { origin, token, predictions, started: None });
     }
 
-    // Anything else stops: the previous local server and any viewer job.
+    // Anything else stops the previous local server.
     stop_stream_session(state);
-    {
-        let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
-        if let Some(mut existing) = lock.take() {
-            let _ = existing.disconnect();
-        }
-        if let Ok(mut current) = state.remote_key.lock() {
-            *current = None;
-        }
-    }
 
     let stream = coperceive_desktop::cluster_datasets::stream_argv(
         &ssh_bin(),
@@ -4270,22 +4198,6 @@ fn run_dataset_flow_probe(
                     arg_text(&args, "profileId")?,
                     args.get("remove").and_then(serde_json::Value::as_bool).unwrap_or(false),
                 )),
-                // A remote viewer session as the evaluation viewer opens one.
-                "remote_connect" => {
-                    let entry = find_server_entry(&arg_text(&args, "profileId")?)?;
-                    let alias = entry.profile.ssh_target()?;
-                    tauri::async_runtime::block_on(remote_connect(
-                        app.clone(),
-                        state,
-                        alias,
-                        arg_text(&args, "dataRoot")?,
-                        None,
-                        Some(entry.id.clone()),
-                        None,
-                        None,
-                    ))
-                    .and_then(|payload| serde_json::to_value(payload).map_err(|error| error.to_string()))
-                }
                 "dataset_open" => tauri::async_runtime::block_on(dataset_open(
                     app.clone(),
                     state,
@@ -4328,11 +4240,6 @@ fn run_dataset_flow_probe(
     Ok(serde_json::json!({"ok": true, "steps": records}))
 }
 
-/// What a remote viewer session serves: reused only for exactly the same thing.
-fn viewer_session_key(alias: &str, profile_id: Option<&str>, data_root: &str, media_roots: &[String]) -> String {
-    format!("{alias}|{}|{data_root}|{}", profile_id.unwrap_or(""), media_roots.join("\n"))
-}
-
 /// Point the open viewer at another scene of the same session, without a new
 /// window: the viewer reads `scene=` from its hash.
 fn show_scene_in_viewer(app: &tauri::AppHandle, state: &AppState, origin: &str, scene_id: Option<&str>) -> bool {
@@ -4372,222 +4279,6 @@ fn urlencoding_component(value: &str) -> String {
             other => format!("%{other:02X}"),
         })
         .collect()
-}
-
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-async fn remote_connect(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    alias: String,
-    data_root: String,
-    uuid: Option<String>,
-    profile_id: Option<String>,
-    media_roots: Option<Vec<String>>,
-    scene_id: Option<String>,
-) -> Result<SessionPayload, String> {
-    use tauri::Emitter;
-    let media_roots = media_roots.unwrap_or_default();
-    let key = viewer_session_key(&alias, profile_id.as_deref(), &data_root, &media_roots);
-
-    // The same dataset is already being served: reuse that job and its viewer.
-    // Viewing must not submit a Slurm job per Open (docs/datasets/cluster-datasets.md).
-    let reusable = {
-        let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
-        let current_key = state.remote_key.lock().ok().and_then(|lock| lock.clone());
-        match lock.as_mut() {
-            Some(existing) if current_key.as_deref() == Some(key.as_str()) => {
-                if existing.tunnel_alive() {
-                    existing
-                        .job_status()
-                        .ok()
-                        .filter(|status| status.status == "running")
-                        .map(|_| (existing.origin(), existing.token.clone()))
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    };
-    {
-        let mut persistent = state::load_state();
-        persistent.last_scene_id = scene_id.clone();
-        persistent.last_sample_index = None;
-        persistent.last_timestamp_us = None;
-        persistent._legacy_timestamp_ns = None;
-        persistent.agent_visibility = None;
-        let _ = state::save_state(&persistent);
-    }
-    if let Some((origin, token)) = reusable {
-        if !show_scene_in_viewer(&app, state.inner(), &origin, scene_id.as_deref()) {
-            let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
-            let query = scene_id.as_deref().map(|scene| format!("scene={}", urlencoding_component(scene)));
-            open_viewer_window(&app, &origin, &token, &data_root, ctrl_port, state.inner(), query.as_deref())?;
-        }
-        eprintln!("[viewer] reused the running viewer job for {data_root}");
-        return Ok(SessionPayload {
-            origin,
-            token,
-            server_version: "0.0.0".to_string(),
-            data_root,
-            target_type: "remote".to_string(),
-        });
-    }
-
-    // Anything else is served by a new (or reattached) session: stop the old one.
-    {
-        let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
-        if let Some(mut existing) = lock.take() {
-            let _ = existing.stop();
-        }
-    }
-    {
-        let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
-        if let Some(mut existing) = lock.take() {
-            let _ = existing.disconnect();
-        }
-        if let Ok(mut current) = state.remote_key.lock() {
-            *current = None;
-        }
-    }
-
-    // Resources come from the selected server profile, never from a product
-    // default. Without a profile the remote job cannot choose a partition.
-    let profile = profile_id.as_deref().and_then(|id| {
-        server_profiles::load_servers()
-            .into_iter()
-            .find(|entry| entry.id == id)
-    });
-    // The HPC checkout no longer ships coperceive/app/static (it is built, not
-    // committed). Upload this app's built viewer to a per-version cache dir on
-    // the login home and point the remote server at it; no Node on the login node.
-    let static_dir = coperceive_desktop::remote_static::prepare_remote_static(
-        &alias,
-        env!("CARGO_PKG_VERSION"),
-    )
-    .map_err(|error| format!("Could not prepare the remote viewer page: {error}"))?;
-
-    // A session started for this dataset before a restart may still be running.
-    let saved = uuid.clone().or_else(|| state::load_state().viewer_sessions.get(&key).cloned());
-    let options = RemoteStartOptions {
-        data_root: data_root.clone(),
-        partition: profile
-            .as_ref()
-            .and_then(|p| p.profile.defaults.partition.clone()),
-        walltime: profile
-            .as_ref()
-            .and_then(|p| p.profile.defaults.time_limit.clone()),
-        cpus: profile
-            .as_ref()
-            .and_then(|p| p.profile.defaults.cpus_per_task),
-        mem: profile
-            .as_ref()
-            .and_then(|p| p.profile.defaults.memory.clone()),
-        python: profile
-            .as_ref()
-            .and_then(|p| p.profile.environment.interpreter.clone()),
-        uuid: None,
-        static_dir: Some(static_dir),
-        coperceive_command: profile
-            .as_ref()
-            .map(|p| p.profile.environment.coperceive_command.clone())
-            .unwrap_or_default(),
-        media_roots,
-        // Return quickly with the job id while it queues; we poll and report.
-        wait_timeout: Some(5),
-    };
-
-    let progress_app = app.clone();
-    let alias_for_job = alias.clone();
-    let mgr = tauri::async_runtime::spawn_blocking(move || {
-        let progress = |job: &coperceive_desktop::remote::ViewerJobProgress| {
-            let _ = progress_app.emit("viewer-job", job);
-        };
-        if let Some(saved) = saved {
-            // Waits while that job still starts; only one that ended falls through.
-            match RemoteSessionManager::reattach_with_progress(
-                &alias_for_job,
-                &options,
-                Some(&ssh_bin()),
-                &saved,
-                &progress,
-                Duration::from_secs(3),
-                Duration::from_secs(15 * 60),
-            ) {
-                Ok(mgr) => {
-                    eprintln!("[viewer] reattached to the running viewer job");
-                    return Ok(mgr);
-                }
-                Err(error) => eprintln!("[viewer] could not reattach ({error:?}); starting a new viewer job"),
-            }
-        }
-        RemoteSessionManager::connect_with_progress(
-            &alias_for_job,
-            &options,
-            Some(&ssh_bin()),
-            &progress,
-            Duration::from_secs(3),
-            Duration::from_secs(15 * 60),
-        )
-    })
-    .await
-    .map_err(|error| format!("The viewer job could not start: {error}"))?
-    .map_err(|e| e.to_string())?;
-    eprintln!("[viewer] started viewer job {:?} for {data_root}", mgr.job_id);
-
-    let origin = mgr.origin();
-    let token = mgr.token.clone();
-    let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
-
-    let query = scene_id.as_deref().map(|scene| format!("scene={}", urlencoding_component(scene)));
-    open_viewer_window(&app, &origin, &token, &data_root, ctrl_port, state.inner(), query.as_deref())?;
-
-    let payload = SessionPayload {
-        origin,
-        token,
-        server_version: "0.0.0".to_string(),
-        data_root,
-        target_type: "remote".to_string(),
-    };
-
-    let mut persistent = state::load_state();
-    persistent.viewer_sessions.insert(key.clone(), mgr.uuid.clone());
-    let _ = state::save_state(&persistent);
-    if let Ok(mut current) = state.remote_key.lock() {
-        *current = Some(key);
-    }
-    let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
-    *lock = Some(mgr);
-
-    Ok(payload)
-}
-
-#[tauri::command]
-async fn remote_status(
-    alias: String,
-    uuid: Option<String>,
-    job_id: Option<u64>,
-) -> Result<RemoteStatusResponse, String> {
-    let command = server_profiles::load_servers()
-        .into_iter()
-        .find(|entry| {
-            entry.profile.ssh_alias.as_deref() == Some(alias.as_str())
-                || entry.profile.ssh_target().ok().as_deref() == Some(alias.as_str())
-        })
-        .map(|entry| entry.profile.environment.coperceive_command)
-        .unwrap_or_else(|| vec!["coperceive".to_string()]);
-    let client = RemoteClient::new(&alias).with_coperceive_command(command);
-    client.status(uuid.as_deref(), job_id).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn remote_disconnect(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
-    let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
-    if let Some(mut mgr) = lock.take() {
-        mgr.disconnect().map_err(|e| e.to_string())?;
-    }
-    Ok(())
 }
 
 /// Describes one folder inside a server's chosen data folder, over the same
@@ -4679,7 +4370,6 @@ fn main() {
             update_persistent_state,
             check_desktop_update,
             install_desktop_update,
-            is_remote_enabled,
             pick_data_root,
             start_local,
             stop_local,
@@ -4751,10 +4441,7 @@ fn main() {
             open_predictions,
             list_run_history,
             preview_repro_card,
-            remote_connect,
             remote_view_cache,
-            remote_status,
-            remote_disconnect,
             remote_scan,
             pick_save_path,
             pick_bundle_file,
@@ -5802,11 +5489,6 @@ fn main() {
                                 let _ = s.stop();
                             }
                         }
-                        if let Ok(mut lock) = state_for_window.remote.lock() {
-                            if let Some(mut r) = lock.take() {
-                                let _ = r.disconnect();
-                            }
-                        }
                         window.app_handle().exit(0);
                     }
                 }
@@ -5833,11 +5515,6 @@ fn main() {
                         if let Ok(mut lock) = state_for_window.sidecar.lock() {
                             if let Some(mut s) = lock.take() {
                                 let _ = s.stop();
-                            }
-                        }
-                        if let Ok(mut lock) = state_for_window.remote.lock() {
-                            if let Some(mut r) = lock.take() {
-                                let _ = r.disconnect();
                             }
                         }
                     }
@@ -5874,11 +5551,6 @@ fn main() {
                 if let Ok(mut lock) = state_for_exit.sidecar.lock() {
                     if let Some(mut s) = lock.take() {
                         let _ = s.stop();
-                    }
-                }
-                if let Ok(mut lock) = state_for_exit.remote.lock() {
-                    if let Some(mut r) = lock.take() {
-                        let _ = r.disconnect();
                     }
                 }
             }

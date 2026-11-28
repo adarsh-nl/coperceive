@@ -40,7 +40,6 @@ import { Inspector, Radar, SceneCard } from "./SidePanel";
 import ExportDialog from "./ExportDialog";
 import {
   getDatasetScenes,
-  getViewerJob,
   hasDesktopController,
   openFolderDialog,
   pickSavePath,
@@ -49,7 +48,6 @@ import {
   setViewerTitle,
   saveExportedFile,
   updatePersistentState,
-  type ViewerJob,
 } from "../desktop/local";
 import { getRevealLabel, getModifierKey } from "../desktop/platform";
 import PaperExportPanel from "./PaperExportPanel";
@@ -1256,13 +1254,6 @@ function hashScene(): string {
   }
 }
 
-/** "3:59:10 left" from the scheduler's time left, for the cluster job badge. */
-function jobBadge(job: ViewerJob | null): string | null {
-  if (!job || job.job_id == null) return null;
-  const left = job.time_left && job.time_left !== "UNLIMITED" ? ` · ${job.time_left} left` : "";
-  return `Cluster job ${job.job_id}${left}`;
-}
-
 function clearStage(stage: Stage) {
   stage.points.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
   stage.points.geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(0), 3));
@@ -1397,7 +1388,6 @@ export default function Viewer({
   const [datasetSceneStatuses, setDatasetSceneStatuses] = useState<Record<string, string>>({});
   // Every scene of the open cluster dataset (ready or not), in dataset order.
   const [datasetScenes, setDatasetScenes] = useState<string[]>([]);
-  const [viewerJob, setViewerJob] = useState<ViewerJob | null>(null);
   // The cluster dataset's name ("V2XSET train") and server, from the main window.
   const [datasetAbout, setDatasetAbout] = useState<{ label: string; server: string } | null>(null);
   // The agent whose cameras the strip shows and the radar centres on.
@@ -1545,27 +1535,16 @@ export default function Viewer({
         // No controller answer: keep what we have.
       }
     };
-    const pollJob = async () => {
-      try {
-        const job = await getViewerJob();
-        if (!stopped) setViewerJob(job);
-      } catch {
-        // Keep the last answer.
-      }
-    };
     void pollScenes();
-    void pollJob();
     const scenesTimer = window.setInterval(() => void pollScenes(), 5000);
-    const jobTimer = window.setInterval(() => void pollJob(), 60_000);
     return () => {
       stopped = true;
       window.clearInterval(scenesTimer);
-      window.clearInterval(jobTimer);
     };
   }, []);
 
   // The app shows another scene of the same session by changing the hash
-  // (`#/viewer?scene=…`): no new window, no new viewer job.
+  // (`#/viewer?scene=…`): no new window.
   useEffect(() => {
     const onHash = () => {
       const asked = hashScene();
@@ -1810,7 +1789,6 @@ export default function Viewer({
       setDatasetScenes([]);
       setDatasetAbout(null);
       setDatasetSceneStatuses({});
-      setViewerJob(null);
       setPlaying(false);
 
       bumpSceneDrawToken();
@@ -4939,33 +4917,20 @@ export default function Viewer({
     }
   };
 
-  const jobText = jobBadge(viewerJob);
   // Where the scene comes from, as the app knows it: the cluster over SSH, this
   // Mac's folder, or the server this page was loaded from.
   const connectionText = activeDatasetAbout?.server
     ? `Streaming over SSH from ${activeDatasetAbout.server}`
-    : viewerJob && activeDataset.scenes.length > 0
-      ? "Streaming over SSH"
-      : isDesktop
-        ? `Local folder${dataBasename ? ` · ${dataBasename}` : ""}`
-        : `Server · ${typeof window !== "undefined" ? window.location.host : ""}`;
+    : isDesktop
+      ? `Local folder${dataBasename ? ` · ${dataBasename}` : ""}`
+      : `Server · ${typeof window !== "undefined" ? window.location.host : ""}`;
   // In the crumb row, after the scene counter: the one part of the top bar that
   // gives way (ellipsis, full text in the tooltip) before anything overlaps.
   const connectionState = (
-    <>
-      <span className={`conn-state ${tone}`} title={status ? `${connectionText}\n${status}` : connectionText}>
-        <i aria-hidden="true" />
-        <span className="conn-text">{connectionText}</span>
-      </span>
-      {jobText ? (
-        <span
-          className="job-badge"
-          title={`${jobText}. This viewer runs as a small CPU job on the cluster; it is reused while it runs.`}
-        >
-          {jobText}
-        </span>
-      ) : null}
-    </>
+    <span className={`conn-state ${tone}`} title={status ? `${connectionText}\n${status}` : connectionText}>
+      <i aria-hidden="true" />
+      <span className="conn-text">{connectionText}</span>
+    </span>
   );
   const sceneStem = sceneId.includes("-") ? sceneId.slice(0, sceneId.lastIndexOf("-")) : sceneId || "Scene";
   const crumb = (

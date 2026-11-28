@@ -909,7 +909,7 @@ export async function datasetPrepareSubmit(
 }
 
 /**
- * Open a ready scene in the viewer via the remote viewer session.
+ * Open a ready scene in the viewer: the app's own viewer server streams it over SSH (no Slurm job).
  * Invokes Tauri command `dataset_open({ profileId, adapter, rawRoot, split, cacheRelative, sceneId })`.
  */
 export async function datasetOpen(

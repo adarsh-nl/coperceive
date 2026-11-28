@@ -21,7 +21,6 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 HPC_FIXTURES="${ROOT_DIR}/src-tauri/tests/fixtures/hpc"
 FIXTURES_DIR="${ROOT_DIR}/src-tauri/tests/fixtures/datasets"
 FAKE_SSH="${FIXTURES_DIR}/fake_cluster_ssh.sh"
-FAKE_SCP="${FIXTURES_DIR}/fake_scp.sh"
 PROFILE_ID="fixture-datasets"
 
 fail() {
@@ -57,7 +56,7 @@ if [ -z "${PYTHON}" ]; then
     done
 fi
 [ -n "${PYTHON}" ] && [ -x "${PYTHON}" ] || fail "no Python with coperceive found"
-chmod +x "${FAKE_SSH}" "${FAKE_SCP}" "${HPC_FIXTURES}/fake_ssh.sh"
+chmod +x "${FAKE_SSH}" "${HPC_FIXTURES}/fake_ssh.sh"
 
 # Resolve symlinks (/tmp -> /private/tmp) so the paths the app sends are the
 # real paths the cluster reports back.
@@ -189,7 +188,6 @@ run_flow() {
     COPERCEIVE_E2E_REQUIRE_PREFIX=1 \
     COPERCEIVE_STATE_DIR="${TMP_DIR}/state" \
     COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
-    COPERCEIVE_SCP_BIN="${FAKE_SCP}" \
     FAKE_REMOTE_HOME="${REMOTE_HOME}" \
     FAKE_CLUSTER_PYTHON="${PYTHON}" \
     FAKE_SSH_LOG="${TMP_DIR}/${name}-ssh.txt" \
@@ -609,28 +607,6 @@ print(f"Step CD-14 verified: two Opens of the same dataset -> one viewer server 
       f"no Slurm job (0 sbatch, 0 remote start), one ssh stream serving {len(served)} scenes")
 PY
 
-# --- Flow I: a viewer job that starts slowly (the real cluster's reply) ------------
-# On the cluster the job queued, ran, and only then wrote its session file; a
-# lookup by session id alone answered {"status": "stopped", "state": "RUNNING"}
-# and the app refused it ("Cannot reattach: … not running (state: RUNNING)").
-export FAKE_REMOTE_SLOW_SESSION=1
-run_flow slowsession "[
-  {\"command\": \"remote_connect\", \"args\": {$(profile_args), \"dataRoot\": \"${CLUSTER}/results\"}}
-]"
-unset FAKE_REMOTE_SLOW_SESSION
-check slowsession <<'PY'
-import json, sys
-result, ssh_log, tmp, raw = sys.argv[1:5]
-(step,) = json.load(open(result, encoding="utf-8"))["steps"]
-assert step["ok"], step
-assert step["value"]["origin"].startswith("http://127.0.0.1:"), step["value"]
-log = open(ssh_log, encoding="utf-8").read().splitlines()
-assert log.count("remote-start") == 1 and "remote-status" in log, log
-print(f"Step CD-15 verified: a viewer job that ran before writing its session (status by id "
-      f"alone said stopped/RUNNING) is attached, not refused: origin {step['value']['origin']}, "
-      f"{log.count('remote-status')} status check(s), 1 remote start")
-PY
-
 # --- Flow S: Open predictions from Job watch and Run history (stream path) -------
 # Both buttons call open_predictions(profile, plan). A built-in model's run is a
 # prediction store at <output_dir>/<plan>, on the scenes its run line read; the app
@@ -867,9 +843,9 @@ kill -TERM "${APP_PID}" 2>/dev/null || true
 wait "${APP_PID}" 2>/dev/null || true
 APP_PID=""
 stop_fake_cluster
-[ "${REOPEN_STATUS}" -eq 0 ] || fail "open -> close -> reopen (CD-20) failed (ssh log: $(tr '\n' ',' < "${REOPEN_SSH_LOG}" 2>/dev/null))"
+[ "${REOPEN_STATUS}" -eq 0 ] || fail "open -> close -> reopen (CD-21) failed (ssh log: $(tr '\n' ',' < "${REOPEN_SSH_LOG}" 2>/dev/null))"
 
-# --- Flow F: remote session followed by local scene clears streaming header ---
+# --- Flow F: a cluster scene followed by a local scene clears the streaming header ---
 # Must run before Flow E (`old` overwrites the saved profile in state with fake_old_python.sh).
 # In the SAME running app process: open a remote fake-SSH scene (dataset_open),
 # verify the viewer shows "Streaming over SSH", then open a local scene
@@ -886,7 +862,6 @@ COPERCEIVE_TEST_ENV=1 \
 COPERCEIVE_E2E_REQUIRE_PREFIX=1 \
 COPERCEIVE_STATE_DIR="${TMP_DIR}/state" \
 COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
-COPERCEIVE_SCP_BIN="${FAKE_SCP}" \
 FAKE_REMOTE_HOME="${REMOTE_HOME}" \
 FAKE_CLUSTER_PYTHON="${PYTHON}" \
 FAKE_SSH_LOG="${TMP_DIR}/flow-f-ssh.txt" \
@@ -993,110 +968,12 @@ for i in {1..90}; do
 done
 [ "${HEADER_OK}" -eq 1 ] || fail "viewer header kept stale remote state after opening local scene: ${LAST_HEADER}"
 
-# Step 3: Attach a full remote session (`remote_connect`) and switch to local again;
-# `disconnect_remote_in_background` must send `remote stop` over SSH (`remote-stop` in FAKE_SSH_LOG).
-REMOTE_CACHE_ROOT=$(python3 - "${CLUSTER}/results" <<'PY'
-from pathlib import Path
-import sys
-
-results_dir = Path(sys.argv[1])
-candidates = sorted(
-    p.parent.parent
-    for p in results_dir.rglob("COMPLETE.json")
-    if p.parent.name == "scene_0000" and (p.parent / "manifest.json").is_file()
-)
-if not candidates:
-    manifests = sorted(str(p) for p in results_dir.rglob("manifest.json"))
-    raise SystemExit(f"No prepared scene_0000 under {results_dir}; manifests={manifests}")
-print(candidates[0])
-PY
-) || fail "failed to locate prepared remote cache root for Flow F Step 3"
-
-REMOTE_CONNECT_PAYLOAD=$(python3 - "${PROFILE_ID}" "${REMOTE_CACHE_ROOT}" <<'PY'
-import json, sys
-
-dataset_meta = {
-    "dataset": {
-        "scenes": [
-            {"scene_id": "scene_0000", "state": "ready"},
-            {"scene_id": "scene_0001", "state": "ready"},
-            {"scene_id": "scene_0002", "state": "ready"},
-        ],
-        "label": "OPV2V test",
-        "server": "Dataset e2e fake cluster",
-    }
-}
-connect_args = {
-    "alias": "cluster-b",
-    "dataRoot": sys.argv[2],
-    "profileId": sys.argv[1],
-}
-js = (
-    "(async () => { "
-    f"const r = await window.__TAURI_INTERNALS__.invoke('remote_connect', {json.dumps(connect_args)}); "
-    f"await window.__TAURI_INTERNALS__.invoke('set_viewer_dataset_scenes', {json.dumps(dataset_meta)}); "
-    "return r; "
-    "})()"
-)
-print(json.dumps({"window": "main", "script": js}))
-PY
-)
-curl -s -f -X POST \
-    -H "Authorization: Bearer ${CTRL_SECRET}" \
-    -H "Content-Type: application/json" \
-    -d "${REMOTE_CONNECT_PAYLOAD}" \
-    "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || fail "failed to invoke remote_connect in Flow F"
-
-REMOTE_ATTACHED=0
-LAST_REMOTE_ATTACH=""
-for i in {1..90}; do
-    if grep -q "^remote-start$" "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null; then
-        RESP=$(curl -s -X POST \
-            -H "Authorization: Bearer ${CTRL_SECRET}" \
-            -H "Content-Type: application/json" \
-            -d '{"window":"viewer","script":"(() => { const body = document.body ? document.body.innerText : \"\"; const ok = body.includes(\"scene_0000\") && body.includes(\"Streaming over SSH\") && !body.includes(\"demo-junction\"); return { ok, snippet: body.slice(0, 300) }; })()"}' \
-            "http://127.0.0.1:${CTRL_PORT}/eval" 2>/dev/null || echo "")
-        if [ -n "${RESP}" ]; then
-            LAST_REMOTE_ATTACH="${RESP}"
-        fi
-        if echo "${RESP}" | grep -q '"ok":true'; then
-            REMOTE_ATTACHED=1
-            break
-        fi
-    fi
-    sleep 0.5
-done
-[ "${REMOTE_ATTACHED}" -eq 1 ] || fail "remote_connect did not attach remote viewer before second local switch (${LAST_REMOTE_ATTACH}; ssh log: $(tr '\n' ',' < "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null))"
-
-curl -s -f -X POST \
-    -H "Authorization: Bearer ${CTRL_SECRET}" \
-    -H "Content-Type: application/json" \
-    -d "${LOCAL_OPEN_PAYLOAD}" \
-    "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || fail "failed to invoke second start_local in Flow F"
-
-REMOTE_STOPPED=0
-for i in {1..40}; do
-    if grep -q "^remote-stop$" "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null; then
-        RESP=$(curl -s -X POST \
-            -H "Authorization: Bearer ${CTRL_SECRET}" \
-            -H "Content-Type: application/json" \
-            -d '{"window":"viewer","script":"(() => { const body = document.body ? document.body.innerText : \"\"; return { ok: body.includes(\"demo-junction\") && !body.includes(\"Streaming over SSH\") }; })()"}' \
-            "http://127.0.0.1:${CTRL_PORT}/eval" 2>/dev/null || echo "")
-        if echo "${RESP}" | grep -q '"ok":true'; then
-            REMOTE_STOPPED=1
-            break
-        fi
-    fi
-    sleep 0.5
-done
-[ "${REMOTE_STOPPED}" -eq 1 ] || fail "switching to local after remote_connect did not send remote-stop and clear header (ssh log: $(tr '\n' ',' < "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null))"
-
 mkdir -p /tmp/e2e-shots
 screencapture -x /tmp/e2e-shots/remote-then-local-header.png 2>/dev/null || true
 kill -TERM "${APP_PID}" 2>/dev/null || true
 wait "${APP_PID}" 2>/dev/null || true
 APP_PID=""
-echo "Step CD-19 verified: opening local scene after fake-SSH session in same process sent remote-stop and cleared streaming header: ${LAST_HEADER}"
+echo "Step CD-19 verified: a cluster scene over fake SSH (\"Streaming over SSH\"), then a local scene in the same process cleared the streaming header: ${LAST_HEADER}"
 
 # --- Flow E: an older coperceive on the cluster --------------------------------
 # The profile's interpreter is fake_old_python.sh: no `capabilities`, no

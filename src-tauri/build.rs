@@ -29,7 +29,6 @@ fn main() {
             tauri_build::InlinedPlugin::new()
                 .commands(&[
                     "viewer_get_dataset_scenes",
-                    "viewer_get_job",
                     "viewer_set_title",
                     "viewer_prepare_scene",
                     "viewer_show_library",
