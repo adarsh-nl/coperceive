@@ -1255,7 +1255,9 @@ fn run_updater_install(
         }
     };
 
-    if coperceive_desktop::test_seams::test_env_active() && update.signature.is_empty() {
+    if coperceive_desktop::updater::should_skip_updater_install_for_test()
+        && update.signature.is_empty()
+    {
         return Ok(());
     }
 
@@ -1265,8 +1267,20 @@ fn run_updater_install(
 
     match download_result {
         Ok(bytes) => {
-            if coperceive_desktop::test_seams::test_env_active() {
+            if coperceive_desktop::updater::should_skip_updater_install_for_test() {
                 return Ok(());
+            }
+            if let Some(app_state) = handle.try_state::<AppState>() {
+                if let Ok(mut lock) = app_state.sidecar.lock() {
+                    if let Some(mut s) = lock.take() {
+                        let _ = s.stop();
+                    }
+                }
+                if let Ok(mut lock) = app_state.remote.lock() {
+                    if let Some(mut r) = lock.take() {
+                        let _ = r.disconnect();
+                    }
+                }
             }
             update.install(&bytes).map_err(|e| format!("Installation failed: {e}"))?;
             handle.restart();
@@ -4633,6 +4647,8 @@ fn handle_fatal_error(err_msg: &str) {
 }
 
 fn main() {
+    #[cfg(feature = "test-updater-override")]
+    coperceive_desktop::updater::apply_test_updater_env_from_args();
     let test_mode = coperceive_desktop::test_seams::test_env_active();
     std::panic::set_hook(Box::new(move |info| {
         let msg = format!("Panic occurred: {info}");

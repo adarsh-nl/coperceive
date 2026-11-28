@@ -494,6 +494,55 @@ jobs:
           name: coperceive-desktop-linux-appimage
           path: ${{ env.APPIMAGE_FILE }}
           if-no-files-found: error
+      - name: Run Updater E2E (tampered rejection + signed update + restart)
+        run: |
+          set -euo pipefail
+          WORK_DIR="${RUNNER_TEMP}/updater-e2e"
+          rm -rf "${WORK_DIR}"
+          mkdir -p "${WORK_DIR}"
+          KEY_FILE="${WORK_DIR}/throwaway.key"
+          ( cd web && npx tauri signer generate --ci -w "${KEY_FILE}" -p "e2e-throwaway-pass" )
+          PUBKEY="$(tr -d '\r\n' < "${KEY_FILE}.pub")"
+          NEW_VERSION="$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')"
+          python3 - "${WORK_DIR}" "${PUBKEY}" <<'PY'
+          import json, pathlib, sys
+          work = pathlib.Path(sys.argv[1])
+          pubkey = sys.argv[2]
+          (work / "older.conf.json").write_text(json.dumps({
+              "version": "0.0.1",
+              "plugins": {"updater": {"pubkey": pubkey, "dangerousInsecureTransportProtocol": True}},
+          }), encoding="utf-8")
+          (work / "newer.conf.json").write_text(json.dumps({
+              "bundle": {"createUpdaterArtifacts": True},
+              "plugins": {"updater": {"pubkey": pubkey, "dangerousInsecureTransportProtocol": True}},
+          }), encoding="utf-8")
+          PY
+          rm -rf src-tauri/target/release/bundle/appimage
+          ( cd web && npm run tauri build -- --bundles appimage --features test-updater-override --config "${WORK_DIR}/older.conf.json" --verbose )
+          OLD_APPIMAGE="$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -iname "*.AppImage" -type f | head -n 1)"
+          test -f "${OLD_APPIMAGE}"
+          cp "${OLD_APPIMAGE}" "${WORK_DIR}/Coperceive-old.AppImage"
+          chmod +x "${WORK_DIR}/Coperceive-old.AppImage"
+
+          rm -rf src-tauri/target/release/bundle/appimage
+          TAURI_SIGNING_PRIVATE_KEY="$(cat "${KEY_FILE}")" \
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD="e2e-throwaway-pass" \
+          bash -c 'cd web && npm run tauri build -- --bundles appimage --features test-updater-override --config "'"${WORK_DIR}/newer.conf.json"'" --verbose'
+          NEW_APPIMAGE="$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -iname "*.AppImage" -type f | head -n 1)"
+          NEW_SIG="${NEW_APPIMAGE}.sig"
+          test -f "${NEW_APPIMAGE}" && test -f "${NEW_SIG}"
+          cp "${NEW_APPIMAGE}" "${WORK_DIR}/$(basename "${NEW_APPIMAGE}")"
+          cp "${NEW_SIG}" "${WORK_DIR}/$(basename "${NEW_SIG}")"
+
+          xvfb-run -a -s "-screen 0 1920x1080x24" dbus-run-session -- \
+            python3 scripts/desktop/e2e_updater.py \
+              --app "${WORK_DIR}/Coperceive-old.AppImage" \
+              --platform linux-x86_64 \
+              --old-version "0.0.1" \
+              --new-version "${NEW_VERSION}" \
+              --archive "${WORK_DIR}/$(basename "${NEW_APPIMAGE}")" \
+              --sig "${WORK_DIR}/$(basename "${NEW_SIG}")"
+          rm -rf "${WORK_DIR}"
       - name: Upload Linux screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -628,6 +677,101 @@ jobs:
           name: coperceive-desktop-windows-x86_64
           path: ${{ env.INSTALLER_PATH }}
           if-no-files-found: error
+      - name: Run Updater E2E (tampered rejection + signed update + restart)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $workDir = Join-Path $env:RUNNER_TEMP "updater-e2e"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $workDir
+          New-Item -ItemType Directory -Path $workDir | Out-Null
+          $keyFile = Join-Path $workDir "throwaway.key"
+          Push-Location web
+          npx tauri signer generate --ci -w $keyFile -p "e2e-throwaway-pass"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+          $pubKey = (Get-Content -Raw "$keyFile.pub").Trim()
+          $newVersion = (Get-Content -Raw "src-tauri\tauri.conf.json" | ConvertFrom-Json).version
+
+          $olderConf = Join-Path $workDir "older.conf.json"
+          @{
+            version = "0.0.1"
+            plugins = @{
+              updater = @{
+                pubkey = $pubKey
+                dangerousInsecureTransportProtocol = $true
+                windows = @{ installMode = "quiet" }
+              }
+            }
+          } | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 $olderConf
+
+          $newerConf = Join-Path $workDir "newer.conf.json"
+          @{
+            bundle = @{ createUpdaterArtifacts = $true }
+            plugins = @{
+              updater = @{
+                pubkey = $pubKey
+                dangerousInsecureTransportProtocol = $true
+                windows = @{ installMode = "quiet" }
+              }
+            }
+          } | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 $newerConf
+
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "src-tauri\target\release\bundle\nsis"
+          Push-Location web
+          npm run tauri build -- --bundles nsis --features test-updater-override --config $olderConf --verbose
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+          $oldNsis = Get-ChildItem -Path src-tauri\target\release\bundle\nsis\*-setup.exe | Select-Object -First 1
+          if (-not $oldNsis) { Write-Error "No older NSIS installer found"; exit 1 }
+          $oldSetupCopy = Join-Path $workDir "old-setup.exe"
+          Copy-Item $oldNsis.FullName $oldSetupCopy
+
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "src-tauri\target\release\bundle\nsis"
+          $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content -Raw $keyFile)
+          $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "e2e-throwaway-pass"
+          try {
+            Push-Location web
+            npm run tauri build -- --bundles nsis --features test-updater-override --config $newerConf --verbose
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Pop-Location
+          } finally {
+            Remove-Item Env:\TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+            Remove-Item Env:\TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
+          }
+          $newNsis = Get-ChildItem -Path src-tauri\target\release\bundle\nsis\*-setup.exe | Select-Object -First 1
+          if (-not $newNsis) { Write-Error "No newer signed NSIS installer found"; exit 1 }
+          $newSig = "$($newNsis.FullName).sig"
+          if (-not (Test-Path $newSig)) { Write-Error "No newer NSIS .sig found at $newSig"; exit 1 }
+          $newArchiveCopy = Join-Path $workDir $newNsis.Name
+          $newSigCopy = Join-Path $workDir "$($newNsis.Name).sig"
+          Copy-Item $newNsis.FullName $newArchiveCopy
+          Copy-Item $newSig $newSigCopy
+
+          Start-Process -FilePath $oldSetupCopy -ArgumentList "/S" -Wait
+          Start-Sleep -Seconds 3
+          $installedExe = Get-ChildItem -Path $env:LOCALAPPDATA -Filter "coperceive-desktop.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $installedExe) {
+            $installedExe = Get-ChildItem -Path $env:LOCALAPPDATA -Filter "Coperceive.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $installedExe) { Write-Error "Could not locate installed older executable"; exit 1 }
+          $installDir = $installedExe.DirectoryName
+          try {
+            python scripts/desktop/e2e_updater.py `
+              --app $installedExe.FullName `
+              --platform windows-x86_64 `
+              --old-version "0.0.1" `
+              --new-version $newVersion `
+              --archive $newArchiveCopy `
+              --sig $newSigCopy
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            $uninstaller = Get-ChildItem -Path $installDir -Filter "*uninstall*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($uninstaller) {
+              Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S _?=$installDir" -Wait
+              Start-Sleep -Seconds 2
+            }
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $workDir
+          }
       - name: Upload Windows screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -695,6 +839,8 @@ jobs:
         # fails with "Resource busy" on the macOS runners (runner-images#7522,
         # XProtectBehaviorService locking a freshly created image). The script
         # only retries that exact signature and logs hdiutil state each attempt.
+        env:
+          COPERCEIVE_TAURI_FEATURES: test-updater-override
         run: bash scripts/desktop/build_dmg.sh aarch64-apple-darwin
       - name: Report Tauri Build Failure
         if: failure()
@@ -832,6 +978,58 @@ jobs:
           name: coperceive-desktop-macos-arm64
           path: ${{ env.DMG_PATH }}
           if-no-files-found: error
+      - name: Run Updater E2E (tampered rejection + signed update + restart)
+        run: |
+          set -euo pipefail
+          WORK_DIR="${RUNNER_TEMP}/updater-e2e"
+          rm -rf "${WORK_DIR}"
+          mkdir -p "${WORK_DIR}"
+          KEY_FILE="${WORK_DIR}/throwaway.key"
+          ( cd web && npx tauri signer generate --ci -w "${KEY_FILE}" -p "e2e-throwaway-pass" )
+          PUBKEY="$(tr -d '\r\n' < "${KEY_FILE}.pub")"
+          NEW_VERSION="$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')"
+          python3 - "${WORK_DIR}" "${PUBKEY}" <<'PY'
+          import json, pathlib, sys
+          work = pathlib.Path(sys.argv[1])
+          pubkey = sys.argv[2]
+          (work / "older.conf.json").write_text(json.dumps({
+              "version": "0.0.1",
+              "plugins": {"updater": {"pubkey": pubkey, "dangerousInsecureTransportProtocol": True}},
+          }), encoding="utf-8")
+          (work / "newer.conf.json").write_text(json.dumps({
+              "bundle": {"createUpdaterArtifacts": True},
+              "plugins": {"updater": {"pubkey": pubkey, "dangerousInsecureTransportProtocol": True}},
+          }), encoding="utf-8")
+          PY
+          MACOS_BUNDLE_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
+          rm -rf "${MACOS_BUNDLE_DIR}"
+          ( cd web && npm run tauri build -- --target aarch64-apple-darwin --bundles app --features test-updater-override --config "${WORK_DIR}/older.conf.json" --verbose )
+          test -d "${MACOS_BUNDLE_DIR}/Coperceive.app"
+          ditto "${MACOS_BUNDLE_DIR}/Coperceive.app" "${WORK_DIR}/Coperceive.app"
+
+          rm -rf "${MACOS_BUNDLE_DIR}"
+          TAURI_SIGNING_PRIVATE_KEY="$(cat "${KEY_FILE}")" \
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD="e2e-throwaway-pass" \
+          bash -c 'cd web && npm run tauri build -- --target aarch64-apple-darwin --bundles app --features test-updater-override --config "'"${WORK_DIR}/newer.conf.json"'" --verbose'
+          NEW_ARCHIVE="$(find "${MACOS_BUNDLE_DIR}" -maxdepth 1 -iname "*.app.tar.gz" -type f | head -n 1)"
+          NEW_SIG="${NEW_ARCHIVE}.sig"
+          test -f "${NEW_ARCHIVE}" && test -f "${NEW_SIG}"
+          cp "${NEW_ARCHIVE}" "${WORK_DIR}/$(basename "${NEW_ARCHIVE}")"
+          cp "${NEW_SIG}" "${WORK_DIR}/$(basename "${NEW_SIG}")"
+
+          APP_EXE="${WORK_DIR}/Coperceive.app/Contents/MacOS/coperceive-desktop"
+          if [ ! -x "${APP_EXE}" ]; then
+            APP_EXE="${WORK_DIR}/Coperceive.app/Contents/MacOS/Coperceive"
+          fi
+          test -x "${APP_EXE}"
+          python3 scripts/desktop/e2e_updater.py \
+            --app "${APP_EXE}" \
+            --platform darwin-aarch64 \
+            --old-version "0.0.1" \
+            --new-version "${NEW_VERSION}" \
+            --archive "${WORK_DIR}/$(basename "${NEW_ARCHIVE}")" \
+            --sig "${WORK_DIR}/$(basename "${NEW_SIG}")"
+          rm -rf "${WORK_DIR}"
       - name: Bundle Python Standalone Runtime for Intel Mac
         run: python3 scripts/desktop/bundle_python.py --target x86_64-apple-darwin --skip-web-build
       - name: Build Tauri Desktop Intel DMG

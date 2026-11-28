@@ -135,3 +135,45 @@ def test_a_non_integer_attempt_count_is_rejected(tmp_path: Path) -> None:
         result.stderr,
         log,
     )
+
+
+def test_tauri_features_are_forwarded_only_when_set(tmp_path: Path) -> None:
+    """Release builds keep COPERCEIVE_TAURI_FEATURES unset; CI can forward test-updater-override."""
+    root = _build_tree(tmp_path)
+    counter = tmp_path / "fake_npm_calls"
+    build_log = tmp_path / "build.log"
+    args_log = tmp_path / "fake_npm_args.txt"
+    fake_npm = tmp_path / "bin" / "npm"
+    fake_npm.write_text(
+        f'#!/bin/bash\nprintf "%s\\n" "$*" > "{args_log}"\necho 1 > "{counter}"\n',
+        encoding="utf-8",
+    )
+    fake_npm.chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = f"{tmp_path / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+    env["COPERCEIVE_TAURI_BUILD_LOG"] = str(build_log)
+    env["GITHUB_ACTIONS"] = "false"
+    env.pop("COPERCEIVE_TAURI_FEATURES", None)
+
+    res_default = subprocess.run(
+        ["bash", str(root / "scripts" / "desktop" / "build_dmg.sh"), "aarch64-apple-darwin"],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_default.returncode == 0, res_default.stderr
+    assert "--features" not in args_log.read_text(encoding="utf-8")
+
+    env["COPERCEIVE_TAURI_FEATURES"] = "test-updater-override"
+    res_feat = subprocess.run(
+        ["bash", str(root / "scripts" / "desktop" / "build_dmg.sh"), "aarch64-apple-darwin"],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_feat.returncode == 0, res_feat.stderr
+    assert "--features test-updater-override" in args_log.read_text(encoding="utf-8")
